@@ -1,0 +1,124 @@
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import pc from "picocolors";
+import { exec } from "./util/exec.js";
+import type { OrchConfig } from "./config.js";
+import { claimNext, submit } from "./service.js";
+import { buildBrief } from "./brief.js";
+import { makeAdapter } from "./adapters/index.js";
+import { getIssue, editIssue } from "./github.js";
+import { issueStatus } from "./board.js";
+import { STATUS, NEEDS_ATTENTION } from "./labels.js";
+
+export interface RunSummary {
+  issue: number;
+  outcome: "submitted" | "needs-attention" | "failed";
+  prUrl?: string;
+  durationMs: number;
+}
+
+async function commitsAhead(worktree: string, base = "main"): Promise<number> {
+  const r = await exec("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: worktree });
+  return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
+}
+
+/**
+ * Claim the next eligible task, drive the harness over it in its worktree, and
+ * finalise: if the agent already submitted we leave it; if it produced commits
+ * but didn't submit we auto-submit; otherwise we flag it for a human.
+ * Returns null when there is nothing eligible to claim.
+ */
+export async function processNext(
+  agent: string,
+  cfg: OrchConfig,
+  cwd: string,
+): Promise<RunSummary | null> {
+  const task = await claimNext(agent, cfg, cwd);
+  if (!task) return null;
+
+  const n = task.issue.number;
+  const logDir = resolve(cwd, "logs");
+  mkdirSync(logDir, { recursive: true });
+  const logFile = resolve(logDir, `issue-${n}.jsonl`);
+
+  await editIssue(n, { cwd, addLabels: [STATUS.inProgress], removeLabels: [STATUS.claimed] });
+  console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
+
+  const adapter = makeAdapter(agent, cfg);
+  const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
+  const result = await adapter.runTask({
+    issue: n,
+    agent,
+    worktree: task.worktree.path,
+    prompt,
+    logFile,
+    timeoutMs: cfg.taskTimeoutMs,
+  });
+
+  if (!result.ok) {
+    await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
+    console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
+    return { issue: n, outcome: "failed", durationMs: result.durationMs };
+  }
+
+  // Did the agent submit itself (issue now in-review)?
+  const cur = await getIssue(n, { cwd });
+  if (issueStatus(cur) === STATUS.inReview) {
+    console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
+    return { issue: n, outcome: "submitted", durationMs: result.durationMs };
+  }
+
+  // Agent finished but didn't submit — auto-submit if it produced work.
+  if ((await commitsAhead(task.worktree.path)) > 0) {
+    const url = await submit(n, agent, cfg, cwd);
+    console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
+    return { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
+  }
+
+  await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.inProgress] });
+  console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
+  return { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
+}
+
+/**
+ * Dispatcher loop. Keeps up to `max` tasks in flight (each in its own worktree,
+ * each claimed atomically) until no eligible issues remain.
+ */
+export async function runLoop(
+  agent: string,
+  cfg: OrchConfig,
+  cwd: string,
+  opts: { max?: number; once?: boolean } = {},
+): Promise<RunSummary[]> {
+  const summaries: RunSummary[] = [];
+
+  if (opts.once) {
+    const s = await processNext(agent, cfg, cwd);
+    if (s) summaries.push(s);
+    return summaries;
+  }
+
+  const max = Math.max(1, opts.max ?? cfg.maxConcurrent ?? 1);
+  const active = new Set<Promise<void>>();
+  let drained = false;
+
+  const launch = (): void => {
+    const p = processNext(agent, cfg, cwd)
+      .then((s) => {
+        if (s === null) drained = true;
+        else summaries.push(s);
+      })
+      .catch((e: unknown) => {
+        console.error(pc.red("runner error: ") + (e instanceof Error ? e.message : String(e)));
+      })
+      .finally(() => active.delete(p));
+    active.add(p);
+  };
+
+  while (!drained || active.size > 0) {
+    while (!drained && active.size < max) launch();
+    if (active.size > 0) await Promise.race(active);
+    else break;
+  }
+  return summaries;
+}

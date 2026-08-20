@@ -1,0 +1,6 @@
+# Normalise line endings: LF in the repo, everywhere.
+* text=auto eol=lf
+
+# Windows batch shims must stay CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf

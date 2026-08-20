@@ -1,0 +1,38 @@
+{
+  "name": "harness-orchestrator",
+  "version": "0.1.0",
+  "description": "Run Claude Code + Codex as parallel coding agents with atomic task-claim, git-worktree isolation, and mandatory cross-harness review before merge.",
+  "type": "module",
+  "bin": {
+    "orch": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "orch": "tsx src/cli.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "keywords": [
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "orchestrator",
+    "git-worktree",
+    "code-review"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

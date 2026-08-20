@@ -1,0 +1,147 @@
+#!/usr/bin/env node
+import { Command } from "commander";
+import pc from "picocolors";
+import { initCommand } from "./commands/init.js";
+import { doctorCommand } from "./commands/doctor.js";
+import { nextCommand } from "./commands/next.js";
+import { claimCommand } from "./commands/claim.js";
+import { submitCommand } from "./commands/submit.js";
+import { boardCommand } from "./commands/board.js";
+import { statusCommand } from "./commands/status.js";
+import { runCommand } from "./commands/run.js";
+import {
+  reviewQueueCommand,
+  reviewCommand,
+  reviewApproveCommand,
+  reviewChangesCommand,
+} from "./commands/review.js";
+import { mergeCommand, integrateCommand } from "./commands/merge.js";
+
+/** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function wrap(fn: (...args: any[]) => Promise<void>) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return async (...args: any[]): Promise<void> => {
+    try {
+      await fn(...args);
+    } catch (e) {
+      console.error(pc.red("error: ") + (e instanceof Error ? e.message : String(e)));
+      process.exitCode = 1;
+    }
+  };
+}
+
+const program = new Command();
+
+program
+  .name("orch")
+  .description(
+    "Run Claude Code + Codex as parallel coding agents with atomic task-claim, git-worktree isolation, and mandatory cross-harness review before merge.",
+  )
+  .version("0.1.0");
+
+const agentOpt = "-a, --agent <id>";
+const agentDesc = "agent identity (defaults to $ORCH_AGENT or config.lead)";
+
+program
+  .command("init")
+  .description("Scaffold config, the AGENTS.md/CLAUDE.md memory redirect, and GitHub labels")
+  .action(wrap(initCommand));
+
+program
+  .command("doctor")
+  .description("Verify environment: git, gh auth, worktree support, config, adapters, labels")
+  .action(wrap(doctorCommand));
+
+program
+  .command("next")
+  .description("Claim the next eligible issue, open a worktree, and print the brief")
+  .option(agentOpt, agentDesc)
+  .action(wrap(nextCommand));
+
+program
+  .command("claim <issue>")
+  .description("Claim a specific issue by number")
+  .option(agentOpt, agentDesc)
+  .action(wrap(claimCommand));
+
+program
+  .command("submit <issue>")
+  .description("Push the branch, open a PR that closes the issue, and route cross-review")
+  .option(agentOpt, agentDesc)
+  .action(wrap(submitCommand));
+
+program
+  .command("board")
+  .description("Show all issues grouped by status")
+  .action(wrap(boardCommand));
+
+program
+  .command("status")
+  .description("What you're working on, what's next, and what other agents are doing")
+  .option(agentOpt, agentDesc)
+  .action(wrap(statusCommand));
+
+program
+  .command("run")
+  .description("Dispatcher: claim eligible issues and drive the harness over them in worktrees")
+  .option(agentOpt, agentDesc)
+  .option("-m, --max <n>", "max concurrent tasks (defaults to config.maxConcurrent)")
+  .option("--once", "process a single task then exit")
+  .action(wrap(runCommand));
+
+program
+  .command("review-queue")
+  .description("List PRs awaiting your cross-review")
+  .option(agentOpt, agentDesc)
+  .action(wrap(reviewQueueCommand));
+
+program
+  .command("review <pr>")
+  .description("Print a PR's diff and a review checklist")
+  .option(agentOpt, agentDesc)
+  .action(wrap(reviewCommand));
+
+program
+  .command("review-approve <pr>")
+  .description("Record a cross-review approval (satisfies the merge gate)")
+  .option(agentOpt, agentDesc)
+  .option("-n, --notes <text>", "optional approval note")
+  .action(wrap(reviewApproveCommand));
+
+program
+  .command("review-changes <pr>")
+  .description("Request changes and bounce the issue back to its author")
+  .option(agentOpt, agentDesc)
+  .option("-n, --notes <text>", "what needs to change (required)")
+  .action(wrap(reviewChangesCommand));
+
+program
+  .command("merge <pr>")
+  .description("Merge a PR — gated on green CI + approval by the other harness")
+  .option("--human", "satisfy requireHumanMerge (your explicit sign-off)")
+  .action(wrap(mergeCommand));
+
+program
+  .command("integrate")
+  .description("Merge every PR that passes the gate, in order")
+  .option("--human", "satisfy requireHumanMerge for all")
+  .action(wrap(integrateCommand));
+
+// Placeholder commands wired up in their respective build phases.
+const notYet =
+  (phase: string) =>
+  (): void => {
+    console.error(`\`orch\` command not implemented yet (arrives in ${phase}).`);
+    process.exitCode = 2;
+  };
+const upcoming: ReadonlyArray<readonly [string, string]> = [
+  ["memory", "P4"],
+  ["plan", "P5"],
+  ["assign", "P5"],
+];
+for (const [cmd, phase] of upcoming) {
+  program.command(cmd).description(`(${phase}) coming soon`).action(notYet(phase));
+}
+
+program.parseAsync(process.argv);
