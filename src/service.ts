@@ -4,7 +4,7 @@ import { claim as lockClaim, release as lockRelease } from "./lock.js";
 import { type Issue, getIssue, editIssue, createPr } from "./github.js";
 import { STATUS, agentLabel, REVIEW_NEEDED } from "./labels.js";
 import { addWorktree, worktreePath, type Worktree } from "./worktree.js";
-import { eligibleIssues } from "./board.js";
+import { eligibleIssues, issueAgent } from "./board.js";
 import type { OrchConfig } from "./config.js";
 
 export interface ClaimedTask {
@@ -50,6 +50,8 @@ export async function claimNext(
   cwd: string,
 ): Promise<ClaimedTask | null> {
   for (const candidate of await eligibleIssues(cwd)) {
+    const owner = issueAgent(candidate);
+    if (owner && owner !== agent) continue; // reserved for another agent
     try {
       return await claimSpecific(candidate.number, agent, cfg, cwd);
     } catch {

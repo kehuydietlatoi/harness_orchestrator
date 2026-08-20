@@ -16,6 +16,9 @@ import {
   reviewChangesCommand,
 } from "./commands/review.js";
 import { mergeCommand, integrateCommand } from "./commands/merge.js";
+import { briefCommand } from "./commands/brief.js";
+import { memoryAddCommand, memoryListCommand } from "./commands/memory.js";
+import { planCommand, assignCommand } from "./commands/plan.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -128,20 +131,28 @@ program
   .option("--human", "satisfy requireHumanMerge for all")
   .action(wrap(integrateCommand));
 
-// Placeholder commands wired up in their respective build phases.
-const notYet =
-  (phase: string) =>
-  (): void => {
-    console.error(`\`orch\` command not implemented yet (arrives in ${phase}).`);
-    process.exitCode = 2;
-  };
-const upcoming: ReadonlyArray<readonly [string, string]> = [
-  ["memory", "P4"],
-  ["plan", "P5"],
-  ["assign", "P5"],
-];
-for (const [cmd, phase] of upcoming) {
-  program.command(cmd).description(`(${phase}) coming soon`).action(notYet(phase));
-}
+program
+  .command("brief <issue>")
+  .description("Print the task briefing (spec + memory pointer + loop) for an issue")
+  .option(agentOpt, agentDesc)
+  .action(wrap(briefCommand));
+
+const memory = program.command("memory").description("Shared project memory (AGENTS.md)");
+memory
+  .command("add <text>")
+  .description("Append a durable fact to shared memory")
+  .option("-t, --type <type>", "fact type (note|decision|gotcha)", "note")
+  .action(wrap(memoryAddCommand));
+memory.command("list").description("List logged facts").action(wrap(memoryListCommand));
+
+program
+  .command("plan <file>")
+  .description("Create GitHub issues from a JSON tickets file (with deps + file hints)")
+  .action(wrap(planCommand));
+
+program
+  .command("assign")
+  .description("Round-robin pre-assign eligible unowned issues to agents")
+  .action(wrap(assignCommand));
 
 program.parseAsync(process.argv);
