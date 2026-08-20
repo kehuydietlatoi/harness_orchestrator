@@ -2,39 +2,99 @@
 
 Run **Claude Code** and **Codex** as parallel coding agents on the same repo — safely.
 
-Worktree-isolated parallel agents are common in 2026 (Claude Squad, Parallel Code, Vibe Kanban, swarm-protocol, …). `orch` is built around the two things those tools *don't* do:
+Worktree-isolated parallel agents are commodity in 2026 (Claude Squad, Parallel
+Code, Vibe Kanban, swarm-protocol, …). `orch` is built around the two things those
+tools *don't* do:
 
-1. **Mandatory cross-*model* review before merge** — a PR written by Claude can only merge after Codex approves it, and vice versa. Self-approval is structurally impossible.
-2. **Shared project memory across harnesses** — one canonical `AGENTS.md`; `CLAUDE.md` is a `@AGENTS.md` redirect, so both agents read (and write) the same brain.
+1. **Mandatory cross-*model* review before merge** — a PR written by Claude can only
+   merge after Codex approves it, and vice versa. Self-approval is structurally
+   impossible.
+2. **Shared project memory across harnesses** — one canonical `AGENTS.md`; `CLAUDE.md`
+   is a `@AGENTS.md` redirect, so both agents read (and write) the same brain.
 
-On top of that it provides the commodity plumbing done cleanly: an **atomic task-claim** (a `git` ref used as a distributed mutex), **one git worktree per task**, a GitHub-Issues board, and an **`orch run` dispatcher** that launches each harness headless per ticket.
-
-## Status
-
-Early development. Phase P0 (scaffold: `orch init`, `orch doctor`, CI) is in place; board/claim, adapters, and the merge gate are landing next. See the build phases in the plan.
+On top of that it provides the commodity plumbing done cleanly: an **atomic
+task-claim** (a `git` ref used as a distributed mutex), **one git worktree per
+task**, a GitHub-Issues board, and an **`orch run` dispatcher** that launches each
+harness headless per ticket.
 
 ## Requirements
 
 - Node.js ≥ 20, git ≥ 2.15 (worktrees)
-- [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — the task board and PR integration run through it
-- `claude` and `codex` CLIs on PATH (for the agent adapters)
+- [GitHub CLI](https://cli.github.com/) (`gh`), authenticated — the board + PRs run through it
+- `claude` and `codex` on PATH (for the agent adapters)
 
-## Quickstart (dev)
+## Quickstart
 
 ```bash
-npm install
-npm run orch -- doctor      # environment check
-npm run orch -- init        # scaffold config + memory redirect + GitHub labels
+npm install && npm run build
+npm link                       # puts `orch` on your PATH (or use `node dist/cli.js`)
+
+cd ../my-project               # a GitHub repo
+orch init                      # config + AGENTS.md/CLAUDE.md redirect + labels
+orch doctor                    # verify git, gh auth, worktrees, adapters, labels
 ```
 
-## Architecture
+## The loop
 
-See [`docs/`](docs/) (ADRs) and the layered `src/` (`git.ts` / `github.ts` wrappers, `lock.ts` claim, `adapters/` harness seam, `runner.ts` dispatcher, `review.ts` merge gate).
+```bash
+orch plan tickets.json                 # lead: JSON tickets -> issues (deps + file hints)
+orch assign                            # round-robin pre-assign to agents (optional)
 
-## Prior art
+orch run --agent claude & orch run --agent codex &   # dispatchers spawn the harnesses
 
-- [awesome-agent-orchestrators](https://github.com/andyrewlee/awesome-agent-orchestrators)
-- [swarm-protocol](https://github.com/phuryn/swarm-protocol) — closest coordination-layer prior art
+# each daemon, per task:
+#   claim (atomic) -> worktree -> spawn harness headless -> submit (PR + route review)
+#
+# then, cross-review:
+orch review-queue --agent codex        # PRs awaiting codex
+orch review-approve <pr> --agent codex # satisfies the gate for a claude-authored PR
+orch merge <pr>                        # only if: green CI + approved by the OTHER harness
+```
+
+You watch `orch board` / `orch status`, and either trust the gate or set
+`requireHumanMerge` to sign off yourself.
+
+## Command reference
+
+| Command | Purpose |
+|---|---|
+| `orch init` / `orch doctor` | scaffold config + memory + labels / verify environment |
+| `orch plan <file>` | create issues from a JSON tickets file (deps + file-ownership) |
+| `orch assign` | round-robin pre-assign eligible issues to agents |
+| `orch next` / `orch claim <n>` | atomically claim a task, open its worktree |
+| `orch brief <n>` | print the task briefing (spec + memory pointer + loop) |
+| `orch submit <n>` | push branch, open PR (`Closes #n`), route cross-review |
+| `orch run [--agent x] [--max n] [--once]` | dispatcher: claim + drive the harness |
+| `orch review-queue` / `review <pr>` | list / inspect PRs awaiting your review |
+| `orch review-approve <pr>` / `review-changes <pr>` | record cross-review outcome |
+| `orch merge <pr>` / `orch integrate` | gated merge (one / all mergeable) |
+| `orch board` / `orch status` | board view / your work + what's next |
+| `orch memory add <text>` / `memory list` | shared memory (AGENTS.md log) |
+
+Agent identity comes from `--agent`, `$ORCH_AGENT`, or `config.lead`.
+
+## Configuration — `orch.config.json`
+
+```json
+{ "agents": ["claude","codex"], "lead": "claude",
+  "requireCrossReview": true, "requireHumanMerge": false,
+  "worktreeRoot": "../wt", "maxConcurrent": 2, "taskTimeoutMs": 1800000,
+  "adapters": { "claude": {"cmd":"claude"}, "codex": {"cmd":"codex"} } }
+```
+
+## Design
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — modules, the three load-bearing mechanisms, task lifecycle
+- [docs/adr/0001-build-vs-adopt.md](docs/adr/0001-build-vs-adopt.md) — prior-art survey + why build
+- [docs/adr/0002-atomic-claim-via-git-ref.md](docs/adr/0002-atomic-claim-via-git-ref.md) — the claim mutex
+
+## Development
+
+```bash
+npm run dev -- <command>   # run from source (tsx)
+npm run typecheck
+npm test                   # atomic-claim concurrency, spawn plumbing, merge-gate policy
+```
 
 ## License
 
