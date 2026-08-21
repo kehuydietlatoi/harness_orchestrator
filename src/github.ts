@@ -257,5 +257,13 @@ export async function mergePr(
   const args = ["pr", "merge", String(number), `--${opts.method ?? "squash"}`];
   if (opts.deleteBranch !== false) args.push("--delete-branch");
   const r = await exec("gh", args, { cwd: opts.cwd });
-  if (r.code !== 0) throw new Error(`gh pr merge #${number} failed: ${r.stderr.trim()}`);
+  if (r.code !== 0) {
+    // The remote merge succeeds first; only the local `--delete-branch` cleanup
+    // can fail when that branch is still checked out in the task worktree (the
+    // worktree is pruned by the caller right after this call). Treat that as a
+    // successful merge — the PR is merged and the local branch is cleaned up on
+    // prune — rather than a merge failure that would skip lock/worktree release.
+    if (/Cannot delete branch .* checked out at/i.test(r.stderr)) return;
+    throw new Error(`gh pr merge #${number} failed: ${r.stderr.trim()}`);
+  }
 }
