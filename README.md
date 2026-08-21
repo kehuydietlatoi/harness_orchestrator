@@ -40,7 +40,13 @@ orch doctor                    # verify git, gh auth, worktrees, adapters, label
 orch plan tickets.json                 # lead: JSON tickets -> issues (deps + file hints)
 orch assign                            # round-robin pre-assign to agents (optional)
 
-orch run --agent claude & orch run --agent codex &   # dispatchers spawn the harnesses
+# run the two dispatchers concurrently — one per terminal:
+#   terminal 1:  orch run --agent claude
+#   terminal 2:  orch run --agent codex
+# on Windows PowerShell, launch both from one shell with Start-Process:
+#   Start-Process orch 'run --agent claude'; Start-Process orch 'run --agent codex'
+# (POSIX `orch run --agent claude & orch run --agent codex &` backgrounds on bash,
+#  but `&` does NOT background in PowerShell/cmd — the two would run sequentially)
 
 # each daemon, per task:
 #   claim (atomic) -> worktree -> spawn harness headless -> submit (PR + route review)
