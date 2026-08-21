@@ -16,7 +16,9 @@ export class CodexAdapter implements HarnessAdapter {
 
   async runTask(ctx: RunContext): Promise<RunResult> {
     // cwd carries the worktree (no -C path in argv); prompt on stdin.
-    const args = ["exec", "--full-auto", "--json"];
+    // `--approve-for-me` = non-interactive, workspace-write sandbox (the modern
+    // replacement for the removed `--full-auto`, codex-cli >= 0.14x).
+    const args = ["exec", "--approve-for-me", "--json"];
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -28,7 +30,7 @@ export class CodexAdapter implements HarnessAdapter {
   }
 
   async runReview(ctx: ReviewContext): Promise<RunResult> {
-    const args = ["exec", "--full-auto", "--json"];
+    const args = ["exec", "--approve-for-me", "--json"];
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.cwd,
       input: ctx.prompt,
