@@ -9,6 +9,8 @@ import { makeAdapter } from "./adapters/index.js";
 import { getIssue, editIssue } from "./github.js";
 import { issueStatus } from "./board.js";
 import { STATUS, NEEDS_ATTENTION } from "./labels.js";
+import { release as lockRelease } from "./lock.js";
+import { removeWorktree, worktreePath } from "./worktree.js";
 
 export interface RunSummary {
   issue: number;
@@ -57,6 +59,7 @@ export async function processNext(
 
   if (!result.ok) {
     await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
+    await releaseClaim(n, cfg, cwd);
     console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
     return { issue: n, outcome: "failed", durationMs: result.durationMs };
   }
@@ -76,8 +79,19 @@ export async function processNext(
   }
 
   await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.inProgress] });
+  await releaseClaim(n, cfg, cwd);
   console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
   return { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
+}
+
+/**
+ * Free a task's resources when a run does not produce a mergeable PR: drop the
+ * claim lock and prune the worktree so the issue can be re-claimed later. The
+ * `needs-attention` label stays on the issue as the human signal.
+ */
+async function releaseClaim(n: number, cfg: OrchConfig, cwd: string): Promise<void> {
+  await lockRelease(n, { cwd });
+  await removeWorktree(worktreePath(cfg.worktreeRoot, n, cwd), { cwd });
 }
 
 /**

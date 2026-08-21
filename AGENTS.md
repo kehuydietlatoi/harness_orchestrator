@@ -6,3 +6,5 @@
 
 ## Conventions
 _(add project-specific facts, gotchas, and architectural decisions below)_
+
+- **Claim-lock lifecycle** (`refs/orch/lock/issue-<n>`): a lock is released on exactly these paths — successful merge (`src/review.ts`), claim-setup rollback (`src/service.ts`), a failed/no-commit run (`processNext` in `src/runner.ts`), and `orch abandon <n>` (`src/commands/abandon.ts`). Any new terminal state for a task must release the lock and prune its worktree, or the issue becomes un-reclaimable.
