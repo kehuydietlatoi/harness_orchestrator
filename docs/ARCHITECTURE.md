@@ -44,14 +44,20 @@ one racer wins; losers move on. See ADR-0002.
 
 ### 2. Cross-harness merge gate (`review.ts`)
 
-The headline property: a PR may merge only if a **different** harness approved it.
-Because both agents authenticate as the same GitHub user (and GitHub forbids
-self-approval), approval is tracked at the *agent* level via `reviewed-by:<agent>`
-labels, not GitHub's native review author. `evaluateGate()` is a pure function —
-given a single params object `{ author, reviewers, agents, requireCrossReview,
-checksPass, checksDetail, requireHumanMerge, humanApproved }` (where
-`requireCrossReview` toggles the cross-review gate and `checksDetail` explains a
-red CI) it returns the blocking reasons — and is unit-tested in isolation.
+The gate enforces a **process guarantee**: a PR may merge only when its issue has
+an author label and a `reviewed-by:<agent>` label naming different configured
+harnesses. Each dispatcher passes only its own agent identity, so ordinary use
+reliably prevents accidental same-label self-review. Because both harnesses share
+one GitHub identity and `--agent` is a caller-supplied flag, the gate does not
+authenticate which harness applied the reviewer label; a caller can impersonate
+the other configured agent. See ADR-0003 for the trust boundary and a path to
+cryptographic or credential-backed agent identity.
+
+`evaluateGate()` is a pure function — given a single params object `{ author,
+reviewers, agents, requireCrossReview, checksPass, checksDetail,
+requireHumanMerge, humanApproved }` (where `requireCrossReview` toggles the
+cross-review gate and `checksDetail` explains a red CI) it returns the blocking
+reasons — and is unit-tested in isolation.
 
 ### 3. Harness adapters + dispatcher (`adapters/`, `runner.ts`)
 

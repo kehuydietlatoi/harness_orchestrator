@@ -6,9 +6,12 @@ Worktree-isolated parallel agents are commodity in 2026 (Claude Squad, Parallel
 Code, Vibe Kanban, swarm-protocol, …). `orch` is built around the two things those
 tools *don't* do:
 
-1. **Mandatory cross-*model* review before merge** — a PR written by Claude can only
-   merge after Codex approves it, and vice versa. Self-approval is structurally
-   impossible.
+1. **Mandatory cross-*model* review before merge** — the gate requires the PR's
+   author label and `reviewed-by:<agent>` label to name different configured
+   harnesses. Each dispatcher supplies only its own identity, so this reliably
+   prevents accidental same-label self-review. The `--agent` value is not
+   authenticated, however, so this is a process guarantee rather than proof of
+   caller identity.
 2. **Shared project memory across harnesses** — one canonical `AGENTS.md`; `CLAUDE.md`
    is a `@AGENTS.md` redirect, so both agents read (and write) the same brain.
 
@@ -93,6 +96,7 @@ Agent identity comes from `--agent`, `$ORCH_AGENT`, or `config.lead`.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — modules, the three load-bearing mechanisms, task lifecycle
 - [docs/adr/0001-build-vs-adopt.md](docs/adr/0001-build-vs-adopt.md) — prior-art survey + why build
 - [docs/adr/0002-atomic-claim-via-git-ref.md](docs/adr/0002-atomic-claim-via-git-ref.md) — the claim mutex
+- [docs/adr/0003-cross-review-is-a-process-guarantee.md](docs/adr/0003-cross-review-is-a-process-guarantee.md) — cross-review trust boundary + review backlog
 
 ## Development
 
