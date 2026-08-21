@@ -1,0 +1,20 @@
+{
+  "agents": [
+    "claude",
+    "codex"
+  ],
+  "lead": "claude",
+  "requireCrossReview": true,
+  "requireHumanMerge": false,
+  "worktreeRoot": "../wt",
+  "maxConcurrent": 2,
+  "taskTimeoutMs": 1800000,
+  "adapters": {
+    "claude": {
+      "cmd": "claude"
+    },
+    "codex": {
+      "cmd": "codex"
+    }
+  }
+}
