@@ -23,6 +23,7 @@ worktree.ts            per-task worktree lifecycle
 board.ts               eligibility + dependency parsing + rendering
 labels.ts              status / agent / reviewed-by label vocabulary
 service.ts             claim (specific/next), submit
+brief.ts               buildBrief — task briefing handed to each harness (used by runner.ts)
 review.ts              review routing + the merge gate (evaluateGate is pure)
 runner.ts              the `orch run` dispatcher loop
 memory.ts              shared-memory append/list
@@ -47,8 +48,10 @@ The headline property: a PR may merge only if a **different** harness approved i
 Because both agents authenticate as the same GitHub user (and GitHub forbids
 self-approval), approval is tracked at the *agent* level via `reviewed-by:<agent>`
 labels, not GitHub's native review author. `evaluateGate()` is a pure function —
-given `(author, reviewers, agents, checksPass, requireHumanMerge, humanApproved)`
-it returns the blocking reasons — and is unit-tested in isolation.
+given a single params object `{ author, reviewers, agents, requireCrossReview,
+checksPass, checksDetail, requireHumanMerge, humanApproved }` (where
+`requireCrossReview` toggles the cross-review gate and `checksDetail` explains a
+red CI) it returns the blocking reasons — and is unit-tested in isolation.
 
 ### 3. Harness adapters + dispatcher (`adapters/`, `runner.ts`)
 
