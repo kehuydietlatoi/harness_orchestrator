@@ -167,7 +167,7 @@ export async function checkMergeGate(
   return { ok: reasons.length === 0, reasons, issue: n, author };
 }
 
-/** Merge a PR through the gate, then release the lock and prune the worktree. */
+/** Merge a PR through the gate, then prune the worktree and release the lock. */
 export async function merge(
   prNum: number,
   cfg: OrchConfig,
@@ -178,12 +178,11 @@ export async function merge(
   if (!gate.ok) {
     throw new Error(`merge blocked for PR #${prNum}:\n  - ${gate.reasons.join("\n  - ")}`);
   }
-  // Prune the worktree first so `gh pr merge --delete-branch` can remove the
-  // now-unchecked-out local branch.
+  await mergePr(prNum, { cwd, method: "squash", deleteBranch: true });
+
   if (gate.issue !== null) {
     await removeWorktree(worktreePath(cfg.worktreeRoot, gate.issue, cwd), { cwd });
   }
-  await mergePr(prNum, { cwd, method: "squash", deleteBranch: true });
 
   if (gate.issue !== null) {
     await lockRelease(gate.issue, { cwd });
