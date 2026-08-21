@@ -6,6 +6,7 @@ import { doctorCommand } from "./commands/doctor.js";
 import { nextCommand } from "./commands/next.js";
 import { claimCommand } from "./commands/claim.js";
 import { submitCommand } from "./commands/submit.js";
+import { abandonCommand } from "./commands/abandon.js";
 import { boardCommand } from "./commands/board.js";
 import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
@@ -73,6 +74,12 @@ program
   .description("Push the branch, open a PR that closes the issue, and route cross-review")
   .option(agentOpt, agentDesc)
   .action(wrap(submitCommand));
+
+program
+  .command("abandon <issue>")
+  .description("Release a stuck claim: drop the lock, prune the worktree, return the issue to todo")
+  .option(agentOpt, agentDesc)
+  .action(wrap(abandonCommand));
 
 program
   .command("board")
