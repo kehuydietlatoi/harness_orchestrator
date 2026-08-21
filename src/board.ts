@@ -23,6 +23,25 @@ export function parseDeps(body: string): number[] {
   return [...deps];
 }
 
+/** Index a list of issues by their number for O(1) lookup. */
+export function byNumber(issues: Issue[]): Map<number, Issue> {
+  return new Map(issues.map((i) => [i.number, i]));
+}
+
+/**
+ * Still-open dependency issue numbers, resolved from a pre-fetched open-issue map
+ * (empty = not blocked). A dependency absent from the map — closed, missing, or
+ * inaccessible — is treated as non-blocking, matching `openDeps`.
+ */
+export function openDepsFromMap(issue: Issue, open: Map<number, Issue>): number[] {
+  const blocking: number[] = [];
+  for (const d of parseDeps(issue.body)) {
+    const di = open.get(d);
+    if (di && di.state !== "CLOSED") blocking.push(d);
+  }
+  return blocking;
+}
+
 /** Returns the still-open dependency issue numbers (empty = not blocked). */
 export async function openDeps(issue: Issue, cwd?: string): Promise<number[]> {
   const blocking: number[] = [];
@@ -37,21 +56,33 @@ export async function openDeps(issue: Issue, cwd?: string): Promise<number[]> {
   return blocking;
 }
 
-/** True if the issue is available to be claimed by any agent. */
-export async function isEligible(i: Issue, cwd?: string): Promise<boolean> {
+/**
+ * True if the issue is available to be claimed by any agent.
+ *
+ * When `open` (the batched open-issue map) is supplied, dependency state is
+ * resolved from it — avoiding a per-dependency `gh` lookup. Otherwise deps are
+ * fetched individually via `openDeps` (used by callers without a batched list).
+ */
+export async function isEligible(
+  i: Issue,
+  cwd?: string,
+  open?: Map<number, Issue>,
+): Promise<boolean> {
   const claimed = i.labels.some((l) => l.startsWith("status:") && l !== STATUS.todo);
   if (claimed) return false;
   if (await isLocked(i.number, { cwd })) return false;
-  if ((await openDeps(i, cwd)).length > 0) return false;
+  const blocking = open ? openDepsFromMap(i, open) : await openDeps(i, cwd);
+  if (blocking.length > 0) return false;
   return true;
 }
 
 /** Eligible issues in ascending issue-number order (stable pick order). */
 export async function eligibleIssues(cwd?: string): Promise<Issue[]> {
   const issues = (await listIssues({ cwd, state: "open" })).sort((a, b) => a.number - b.number);
+  const open = byNumber(issues);
   const out: Issue[] = [];
   for (const i of issues) {
-    if (await isEligible(i, cwd)) out.push(i);
+    if (await isEligible(i, cwd, open)) out.push(i);
   }
   return out;
 }

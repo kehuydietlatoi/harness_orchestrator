@@ -2,6 +2,7 @@ import {
   type Issue,
   type Pr,
   getPr,
+  listIssues,
   listOpenPrs,
   getIssue,
   editIssue,
@@ -10,7 +11,7 @@ import {
   mergePr,
 } from "./github.js";
 import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "./labels.js";
-import { issueAgent } from "./board.js";
+import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "./lock.js";
 import { worktreePath, removeWorktree } from "./worktree.js";
 import type { OrchConfig } from "./config.js";
@@ -31,12 +32,16 @@ export interface ReviewItem {
 
 /** PRs awaiting review by `agent` (needs review, and not authored by that agent). */
 export async function reviewQueue(agent: string, cwd: string): Promise<ReviewItem[]> {
+  const [prs, open] = await Promise.all([
+    listOpenPrs({ cwd }),
+    listIssues({ cwd, state: "open" }).then(byNumber),
+  ]);
   const items: ReviewItem[] = [];
-  for (const pr of await listOpenPrs({ cwd })) {
+  for (const pr of prs) {
     const n = prIssueNumber(pr);
     if (n === null) continue;
-    const issue = await getIssue(n, { cwd });
-    if (!issue.labels.includes(REVIEW_NEEDED)) continue;
+    const issue = open.get(n);
+    if (!issue || !issue.labels.includes(REVIEW_NEEDED)) continue;
     const author = issueAgent(issue);
     if (author === agent) continue; // never review your own work
     items.push({ pr, issue, author });
