@@ -20,6 +20,7 @@ import { mergeCommand, integrateCommand } from "./commands/merge.js";
 import { briefCommand } from "./commands/brief.js";
 import { memoryAddCommand, memoryListCommand } from "./commands/memory.js";
 import { planCommand, assignCommand } from "./commands/plan.js";
+import { snapshotCommand } from "./commands/snapshot.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -91,6 +92,12 @@ program
   .description("What you're working on, what's next, and what other agents are doing")
   .option(agentOpt, agentDesc)
   .action(wrap(statusCommand));
+
+program
+  .command("snapshot")
+  .description("Project the complete open-task board as a table or JSON")
+  .option("--json", "print the snapshot as JSON")
+  .action(wrap(snapshotCommand));
 
 program
   .command("run")
