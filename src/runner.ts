@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { exec } from "./util/exec.js";
@@ -11,6 +11,7 @@ import { issueStatus } from "./board.js";
 import { STATUS, NEEDS_ATTENTION } from "./labels.js";
 import { release as lockRelease } from "./lock.js";
 import { removeWorktree, worktreePath } from "./worktree.js";
+import { appendRun, parseUsage, projectId, type RunRecord } from "./telemetry.js";
 
 export interface RunSummary {
   issue: number;
@@ -22,6 +23,34 @@ export interface RunSummary {
 async function commitsAhead(worktree: string, base = "main"): Promise<number> {
   const r = await exec("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: worktree });
   return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
+}
+
+function recordRun(
+  issue: number,
+  agent: string,
+  outcome: string,
+  durationMs: number,
+  logFile: string,
+  cwd: string,
+): void {
+  let logText = "";
+  try {
+    logText = readFileSync(logFile, "utf8");
+  } catch {
+    // Preserve one record per completed run even when its log is unavailable.
+  }
+
+  const usage = parseUsage(logText, agent);
+  const rec: RunRecord = {
+    ts: new Date().toISOString(),
+    project: projectId(cwd),
+    issue,
+    agent,
+    outcome,
+    durationMs,
+    ...usage,
+  };
+  appendRun(rec, cwd);
 }
 
 /**
@@ -61,6 +90,7 @@ export async function processNext(
     await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
     await releaseClaim(n, cfg, cwd);
     console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
+    recordRun(n, agent, "failed", result.durationMs, logFile, cwd);
     return { issue: n, outcome: "failed", durationMs: result.durationMs };
   }
 
@@ -68,6 +98,7 @@ export async function processNext(
   const cur = await getIssue(n, { cwd });
   if (issueStatus(cur) === STATUS.inReview) {
     console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
+    recordRun(n, agent, "submitted", result.durationMs, logFile, cwd);
     return { issue: n, outcome: "submitted", durationMs: result.durationMs };
   }
 
@@ -75,12 +106,14 @@ export async function processNext(
   if ((await commitsAhead(task.worktree.path)) > 0) {
     const url = await submit(n, agent, cfg, cwd);
     console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
+    recordRun(n, agent, "auto-submitted", result.durationMs, logFile, cwd);
     return { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
   }
 
   await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.inProgress] });
   await releaseClaim(n, cfg, cwd);
   console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
+  recordRun(n, agent, "needs-attention", result.durationMs, logFile, cwd);
   return { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
 }
 
