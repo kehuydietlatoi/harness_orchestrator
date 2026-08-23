@@ -63,6 +63,11 @@ orch merge <pr>                        # only if: green CI + approved by the OTH
 You watch `orch board` / `orch status`, and either trust the gate or set
 `requireHumanMerge` to sign off yourself.
 
+For a live, read-only view in a browser, run `orch serve` and open
+`http://127.0.0.1:4000`. Use `orch serve --port <n>` to choose another local
+port. The dashboard is localhost-only and refreshes from the canonical snapshot
+every two seconds.
+
 ## Command reference
 
 | Command | Purpose |
@@ -78,6 +83,7 @@ You watch `orch board` / `orch status`, and either trust the gate or set
 | `orch review-approve <pr>` / `review-changes <pr>` | record cross-review outcome |
 | `orch merge <pr>` / `orch integrate` | gated merge (one / all mergeable) |
 | `orch board` / `orch status` | board view / your work + what's next |
+| `orch serve [--port <n>]` | live, read-only localhost dashboard (default port 4000) |
 | `orch memory add <text>` / `memory list` | shared memory (AGENTS.md log) |
 
 Agent identity comes from `--agent`, `$ORCH_AGENT`, or `config.lead`.
