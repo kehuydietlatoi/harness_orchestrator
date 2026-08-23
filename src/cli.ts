@@ -21,6 +21,7 @@ import { briefCommand } from "./commands/brief.js";
 import { memoryAddCommand, memoryListCommand } from "./commands/memory.js";
 import { planCommand, assignCommand } from "./commands/plan.js";
 import { snapshotCommand } from "./commands/snapshot.js";
+import { serveCommand } from "./commands/serve.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -98,6 +99,12 @@ program
   .description("Project the complete open-task board as a table or JSON")
   .option("--json", "print the snapshot as JSON")
   .action(wrap(snapshotCommand));
+
+program
+  .command("serve")
+  .description("Serve a live, read-only dashboard on localhost")
+  .option("--port <n>", "localhost port", "4000")
+  .action(wrap(serveCommand));
 
 program
   .command("run")
