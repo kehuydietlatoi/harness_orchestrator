@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byNumber, openDepsFromMap, parseDeps } from "../src/board.js";
+import { byNumber, issueEffort, openDepsFromMap, parseDeps } from "../src/board.js";
 import type { Issue } from "../src/github.js";
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
@@ -23,6 +23,19 @@ describe("parseDeps", () => {
   });
   it("returns [] when there are no deps", () => {
     expect(parseDeps("no deps here")).toEqual([]);
+  });
+});
+
+describe("issueEffort", () => {
+  it.each([
+    ["easy", "easy"],
+    ["hard", "hard"],
+  ])("parses effort:%s", (tier, expected) => {
+    expect(issueEffort(issue(1, { labels: [`effort:${tier}`] }))).toBe(expected);
+  });
+
+  it("returns null without a recognized effort label", () => {
+    expect(issueEffort(issue(1, { labels: ["agent:claude", "effort:medium"] }))).toBeNull();
   });
 });
 
