@@ -13,6 +13,7 @@ import { loadConfig } from "../config.js";
 import { editIssue, listIssues, type Issue } from "../github.js";
 import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../labels.js";
 import { runJudge } from "../judge.js";
+import { evaluatePlan, type EvalReport } from "../judge-eval.js";
 import { assignRoundRobin } from "../plan.js";
 import { readRuns } from "../telemetry.js";
 
@@ -74,6 +75,20 @@ function briefFor(issues: Issue[], cwd: string, cfg: { agents: string[] }): stri
   return formatBrief(issues, rollupTelemetry(readRuns(cwd), cfg.agents));
 }
 
+/**
+ * Warn (on stderr, so piped `--judge` JSON stays clean) about the two contract
+ * failures `applyPlan` is blind to: an unassigned issue the judge forgot, and a
+ * blank rationale. Invalid/duplicate/extra entries are already surfaced as skips.
+ */
+function warnJudgeGaps(report: EvalReport): void {
+  const gaps = report.violations.filter(
+    (v) => v.kind === "coverage-missing" || v.kind === "missing-rationale",
+  );
+  if (gaps.length === 0) return;
+  console.error(pc.yellow(`judge plan incomplete: ${gaps.length} issue(s) need attention`));
+  for (const gap of gaps) console.error(pc.dim(`  #${gap.issue} ${gap.kind} (${gap.detail})`));
+}
+
 export async function assignCommand(opts: AssignOptions): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
@@ -107,6 +122,7 @@ export async function assignCommand(opts: AssignOptions): Promise<void> {
       return;
     }
     const plan = await runJudge(briefFor(issues, cwd, cfg), cfg, cwd); // fail-closed: throws => no writes
+    warnJudgeGaps(evaluatePlan(plan, issues, cfg)); // completeness check the writer can't do
     if (!opts.auto) {
       console.log(JSON.stringify(plan, null, 2));
       return;
