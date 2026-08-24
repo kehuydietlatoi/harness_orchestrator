@@ -3,6 +3,10 @@ import { resolve } from "node:path";
 
 export interface AdapterConfig {
   cmd: string;
+  models?: {
+    easy: string;
+    hard: string;
+  };
 }
 
 export interface OrchConfig {
@@ -13,6 +17,7 @@ export interface OrchConfig {
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
+  defaultEffort?: "easy" | "hard";
   adapters: Record<string, AdapterConfig>;
 }
 
@@ -26,9 +31,10 @@ export const DEFAULT_CONFIG: OrchConfig = {
   worktreeRoot: "../wt",
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
+  defaultEffort: "hard",
   adapters: {
-    claude: { cmd: "claude" },
-    codex: { cmd: "codex" },
+    claude: { cmd: "claude", models: { easy: "sonnet", hard: "opus" } },
+    codex: { cmd: "codex", models: { easy: "low", hard: "high" } },
   },
 };
 
@@ -47,9 +53,18 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^﻿/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  const adapters = { ...DEFAULT_CONFIG.adapters };
+  for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
+    const defaults = DEFAULT_CONFIG.adapters[agent];
+    const merged = { ...defaults, ...override };
+    if (defaults?.models || override.models) {
+      merged.models = { ...defaults?.models, ...override.models } as NonNullable<AdapterConfig["models"]>;
+    }
+    adapters[agent] = merged;
+  }
   return {
     ...DEFAULT_CONFIG,
     ...raw,
-    adapters: { ...DEFAULT_CONFIG.adapters, ...(raw.adapters ?? {}) },
+    adapters,
   };
 }

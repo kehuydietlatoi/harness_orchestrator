@@ -12,6 +12,7 @@ _(add project-specific facts, gotchas, and architectural decisions below)_
 - **Run telemetry**: every completed `processNext` harness run appends exactly one best-effort record to `~/.orch/<project>/runs.jsonl`. Missing/malformed logs and telemetry IO errors must yield null usage or a warning without changing the task outcome.
 - **Board projection**: `buildSnapshot` (`src/snapshot.ts`) is the canonical read model for open tasks. Keep GitHub/Git/telemetry reads in that module and add derived board fields to its pure `assemble(...)` helper so terminal, JSON, and dashboard consumers share one mapping. `Snapshot.reviewQueue` contains PR numbers carrying `review:needed`.
 - **Dashboard boundary**: `src/server.ts` serves only `GET /` and `GET /status`; `/status` calls `buildSnapshot` in-process, and `startServer` binds only `127.0.0.1`. Keep Phase 1 read-only. Future mutations belong under an authenticated `/actions/*` surface without changing these read routes.
+- **Effort routing boundary**: task effort is the abstract tier `easy | hard`, mapped through each adapter's `models` config before invocation. `RunContext.model` carries the resolved agent-specific value and affects `runTask` only; review invocations do not receive model flags.
 
 ## Agent skills
 

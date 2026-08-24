@@ -3,6 +3,7 @@ export interface RunContext {
   agent: string;
   worktree: string; // becomes the child process cwd
   prompt: string; // delivered on stdin
+  model?: string; // resolved agent-specific model value
   logFile?: string;
   timeoutMs?: number;
 }

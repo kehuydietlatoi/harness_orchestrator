@@ -5,6 +5,21 @@ import type { HarnessAdapter, RunContext, ReviewContext, RunResult } from "./typ
 
 const WIN = process.platform === "win32";
 
+export function buildClaudeTaskArgs(model?: string): string[] {
+  const args = [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "acceptEdits",
+    "--allowedTools",
+    "Read,Edit,Write,Bash",
+  ];
+  if (model !== undefined) args.push("--model", model);
+  return args;
+}
+
 /** Drives Claude Code in headless (`-p`) mode. */
 export class ClaudeAdapter implements HarnessAdapter {
   readonly id = "claude";
@@ -16,16 +31,7 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async runTask(ctx: RunContext): Promise<RunResult> {
     // Prompt on stdin; worktree as cwd. allowedTools kept metachar-free for the shell.
-    const args = [
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "acceptEdits",
-      "--allowedTools",
-      "Read,Edit,Write,Bash",
-    ];
+    const args = buildClaudeTaskArgs(ctx.model);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,

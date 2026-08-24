@@ -5,6 +5,12 @@ import type { HarnessAdapter, RunContext, ReviewContext, RunResult } from "./typ
 
 const WIN = process.platform === "win32";
 
+export function buildCodexTaskArgs(model?: string): string[] {
+  const args = ["exec", "--approve-for-me", "--json"];
+  if (model !== undefined) args.push("-c", `model_reasoning_effort=${model}`);
+  return args;
+}
+
 /** Drives Codex in headless (`codex exec`) mode. */
 export class CodexAdapter implements HarnessAdapter {
   readonly id = "codex";
@@ -18,7 +24,7 @@ export class CodexAdapter implements HarnessAdapter {
     // cwd carries the worktree (no -C path in argv); prompt on stdin.
     // `--approve-for-me` = non-interactive, workspace-write sandbox (the modern
     // replacement for the removed `--full-auto`, codex-cli >= 0.14x).
-    const args = ["exec", "--approve-for-me", "--json"];
+    const args = buildCodexTaskArgs(ctx.model);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
