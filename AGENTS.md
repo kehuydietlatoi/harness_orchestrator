@@ -27,4 +27,8 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+Single-context: `CONTEXT.md` (glossary) + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+**Labels & issue lifecycle**: `docs/WORKFLOW.md` is the single reference for every label
+orch relies on and exactly when each is set/cleared (traced from source). Update it in the
+same change that adds or moves a label — code wins if they disagree.
