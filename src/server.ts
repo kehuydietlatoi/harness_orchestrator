@@ -1,6 +1,6 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { applyPlan, formatBrief, rollupTelemetry, type PlanEntry } from "./assign.js";
+import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "./assign.js";
 import { loadConfig, type OrchConfig } from "./config.js";
 import { editIssue, listIssues, type Issue } from "./github.js";
 import { runJudge } from "./judge.js";
@@ -96,6 +96,10 @@ async function handleSuggest(
 ): Promise<void> {
   const cfg = deps.loadConfig(cwd);
   const issues = await deps.listOpenIssues(cwd);
+  if (selectUnassigned(issues).length === 0) {
+    sendJson(response, 200, { suggestions: [] }); // nothing to route — skip the judge
+    return;
+  }
   const brief = formatBrief(issues, rollupTelemetry(deps.readRuns(cwd), cfg.agents));
   let suggestions: PlanEntry[];
   try {

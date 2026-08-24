@@ -334,6 +334,90 @@
         text-align: center;
       }
 
+      .routing-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .btn {
+        padding: 7px 13px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-raised);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 0.8rem;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      .btn:hover:not(:disabled) {
+        border-color: var(--accent);
+      }
+
+      .btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      .btn-accent {
+        border-color: rgba(105, 226, 177, 0.4);
+        color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .btn-ghost {
+        background: transparent;
+      }
+
+      .routing-status {
+        padding: 12px 18px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .routing-status.is-error {
+        color: var(--danger);
+      }
+
+      .routing-status.is-ok {
+        color: var(--accent);
+      }
+
+      select.cell-input {
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.78rem;
+      }
+
+      select.cell-input.is-touched {
+        border-color: var(--warning);
+      }
+
+      .why-cell {
+        max-width: 340px;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .row-remove {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 1.05rem;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .row-remove:hover {
+        color: var(--danger);
+      }
+
       .review-list {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -481,6 +565,35 @@
         </article>
       </section>
 
+      <section class="panel" id="routing" aria-labelledby="routing-heading">
+        <div class="panel-header">
+          <h2 id="routing-heading">Routing</h2>
+          <div class="routing-actions">
+            <button type="button" class="btn" id="suggest-btn">Suggest routing</button>
+            <button type="button" class="btn btn-ghost" id="add-row-btn">Add row</button>
+            <button type="button" class="btn btn-accent" id="apply-btn" disabled>Apply</button>
+          </div>
+        </div>
+        <div class="routing-status" id="routing-status" role="status" aria-live="polite">
+          Click <strong>Suggest routing</strong> to have the judge propose an agent and effort for
+          each unassigned issue — or <strong>Add row</strong> to assign one yourself.
+        </div>
+        <div class="table-wrap">
+          <table id="routing-table" hidden>
+            <thead>
+              <tr>
+                <th>Issue</th>
+                <th>Agent</th>
+                <th>Effort</th>
+                <th>Why</th>
+                <th aria-label="Remove"></th>
+              </tr>
+            </thead>
+            <tbody id="routing-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel" aria-labelledby="tasks-heading">
         <div class="panel-header">
           <h2 id="tasks-heading">Tasks</h2>
@@ -536,6 +649,8 @@
           reviewList: document.querySelector("#reviews-list"),
           lastUpdated: document.querySelector("#last-updated"),
         };
+
+        let latestSnapshot = null; // most recent /status payload, for the manual issue picker
 
         const make = (tag, className, text) => {
           const node = document.createElement(tag);
@@ -684,6 +799,7 @@
         };
 
         const render = (snapshot) => {
+          latestSnapshot = snapshot;
           const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
           const reviewQueue = Array.isArray(snapshot.reviewQueue) ? snapshot.reviewQueue : [];
           const agents = new Set(tasks.map((task) => task.agent).filter(Boolean));
@@ -718,6 +834,207 @@
             window.setTimeout(refresh, pollDelayMs);
           }
         };
+
+        // ---- Routing panel (judge suggestions + manual assignment) ----
+        const AGENTS = ["claude", "codex"];
+        const EFFORTS = ["easy", "hard"];
+        let rows = []; // {issue, title, agent, effort, rationale, source:"brain"|"manual", touched}
+
+        const routing = {
+          suggestBtn: document.querySelector("#suggest-btn"),
+          addRowBtn: document.querySelector("#add-row-btn"),
+          applyBtn: document.querySelector("#apply-btn"),
+          status: document.querySelector("#routing-status"),
+          table: document.querySelector("#routing-table"),
+          body: document.querySelector("#routing-body"),
+        };
+
+        const setRoutingStatus = (text, kind) => {
+          routing.status.className = `routing-status${kind ? ` is-${kind}` : ""}`;
+          routing.status.textContent = text;
+        };
+
+        const unassignedTasks = () => {
+          const tasks = latestSnapshot && Array.isArray(latestSnapshot.tasks) ? latestSnapshot.tasks : [];
+          return tasks.filter((task) => !task.agent);
+        };
+
+        const optionEl = (value, text, selected, disabled) => {
+          const node = document.createElement("option");
+          node.value = value;
+          node.textContent = text;
+          if (selected) node.selected = true;
+          if (disabled) node.disabled = true;
+          return node;
+        };
+
+        const choiceSelect = (options, value, placeholder, touched, onChange) => {
+          const node = make("select", `cell-input${touched ? " is-touched" : ""}`);
+          node.append(optionEl("", placeholder, !value, true));
+          for (const option of options) node.append(optionEl(option, option, option === value));
+          node.addEventListener("change", () => onChange(node.value));
+          return node;
+        };
+
+        const issueSelect = (row, index) => {
+          const taken = new Set(rows.filter((_, i) => i !== index).map((other) => other.issue));
+          const available = unassignedTasks().filter((task) => !taken.has(task.number));
+          const node = make("select", "cell-input");
+          node.append(optionEl("", "select issue", !row.issue, true));
+          for (const task of available) node.append(optionEl(String(task.number), `#${task.number} ${task.title || ""}`.trim(), row.issue === task.number));
+          if (row.issue && !available.some((task) => task.number === row.issue)) {
+            node.append(optionEl(String(row.issue), `#${row.issue}`, true));
+          }
+          node.addEventListener("change", () => {
+            row.issue = Number(node.value);
+            const match = unassignedTasks().find((task) => task.number === row.issue);
+            row.title = match ? match.title : "";
+            renderRows();
+          });
+          return node;
+        };
+
+        const renderRows = () => {
+          routing.body.replaceChildren();
+          routing.table.hidden = rows.length === 0;
+          routing.applyBtn.disabled = rows.length === 0;
+
+          rows.forEach((row, index) => {
+            const tr = document.createElement("tr");
+
+            const issueCell = cell("Issue");
+            if (row.source === "manual") {
+              issueCell.append(issueSelect(row, index));
+            } else {
+              issueCell.className = "task-cell";
+              issueCell.append(
+                make("span", "task-number", `#${row.issue}`),
+                make("span", "task-title", row.title || ""),
+              );
+            }
+
+            const agentCell = cell("Agent");
+            agentCell.append(
+              choiceSelect(AGENTS, row.agent, "agent", row.touched, (value) => {
+                row.agent = value;
+                row.touched = true;
+                renderRows();
+              }),
+            );
+
+            const effortCell = cell("Effort");
+            effortCell.append(
+              choiceSelect(EFFORTS, row.effort, "effort", row.touched, (value) => {
+                row.effort = value;
+                row.touched = true;
+                renderRows();
+              }),
+            );
+
+            const whyCell = cell("Why");
+            whyCell.className = "why-cell";
+            whyCell.textContent = row.rationale || (row.source === "manual" ? "manual assignment" : "—");
+
+            const removeCell = cell("");
+            const remove = make("button", "row-remove", "✕");
+            remove.type = "button";
+            remove.title = "Remove row";
+            remove.addEventListener("click", () => {
+              rows.splice(index, 1);
+              renderRows();
+            });
+            removeCell.append(remove);
+
+            tr.append(issueCell, agentCell, effortCell, whyCell, removeCell);
+            routing.body.append(tr);
+          });
+        };
+
+        const toEntry = (row) => ({ issue: row.issue, agent: row.agent, effort: row.effort });
+
+        const sendAssign = async (plan, origin) => {
+          const response = await fetch("/actions/assign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ plan, origin }),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data.error || `assign failed (${response.status})`);
+          return { writes: data.writes || [], skips: data.skips || [] };
+        };
+
+        routing.suggestBtn.addEventListener("click", async () => {
+          setRoutingStatus("Running the judge…");
+          routing.suggestBtn.disabled = true;
+          try {
+            const response = await fetch("/actions/suggest", { method: "POST" });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `suggest failed (${response.status})`);
+            const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+            if (suggestions.length === 0) {
+              rows = [];
+              renderRows();
+              setRoutingStatus("Nothing to route — every open issue already has agent/effort labels.", "ok");
+              return;
+            }
+            const titles = new Map((latestSnapshot?.tasks || []).map((task) => [task.number, task.title]));
+            rows = suggestions.map((s) => ({
+              issue: s.issue,
+              title: titles.get(s.issue) || "",
+              agent: s.agent,
+              effort: s.effort,
+              rationale: s.rationale || "",
+              source: "brain",
+              touched: false,
+            }));
+            renderRows();
+            setRoutingStatus(`${suggestions.length} suggestion(s) from the judge — edit any row, then Apply.`, "ok");
+          } catch (error) {
+            setRoutingStatus(error instanceof Error ? error.message : String(error), "error");
+          } finally {
+            routing.suggestBtn.disabled = false;
+          }
+        });
+
+        routing.addRowBtn.addEventListener("click", () => {
+          if (unassignedTasks().length === 0) {
+            setRoutingStatus("No unassigned issues available to add.", "error");
+            return;
+          }
+          rows.push({ issue: null, title: "", agent: "", effort: "", rationale: "", source: "manual", touched: true });
+          renderRows();
+          setRoutingStatus("Pick an issue, agent, and effort, then Apply.");
+        });
+
+        routing.applyBtn.addEventListener("click", async () => {
+          const valid = rows.filter(
+            (row) => Number.isInteger(row.issue) && AGENTS.includes(row.agent) && EFFORTS.includes(row.effort),
+          );
+          if (valid.length === 0) {
+            setRoutingStatus("Fill in an agent and effort for at least one issue first.", "error");
+            return;
+          }
+          const brain = valid.filter((row) => row.source === "brain" && !row.touched).map(toEntry);
+          const human = valid.filter((row) => row.source === "manual" || row.touched).map(toEntry);
+
+          setRoutingStatus("Applying…");
+          routing.applyBtn.disabled = true;
+          try {
+            const results = [];
+            if (brain.length) results.push(await sendAssign(brain, "brain"));
+            if (human.length) results.push(await sendAssign(human, "human"));
+            const writes = results.reduce((sum, r) => sum + r.writes.length, 0);
+            const skips = results.reduce((sum, r) => sum + r.skips.length, 0);
+            rows = [];
+            renderRows();
+            setRoutingStatus(`Applied ${writes} assignment(s)${skips ? `, ${skips} skipped` : ""}.`, "ok");
+            void refresh();
+          } catch (error) {
+            setRoutingStatus(error instanceof Error ? error.message : String(error), "error");
+          } finally {
+            routing.applyBtn.disabled = rows.length === 0;
+          }
+        });
 
         void refresh();
       })();

@@ -124,6 +124,9 @@ describe("dashboard server", () => {
     expect(response.status).toBe(200);
     expect(response.contentType).toMatch(/^text\/html\b/);
     expect(response.body).toContain("Orch dashboard");
+    expect(response.body).toContain("Suggest routing");
+    expect(response.body).toContain("/actions/suggest");
+    expect(response.body).toContain("/actions/assign");
   });
 
   it("starts on the IPv4 localhost interface only", async () => {
@@ -167,6 +170,23 @@ describe("write surface", () => {
       suggestions: [{ issue: 1, agent: "codex", effort: "easy", rationale: "mechanical" }],
     });
     expect(edits).toHaveLength(0);
+  });
+
+  it("POST /actions/suggest short-circuits to empty without calling the judge when nothing is unassigned", async () => {
+    let judged = false;
+    const { deps } = fakeDeps({
+      listOpenIssues: async () => [issue(1, ["agent:claude", "effort:hard"])],
+      runJudge: async () => {
+        judged = true;
+        return [];
+      },
+    });
+    const port = await start(deps);
+    const res = await post(port, "/actions/suggest");
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ suggestions: [] });
+    expect(judged).toBe(false);
   });
 
   it("POST /actions/suggest returns 502 and writes nothing when the judge fails", async () => {
