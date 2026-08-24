@@ -41,7 +41,9 @@ orch doctor                    # verify git, gh auth, worktrees, adapters, label
 
 ```bash
 orch plan tickets.json                 # lead: JSON tickets -> issues (deps + file hints)
-orch assign                            # round-robin pre-assign to agents (optional)
+orch assign                            # emit whole-graph routing brief + telemetry
+orch assign --apply assignments.json   # fill blank agent + effort labels from a lead's plan
+orch assign --round-robin              # legacy eligible-issue round-robin assignment
 
 # run the two dispatchers concurrently — one per terminal:
 #   terminal 1:  orch run --agent claude
@@ -74,7 +76,8 @@ every two seconds.
 |---|---|
 | `orch init` / `orch doctor` | scaffold config + memory + labels / verify environment |
 | `orch plan <file>` | create issues from a JSON tickets file (deps + file-ownership) |
-| `orch assign` | round-robin pre-assign eligible issues to agents |
+| `orch assign [--apply <file\|->] [--dry-run]` | emit a routing brief or fill blank agent + effort labels from a plan |
+| `orch assign --round-robin` | legacy round-robin assignment for eligible issues |
 | `orch next` / `orch claim <n>` | atomically claim a task, open its worktree |
 | `orch brief <n>` | print the task briefing (spec + memory pointer + loop) |
 | `orch submit <n>` | push branch, open PR (`Closes #n`), route cross-review |

@@ -13,6 +13,7 @@ _(add project-specific facts, gotchas, and architectural decisions below)_
 - **Board projection**: `buildSnapshot` (`src/snapshot.ts`) is the canonical read model for open tasks. Keep GitHub/Git/telemetry reads in that module and add derived board fields to its pure `assemble(...)` helper so terminal, JSON, and dashboard consumers share one mapping. `Snapshot.reviewQueue` contains PR numbers carrying `review:needed`.
 - **Dashboard boundary**: `src/server.ts` serves only `GET /` and `GET /status`; `/status` calls `buildSnapshot` in-process, and `startServer` binds only `127.0.0.1`. Keep Phase 1 read-only. Future mutations belong under an authenticated `/actions/*` surface without changing these read routes.
 - **Effort routing boundary**: task effort is the abstract tier `easy | hard`, mapped through each adapter's `models` config before invocation. `RunContext.model` carries the resolved agent-specific value and affects `runTask` only; review invocations do not receive model flags.
+- **Assignment routing boundary**: plain `orch assign` emits a whole-open-graph routing brief for issues missing both `agent:` and `effort:` labels; `--apply` is fill-blanks-only and never replaces either existing routing label. Keep lead judgment external and assignment planning pure in `src/assign.ts`; `--round-robin` is the legacy eligibility-gated path.
 
 ## Agent skills
 
