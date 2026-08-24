@@ -51,7 +51,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   if (!existsSync(p)) {
     throw new Error(`No ${CONFIG_FILE} found in ${cwd}. Run \`orch init\` first.`);
   }
-  const text = readFileSync(p, "utf8").replace(/^﻿/, ""); // tolerate a UTF-8 BOM
+  const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {

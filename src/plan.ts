@@ -33,7 +33,7 @@ export interface Created {
 
 /** Decompose a JSON tickets file into GitHub issues, wiring up dependencies. */
 export async function planFromFile(file: string, cwd: string): Promise<Created[]> {
-  const raw = readFileSync(file, "utf8").replace(/^﻿/, "");
+  const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
   const tickets = JSON.parse(raw) as Ticket[];
   if (!Array.isArray(tickets)) throw new Error("tickets file must be a JSON array");
 
