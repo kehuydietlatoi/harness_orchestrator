@@ -5,7 +5,7 @@ import { loadConfig, type OrchConfig } from "./config.js";
 import { editIssue, listIssues, type Issue } from "./github.js";
 import { runJudge } from "./judge.js";
 import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "./labels.js";
-import { buildSnapshot } from "./snapshot.js";
+import { buildSnapshot, type Snapshot } from "./snapshot.js";
 import { readRuns } from "./telemetry.js";
 
 const dashboardPath = new URL("../public/index.html", import.meta.url);
@@ -21,6 +21,8 @@ export interface ServerDeps {
   readRuns: (cwd: string) => ReturnType<typeof readRuns>;
   runJudge: (brief: string, cfg: OrchConfig, cwd: string) => Promise<PlanEntry[]>;
   editIssue: (n: number, labels: string[], cwd: string) => Promise<void>;
+  /** Board projection for `GET /status`; overridable so `--demo` can serve a fixture. */
+  snapshot: (cwd: string) => Promise<Snapshot>;
 }
 
 const defaultDeps: ServerDeps = {
@@ -29,6 +31,7 @@ const defaultDeps: ServerDeps = {
   readRuns,
   runJudge,
   editIssue: (n, labels, cwd) => editIssue(n, { cwd, addLabels: labels }).then(() => undefined),
+  snapshot: buildSnapshot,
 };
 
 /** Loopback-only guard. The machine's OS boundary is the sole authz today; a
@@ -162,7 +165,7 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
     }
 
     if (request.method === "GET" && pathname === "/status") {
-      void buildSnapshot(cwd)
+      void deps.snapshot(cwd)
         .then((snapshot) => {
           response.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
           response.end(JSON.stringify(snapshot));
@@ -195,8 +198,8 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
   });
 }
 
-export function startServer(cwd: string, port: number): Promise<http.Server> {
-  const server = createServer(cwd);
+export function startServer(cwd: string, port: number, deps: ServerDeps = defaultDeps): Promise<http.Server> {
+  const server = createServer(cwd, deps);
   return new Promise((resolve, reject) => {
     const onError = (error: Error): void => reject(error);
     server.once("error", onError);
