@@ -12,6 +12,14 @@ export function issueAgent(i: Issue): string | null {
   return a ? a.slice("agent:".length) : null;
 }
 
+export function issueEffort(i: Issue): "easy" | "hard" | null {
+  for (const label of i.labels) {
+    if (label === "effort:easy") return "easy";
+    if (label === "effort:hard") return "hard";
+  }
+  return null;
+}
+
 /** Parse `Depends-on: #1, #2` (also "Depends on #3") from an issue body. */
 export function parseDeps(body: string): number[] {
   const deps = new Set<number>();

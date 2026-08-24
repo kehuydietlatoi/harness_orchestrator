@@ -6,8 +6,8 @@ import type { OrchConfig } from "./config.js";
 import { claimNext, submit } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "./adapters/index.js";
-import { getIssue, editIssue } from "./github.js";
-import { issueStatus } from "./board.js";
+import { getIssue, editIssue, type Issue } from "./github.js";
+import { issueEffort, issueStatus } from "./board.js";
 import { STATUS, NEEDS_ATTENTION } from "./labels.js";
 import { release as lockRelease } from "./lock.js";
 import { removeWorktree, worktreePath } from "./worktree.js";
@@ -18,6 +18,15 @@ export interface RunSummary {
   outcome: "submitted" | "needs-attention" | "failed";
   prUrl?: string;
   durationMs: number;
+}
+
+export function resolveTaskModel(
+  agent: string,
+  issue: Issue,
+  cfg: OrchConfig,
+): string | undefined {
+  const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
+  return cfg.adapters[agent]?.models?.[tier];
 }
 
 async function commitsAhead(worktree: string, base = "main"): Promise<number> {
@@ -77,11 +86,13 @@ export async function processNext(
 
   const adapter = makeAdapter(agent, cfg);
   const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
+  const model = resolveTaskModel(agent, task.issue, cfg);
   const result = await adapter.runTask({
     issue: n,
     agent,
     worktree: task.worktree.path,
     prompt,
+    model,
     logFile,
     timeoutMs: cfg.taskTimeoutMs,
   });
