@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import pc from "picocolors";
-import { applyPlan, formatBrief, rollupTelemetry, type PlanEntry, type PlanSkip } from "../assign.js";
+import {
+  applyPlan,
+  formatBrief,
+  rollupTelemetry,
+  selectUnassigned,
+  type PlannedAssignments,
+  type PlanEntry,
+  type PlanSkip,
+} from "../assign.js";
 import { loadConfig } from "../config.js";
-import { editIssue, listIssues } from "../github.js";
-import { agentLabel, effortLabel } from "../labels.js";
+import { editIssue, listIssues, type Issue } from "../github.js";
+import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../labels.js";
+import { runJudge } from "../judge.js";
 import { assignRoundRobin } from "../plan.js";
 import { readRuns } from "../telemetry.js";
 
@@ -11,6 +20,8 @@ export interface AssignOptions {
   apply?: string;
   dryRun?: boolean;
   roundRobin?: boolean;
+  judge?: boolean;
+  auto?: boolean;
 }
 
 function readPlan(path: string): PlanEntry[] {
@@ -38,12 +49,43 @@ function printSkip(skip: PlanSkip): void {
   console.log(`  #${skip.issue} SKIP (${skip.reason})`);
 }
 
+/**
+ * Apply a partitioned plan to labels. `brain` adds the `assigned-by:brain`
+ * provenance label so a judge-authored routing is distinguishable from a human
+ * one; `dryRun` prints the diff without writing. Shared by --apply and --auto.
+ */
+async function writeAssignments(
+  result: PlannedAssignments,
+  cwd: string,
+  opts: { brain: boolean; dryRun: boolean },
+): Promise<void> {
+  console.log(pc.bold(opts.dryRun ? "Assignment plan (dry run):" : "Assignment plan:"));
+  for (const write of result.writes) {
+    const labels = [agentLabel(write.agent), effortLabel(write.effort)];
+    if (opts.brain) labels.push(ASSIGNED_BY_BRAIN);
+    console.log(`  #${write.issue} ${labels.map((l) => `+${l}`).join(" ")}`);
+    if (!opts.dryRun) await editIssue(write.issue, { cwd, addLabels: labels });
+  }
+  result.skips.forEach(printSkip);
+  if (result.writes.length === 0 && result.skips.length === 0) console.log(pc.dim("  (empty plan)"));
+}
+
+function briefFor(issues: Issue[], cwd: string, cfg: { agents: string[] }): string {
+  return formatBrief(issues, rollupTelemetry(readRuns(cwd), cfg.agents));
+}
+
 export async function assignCommand(opts: AssignOptions): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
 
+  const judging = opts.judge || opts.auto;
+  if (judging && (opts.apply || opts.roundRobin)) {
+    throw new Error("--judge/--auto cannot be combined with --apply or --round-robin");
+  }
   if (opts.roundRobin && opts.apply) throw new Error("--round-robin cannot be combined with --apply");
-  if (opts.dryRun && !opts.apply) throw new Error("--dry-run requires --apply <plan.json|->");
+  if (opts.dryRun && !opts.apply && !opts.auto) {
+    throw new Error("--dry-run requires --apply <plan.json|-> or --auto");
+  }
 
   if (opts.roundRobin) {
     const assignments = await assignRoundRobin(cfg, cwd);
@@ -57,23 +99,29 @@ export async function assignCommand(opts: AssignOptions): Promise<void> {
   }
 
   const issues = await listIssues({ cwd, state: "open" });
-  if (!opts.apply) {
-    console.log(formatBrief(issues, rollupTelemetry(readRuns(cwd), cfg.agents)));
+
+  // The judge turns the brief into a plan. --judge emits it; --auto applies it.
+  if (judging) {
+    if (selectUnassigned(issues).length === 0) {
+      console.log(pc.yellow("Nothing to route — every open issue already has agent:/effort: labels."));
+      return;
+    }
+    const plan = await runJudge(briefFor(issues, cwd, cfg), cfg, cwd); // fail-closed: throws => no writes
+    if (!opts.auto) {
+      console.log(JSON.stringify(plan, null, 2));
+      return;
+    }
+    await writeAssignments(applyPlan(plan, issues, cfg), cwd, { brain: true, dryRun: Boolean(opts.dryRun) });
     return;
   }
 
-  const result = applyPlan(readPlan(opts.apply), issues, cfg);
-  console.log(pc.bold(opts.dryRun ? "Assignment plan (dry run):" : "Assignment plan:"));
-  for (const write of result.writes) {
-    const diff = `+${agentLabel(write.agent)} +${effortLabel(write.effort)}`;
-    console.log(`  #${write.issue} ${diff}`);
-    if (!opts.dryRun) {
-      await editIssue(write.issue, {
-        cwd,
-        addLabels: [agentLabel(write.agent), effortLabel(write.effort)],
-      });
-    }
+  if (!opts.apply) {
+    console.log(briefFor(issues, cwd, cfg));
+    return;
   }
-  result.skips.forEach(printSkip);
-  if (result.writes.length === 0 && result.skips.length === 0) console.log(pc.dim("  (empty plan)"));
+
+  await writeAssignments(applyPlan(readPlan(opts.apply), issues, cfg), cwd, {
+    brain: false,
+    dryRun: Boolean(opts.dryRun),
+  });
 }

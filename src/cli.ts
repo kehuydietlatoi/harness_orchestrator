@@ -174,9 +174,11 @@ program
 
 program
   .command("assign")
-  .description("Emit a telemetry-grounded routing brief or apply an assignment plan")
+  .description("Emit a telemetry-grounded routing brief, run the judge, or apply an assignment plan")
+  .option("--judge", "run the headless judge and print the assignment plan it proposes")
+  .option("--auto", "run the judge and apply its plan (adds assigned-by:brain)")
   .option("--apply <plan>", "apply an assignment plan from a JSON file (use - for stdin)")
-  .option("--dry-run", "print the label changes without writing them")
+  .option("--dry-run", "print the label changes without writing them (with --apply or --auto)")
   .option("--round-robin", "use the legacy eligible-issue round-robin assignment")
   .action(wrap(assignCommand));
 

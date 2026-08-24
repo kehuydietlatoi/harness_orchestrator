@@ -27,6 +27,9 @@ export function effortLabel(tier: string): string {
 export const REVIEW_NEEDED = "review:needed";
 export const NEEDS_ATTENTION = "needs-attention";
 
+/** Provenance: the routing on this issue was chosen by the judge, not a human. */
+export const ASSIGNED_BY_BRAIN = "assigned-by:brain";
+
 export function agentLabel(agent: string): string {
   return `agent:${agent}`;
 }
@@ -53,4 +56,5 @@ export const LABELS: GhLabel[] = [
   { name: NEEDS_ATTENTION, color: "d93f0b", description: "Failed run — needs a human" },
   { name: EFFORT.easy, color: "c2e0c6", description: "Use the agent's easy model tier" },
   { name: EFFORT.hard, color: "f9d0c4", description: "Use the agent's hard model tier" },
+  { name: ASSIGNED_BY_BRAIN, color: "bfd4f2", description: "Routing chosen by the judge, not a human" },
 ];

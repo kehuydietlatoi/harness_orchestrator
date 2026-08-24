@@ -23,7 +23,7 @@ All labels are created by `orch init` from the canonical set in `src/labels.ts`.
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit` | `approve`; `requestChanges` |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Cross-review approval recorded | `approve` | — (terminal) |
 | `needs-attention` | `d93f0b` | Run failed / produced nothing — a human must look | `processNext` (fail, timeout, no-commits) | `abandon` |
-| `assigned-by:brain` | *(planned)* | Provenance: this routing came from the judge, not a human | writer, judge-origin only | *(future re-route pass)* |
+| `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
 **Sticky** = set once at routing/claim time and honored on every future run; only
 `abandon` clears `agent:`, and *nothing* clears `effort:`. Re-routing an issue to a
@@ -53,7 +53,8 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 
 | Event | Fn | `+` | `−` | Side effects |
 |---|---|---|---|---|
-| Route | `assign --apply` | `agent:X`, `effort:Y` (+ `assigned-by:brain` if judge) | — | fill-blanks-only; skips already-pinned |
+| Route (human) | `assign --apply` | `agent:X`, `effort:Y` | — | fill-blanks-only; skips already-pinned |
+| Route (judge) | `assign --auto` / `/actions/assign` | `agent:X`, `effort:Y`, `assigned-by:brain` | — | judge-authored; same fill-blanks-only writer |
 | Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | acquire lock, assign `@me`, cut worktree |
 | Run start | `processNext` | `status:in-progress` | `status:claimed` | spawn harness at resolved model |
 | Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |

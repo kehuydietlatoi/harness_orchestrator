@@ -9,6 +9,8 @@ export interface PlanEntry {
   issue: number;
   agent: string;
   effort: string;
+  /** One-sentence justification from the judge; absent for human-authored plans. */
+  rationale?: string;
 }
 
 export interface Plan extends PlanEntry {
