@@ -1,10 +1,9 @@
-import { readFileSync } from "node:fs";
 import { type Issue, type Pr, listIssues, listOpenPrs } from "./github.js";
 import { issueAgent, issueStatus, parseDeps } from "./board.js";
 import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "./labels.js";
 import { listLocks } from "./lock.js";
 import { prIssueNumber } from "./review.js";
-import { telemetryPath, type RunRecord } from "./telemetry.js";
+import { readRuns, type RunRecord } from "./telemetry.js";
 import { exec } from "./util/exec.js";
 import type { Worktree } from "./worktree.js";
 
@@ -137,37 +136,6 @@ function parseWorktrees(text: string): Worktree[] {
 async function listWorktrees(cwd: string): Promise<Worktree[]> {
   const result = await exec("git", ["worktree", "list", "--porcelain"], { cwd });
   return result.code === 0 ? parseWorktrees(result.stdout) : [];
-}
-
-function nullableNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
-}
-
-function readRuns(cwd: string): SnapshotRun[] {
-  try {
-    const records: SnapshotRun[] = [];
-    for (const line of readFileSync(telemetryPath(cwd), "utf8").split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      try {
-        const value = JSON.parse(line) as Record<string, unknown>;
-        if (!Number.isInteger(value.issue) || typeof value.ts !== "string") continue;
-        records.push({
-          issue: value.issue as number,
-          tokensTotal: nullableNumber(value.tokensTotal),
-          costUsd: nullableNumber(value.costUsd),
-          ts: value.ts,
-        });
-      } catch {
-        // A malformed telemetry line must not make the snapshot unavailable.
-      }
-    }
-    return records;
-  } catch (error) {
-    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`warning: could not read run telemetry: ${message}`);
-    return [];
-  }
 }
 
 export async function buildSnapshot(cwd: string): Promise<Snapshot> {

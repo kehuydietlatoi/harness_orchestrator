@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -175,6 +175,60 @@ export function projectId(cwd: string): string {
 
 export function telemetryPath(cwd: string): string {
   return join(homedir(), ".orch", projectId(cwd), "runs.jsonl");
+}
+
+function nullableNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+function parseRunRecord(value: unknown): RunRecord | null {
+  const obj = objectValue(value);
+  if (
+    !obj ||
+    typeof obj.ts !== "string" ||
+    typeof obj.project !== "string" ||
+    !Number.isInteger(obj.issue) ||
+    typeof obj.agent !== "string" ||
+    typeof obj.outcome !== "string" ||
+    nullableNumber(obj.durationMs) === null
+  ) {
+    return null;
+  }
+
+  return {
+    ts: obj.ts,
+    project: obj.project,
+    issue: obj.issue as number,
+    agent: obj.agent,
+    outcome: obj.outcome,
+    durationMs: obj.durationMs as number,
+    tokensIn: nullableNumber(obj.tokensIn),
+    tokensOut: nullableNumber(obj.tokensOut),
+    tokensTotal: nullableNumber(obj.tokensTotal),
+    costUsd: nullableNumber(obj.costUsd),
+  };
+}
+
+/** Read valid JSONL run records. Missing/malformed telemetry is always non-fatal. */
+export function readRuns(cwd: string): RunRecord[] {
+  try {
+    const records: RunRecord[] = [];
+    for (const line of readFileSync(telemetryPath(cwd), "utf8").split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const record = parseRunRecord(JSON.parse(line) as unknown);
+        if (record) records.push(record);
+      } catch {
+        // A malformed telemetry line must not affect the caller's outcome.
+      }
+    }
+    return records;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`warning: could not read run telemetry: ${message}`);
+    return [];
+  }
 }
 
 /** Append best-effort telemetry without ever affecting the task outcome. */

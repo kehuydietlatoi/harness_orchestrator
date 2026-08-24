@@ -19,7 +19,8 @@ import {
 import { mergeCommand, integrateCommand } from "./commands/merge.js";
 import { briefCommand } from "./commands/brief.js";
 import { memoryAddCommand, memoryListCommand } from "./commands/memory.js";
-import { planCommand, assignCommand } from "./commands/plan.js";
+import { planCommand } from "./commands/plan.js";
+import { assignCommand } from "./commands/assign.js";
 import { snapshotCommand } from "./commands/snapshot.js";
 import { serveCommand } from "./commands/serve.js";
 
@@ -173,7 +174,10 @@ program
 
 program
   .command("assign")
-  .description("Round-robin pre-assign eligible unowned issues to agents")
+  .description("Emit a telemetry-grounded routing brief or apply an assignment plan")
+  .option("--apply <plan>", "apply an assignment plan from a JSON file (use - for stdin)")
+  .option("--dry-run", "print the label changes without writing them")
+  .option("--round-robin", "use the legacy eligible-issue round-robin assignment")
   .action(wrap(assignCommand));
 
 program.parseAsync(process.argv);
