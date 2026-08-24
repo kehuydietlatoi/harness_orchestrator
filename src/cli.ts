@@ -105,6 +105,7 @@ program
   .command("serve")
   .description("Serve a live, read-only dashboard on localhost")
   .option("--port <n>", "localhost port", "4000")
+  .option("--demo", "serve a self-contained demo with seeded data (no gh, git, or claude needed)")
   .action(wrap(serveCommand));
 
 program
