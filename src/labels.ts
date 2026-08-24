@@ -12,6 +12,18 @@ export const STATUS = {
 
 export const STATUS_LABELS: string[] = Object.values(STATUS);
 
+/** Abstract model-effort tiers assigned to tasks. */
+export const EFFORT = {
+  easy: "effort:easy",
+  hard: "effort:hard",
+} as const;
+
+export const EFFORT_LABELS: string[] = Object.values(EFFORT);
+
+export function effortLabel(tier: string): string {
+  return `effort:${tier}`;
+}
+
 export const REVIEW_NEEDED = "review:needed";
 export const NEEDS_ATTENTION = "needs-attention";
 
@@ -39,4 +51,6 @@ export const LABELS: GhLabel[] = [
   { name: "reviewed-by:claude", color: "c5def5", description: "Cross-reviewed and approved by Claude" },
   { name: "reviewed-by:codex", color: "c5def5", description: "Cross-reviewed and approved by Codex" },
   { name: NEEDS_ATTENTION, color: "d93f0b", description: "Failed run — needs a human" },
+  { name: EFFORT.easy, color: "c2e0c6", description: "Use the agent's easy model tier" },
+  { name: EFFORT.hard, color: "f9d0c4", description: "Use the agent's hard model tier" },
 ];
