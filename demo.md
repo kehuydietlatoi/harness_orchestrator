@@ -64,6 +64,11 @@ updates live.
 All three todos now carry an owner (`@claude` / `@codex`) and drop out of the unrouted set —
 a second **Suggest** would return nothing to route.
 
+Note they stay **`todo`**: routing only assigns an *owner*, never status. In real use a dispatcher
+(`orch run`) then claims each one — flipping it `claimed` → `in-progress` → `in-review` — and spawns
+the harness. `--demo` runs no agents, so the lifecycle deliberately stops at routing; the seeded
+tasks **#103–#106** show those later states statically.
+
 ## 4. Cross-review queue
 
 The merge gate is a **process guarantee**: a PR may merge only when its issue carries an
