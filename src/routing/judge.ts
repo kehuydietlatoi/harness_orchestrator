@@ -1,12 +1,15 @@
-import { mkdirSync, readFileSync, rmSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { buildClaudeTaskArgs } from "../adapters/claude.js";
 import type { PlanEntry } from "./assign.js";
 import type { OrchConfig } from "../config.js";
-import { spawnLogged } from "../util/spawn.js";
+import {
+  lastFencedBlock,
+  resultTextFromStreamJson,
+  runHeadlessAgent,
+  truncate,
+  type HeadlessResult,
+} from "../adapters/headless.js";
 
-const WIN = process.platform === "win32";
-const RAW_LIMIT = 4000;
+// Re-exported so existing importers (and tests) keep a stable judge API.
+export { resultTextFromStreamJson };
 
 /** The judge's output contract, embedded verbatim in the prompt. */
 const CONTRACT = [
@@ -41,18 +44,6 @@ export function formatJudgePrompt(brief: string): string {
     "",
     CONTRACT,
   ].join("\n");
-}
-
-function truncate(text: string): string {
-  return text.length > RAW_LIMIT ? `${text.slice(0, RAW_LIMIT)}… (truncated)` : text;
-}
-
-/** Pull the JSON payload from the last fenced code block (json-tagged preferred). Pure. */
-function lastFencedBlock(text: string): string | null {
-  const tagged = [...text.matchAll(/```json\s*([\s\S]*?)```/gi)];
-  const any = tagged.length > 0 ? tagged : [...text.matchAll(/```\s*([\s\S]*?)```/g)];
-  const last = any.at(-1);
-  return last ? last[1].trim() : null;
 }
 
 /**
@@ -90,30 +81,8 @@ export function extractPlan(resultText: string): PlanEntry[] {
   });
 }
 
-/** Reduce Claude stream-json log output to its final `result` text. Pure. */
-export function resultTextFromStreamJson(logText: string): string {
-  let result = "";
-  for (const line of logText.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const obj = JSON.parse(trimmed) as Record<string, unknown>;
-      if (obj.type === "result" && typeof obj.result === "string") result = obj.result;
-    } catch {
-      // Non-JSON lines (or partial output) are ignored; we want the final result.
-    }
-  }
-  return result;
-}
-
-export interface JudgeRun {
-  code: number;
-  timedOut: boolean;
-  /** Final assistant text (already reduced from stream-json), used for extraction. */
-  text: string;
-  /** Full raw log, surfaced in error messages. */
-  raw: string;
-}
+/** Result of one headless judge invocation. */
+export type JudgeRun = HeadlessResult;
 
 /** The spawn boundary — injectable so tests never launch a real `claude`. */
 export type JudgeRunner = (
@@ -123,27 +92,8 @@ export type JudgeRunner = (
   cwd: string,
 ) => Promise<JudgeRun>;
 
-const defaultRunner: JudgeRunner = async (prompt, model, cfg, cwd) => {
-  const adapter = cfg.adapters[cfg.lead];
-  if (!adapter) throw new Error(`no adapter configured for lead '${cfg.lead}'`);
-  const logFile = resolve(cwd, "logs", "judge.jsonl");
-  mkdirSync(dirname(logFile), { recursive: true });
-  rmSync(logFile, { force: true }); // start clean so we read only this run's output
-  const r = await spawnLogged(adapter.cmd, buildClaudeTaskArgs(model), {
-    cwd,
-    input: prompt,
-    logFile,
-    timeoutMs: cfg.taskTimeoutMs,
-    shell: WIN,
-  });
-  let raw = "";
-  try {
-    raw = readFileSync(logFile, "utf8");
-  } catch {
-    // A missing log leaves raw empty; runJudge then fails closed below.
-  }
-  return { code: r.code, timedOut: r.timedOut, text: resultTextFromStreamJson(raw), raw };
-};
+const defaultRunner: JudgeRunner = (prompt, model, cfg, cwd) =>
+  runHeadlessAgent(prompt, model, cfg, cwd, "judge");
 
 /**
  * Run the judge headlessly at the lead's `hard` model and return a validated

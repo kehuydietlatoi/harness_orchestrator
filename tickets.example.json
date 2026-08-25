@@ -1,0 +1,22 @@
+[
+  {
+    "id": "auth-config",
+    "title": "Add OAuth provider config",
+    "body": "Load client id/secret + issuer from env and expose a typed config.\n\nAcceptance: invalid config fails fast at startup with a clear error.",
+    "files": ["src/auth/config.ts"]
+  },
+  {
+    "id": "session-mw",
+    "title": "Add session middleware",
+    "body": "Verify the session cookie on each request and attach the user.\n\nAcceptance: unauthenticated requests to protected routes get 401.",
+    "dependsOn": ["auth-config"],
+    "files": ["src/mw/session.ts"]
+  },
+  {
+    "id": "login-route",
+    "title": "Add /login and /callback routes",
+    "body": "Start the OAuth flow and handle the redirect; set the session cookie.\n\nAcceptance: a full login round-trip lands an authenticated session.",
+    "dependsOn": ["auth-config", "session-mw"],
+    "files": ["src/routes/auth.ts"]
+  }
+]

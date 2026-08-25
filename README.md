@@ -53,7 +53,9 @@ orch doctor                    # verify git, gh auth, worktrees, adapters, label
 ## The loop
 
 ```bash
-orch plan tickets.json                 # lead: JSON tickets -> issues (deps + file hints)
+orch plan --draft "add SSO login" > tickets.json  # LLM drafts tickets via the orch-plan skill
+orch plan --dry-run tickets.json                   # preview the issues + dep graph, no writes
+orch plan tickets.json                             # create the GitHub issues (deps + file hints)
 orch assign                            # emit whole-graph routing brief + telemetry
 orch assign --apply assignments.json   # fill blank agent + effort labels from a lead's plan
 orch assign --round-robin              # legacy eligible-issue round-robin assignment
@@ -88,7 +90,7 @@ every two seconds.
 | Command | Purpose |
 |---|---|
 | `orch init` / `orch doctor` | scaffold config + memory + labels / verify environment |
-| `orch plan <file>` | create issues from a JSON tickets file (deps + file-ownership) |
+| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | draft tickets from a goal (LLM, via the `orch-plan` skill), preview them, or create issues from a JSON file |
 | `orch assign [--apply <file\|->] [--dry-run]` | emit a routing brief or fill blank agent + effort labels from a plan |
 | `orch assign --round-robin` | legacy round-robin assignment for eligible issues |
 | `orch next` / `orch claim <n>` | atomically claim a task, open its worktree |
