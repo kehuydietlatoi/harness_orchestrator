@@ -37,6 +37,39 @@ describe("parseTickets", () => {
   it("strips a leading BOM", () => {
     expect(parseTickets("﻿[]")).toEqual([]);
   });
+
+  it("throws on a non-string id instead of silently dropping it", () => {
+    expect(() => parseTickets('[{"id":1,"title":"T"}]')).toThrow(/ticket 1: id must be a string/);
+  });
+
+  it("throws on a non-string title instead of coercing it away", () => {
+    expect(() => parseTickets('[{"title":5}]')).toThrow(/ticket 1: title must be a string/);
+  });
+
+  it("throws on a non-string body instead of silently dropping it", () => {
+    expect(() => parseTickets('[{"title":"T","body":42}]')).toThrow(/ticket 1: body must be a string/);
+  });
+
+  it("throws when dependsOn is not an array of strings", () => {
+    expect(() => parseTickets('[{"title":"T","dependsOn":"a"}]')).toThrow(
+      /ticket 1: dependsOn must be an array of strings/,
+    );
+    expect(() => parseTickets('[{"title":"T","dependsOn":["a",2]}]')).toThrow(
+      /ticket 1: dependsOn must be an array of strings/,
+    );
+  });
+
+  it("throws when files is not an array of strings", () => {
+    expect(() => parseTickets('[{"title":"T","files":[1,2]}]')).toThrow(
+      /ticket 1: files must be an array of strings/,
+    );
+  });
+
+  it("collects errors across multiple tickets and fields in one throw", () => {
+    expect(() => parseTickets('[{"id":1,"title":"T"},{"title":"U","body":9}]')).toThrow(
+      /ticket 1: id must be a string.*ticket 2: body must be a string/s,
+    );
+  });
 });
 
 describe("resolvePlan", () => {
