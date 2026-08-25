@@ -1,5 +1,5 @@
-import { writeFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, DEFAULT_CONFIG, configExists } from "../config.js";
 import { isGitRepo, remoteUrl } from "../git/git.js";
@@ -33,6 +33,15 @@ function writeIfAbsent(path: string, content: string, log: string[]): void {
   log.push(pc.green(`  + ${path}`));
 }
 
+/** Install the shipped orch-plan skill so `/orch-plan` is available interactively
+ * (the same contract `orch plan --draft` inlines headlessly). */
+function installPlanSkill(cwd: string, log: string[]): void {
+  const dest = resolve(cwd, ".claude", "skills", "orch-plan", "SKILL.md");
+  const src = new URL("../../assets/skills/orch-plan/SKILL.md", import.meta.url);
+  mkdirSync(dirname(dest), { recursive: true });
+  writeIfAbsent(dest, readFileSync(src, "utf8"), log);
+}
+
 export async function initCommand(): Promise<void> {
   const cwd = process.cwd();
   const log: string[] = [];
@@ -50,6 +59,7 @@ export async function initCommand(): Promise<void> {
 
   writeIfAbsent(resolve(cwd, "AGENTS.md"), AGENTS_MD, log);
   writeIfAbsent(resolve(cwd, "CLAUDE.md"), CLAUDE_MD, log);
+  installPlanSkill(cwd, log);
 
   console.log(pc.bold("\nScaffolded files:"));
   log.forEach((l) => console.log(l));

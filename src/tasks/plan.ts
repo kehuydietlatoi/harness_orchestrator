@@ -31,16 +31,102 @@ export interface Created {
   title: string;
 }
 
-/** Decompose a JSON tickets file into GitHub issues, wiring up dependencies. */
-export async function planFromFile(file: string, cwd: string): Promise<Created[]> {
-  const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-  const tickets = JSON.parse(raw) as Ticket[];
-  if (!Array.isArray(tickets)) throw new Error("tickets file must be a JSON array");
+/** Parse a tickets file into the `Ticket[]` shape. Structural validation only \u2014
+ * it must be a JSON array of objects; per-ticket semantics (title, deps) are the
+ * job of `resolvePlan`. Throws on anything that is not shaped like a ticket list. */
+export function parseTickets(raw: string): Ticket[] {
+  const value: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
+  if (!Array.isArray(value)) throw new Error("tickets file must be a JSON array");
+  return value.map((t, i) => {
+    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(`ticket ${i + 1} must be an object`);
+    const o = t as Record<string, unknown>;
+    const strings = (v: unknown): string[] | undefined =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined;
+    return {
+      id: typeof o.id === "string" ? o.id : undefined,
+      title: typeof o.title === "string" ? o.title : "",
+      body: typeof o.body === "string" ? o.body : undefined,
+      dependsOn: strings(o.dependsOn),
+      files: strings(o.files),
+    };
+  });
+}
+
+export interface ResolvedTicket {
+  /** 1-based position in the file. */
+  index: number;
+  id?: string;
+  title: string;
+  /** The human description (no rendered dep line). */
+  body: string;
+  files: string[];
+  /** Dependency ids as written. */
+  dependsOn: string[];
+  /** The subset of `dependsOn` that resolves to an earlier ticket (will become #refs). */
+  knownDeps: string[];
+}
+
+export interface ResolvedPlan {
+  tickets: ResolvedTicket[];
+  /** Block creation. */
+  errors: string[];
+  /** Advisory only. */
+  warnings: string[];
+}
+
+/**
+ * Validate + annotate a ticket list without any IO \u2014 the single source of truth
+ * behind `orch plan --dry-run`, the dashboard preview, and the create gate.
+ *
+ * Errors (missing title, duplicate id) block creation; warnings (a dependency on
+ * an unknown/later/self id \u2014 which is dropped \u2014 or a file claimed by two tickets)
+ * are advisory. Dependency resolution mirrors creation order: a dep counts as
+ * "known" only if it names an *earlier* ticket, since that is the one whose issue
+ * number will exist by the time this ticket is created. Pure.
+ */
+export function resolvePlan(tickets: readonly Ticket[]): ResolvedPlan {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const fileOwners = new Map<string, number[]>();
+  const resolved: ResolvedTicket[] = [];
+
+  tickets.forEach((t, i) => {
+    const index = i + 1;
+    if (!t.title.trim()) errors.push(`ticket ${index} needs a title`);
+    if (t.id && seen.has(t.id)) errors.push(`ticket ${index}: duplicate id "${t.id}"`);
+
+    const dependsOn = t.dependsOn ?? [];
+    const knownDeps: string[] = [];
+    for (const dep of dependsOn) {
+      if (dep === t.id) warnings.push(`ticket ${index} ("${dep}") depends on itself; dropped`);
+      else if (!seen.has(dep)) warnings.push(`ticket ${index} depends on unknown/later id "${dep}"; dropped`);
+      else knownDeps.push(dep);
+    }
+
+    const files = t.files ?? [];
+    for (const f of files) fileOwners.set(f, [...(fileOwners.get(f) ?? []), index]);
+
+    if (t.id) seen.add(t.id);
+    resolved.push({ index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps });
+  });
+
+  for (const [file, owners] of fileOwners) {
+    if (owners.length > 1) warnings.push(`file "${file}" is claimed by tickets ${owners.join(", ")}`);
+  }
+
+  return { tickets: resolved, errors, warnings };
+}
+
+/** Create GitHub issues from parsed tickets, wiring `dependsOn` to real #numbers.
+ * Refuses (throws) if `resolvePlan` reports blocking errors. */
+export async function createFromPlan(tickets: readonly Ticket[], cwd: string): Promise<Created[]> {
+  const { errors } = resolvePlan(tickets);
+  if (errors.length) throw new Error(`invalid tickets: ${errors.join("; ")}`);
 
   const created: Created[] = [];
   const idToNumber = new Map<string, number>();
   for (const t of tickets) {
-    if (!t.title) throw new Error("each ticket needs a title");
     const depNumbers = (t.dependsOn ?? [])
       .map((d) => idToNumber.get(d))
       .filter((n): n is number => n !== undefined);
@@ -50,6 +136,11 @@ export async function planFromFile(file: string, cwd: string): Promise<Created[]
     created.push({ id: t.id, number, title: t.title });
   }
   return created;
+}
+
+/** Read a JSON tickets file and create the issues. */
+export function planFromFile(file: string, cwd: string): Promise<Created[]> {
+  return createFromPlan(parseTickets(readFileSync(file, "utf8")), cwd);
 }
 
 export interface Assignment {

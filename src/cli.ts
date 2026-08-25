@@ -169,8 +169,11 @@ memory
 memory.command("list").description("List logged facts").action(wrap(memoryListCommand));
 
 program
-  .command("plan <file>")
-  .description("Create GitHub issues from a JSON tickets file (with deps + file hints)")
+  .command("plan [file]")
+  .description("Plan work: draft tickets from a goal, preview them, or create GitHub issues")
+  .option("--draft <goal>", "draft a tickets.json from a high-level goal (LLM; prints JSON)")
+  .option("--dry-run", "validate a tickets file and preview the issues without creating them")
+  .option("--example", "print an annotated example tickets.json")
   .action(wrap(planCommand));
 
 program
