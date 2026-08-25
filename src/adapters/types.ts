@@ -25,6 +25,34 @@ export interface RunResult {
   logFile?: string;
 }
 
+/** A prompt run used by the planner and routing judge. */
+export interface HeadlessContext {
+  cwd: string;
+  prompt: string;
+  model?: string;
+  logFile: string;
+  timeoutMs?: number;
+}
+
+export interface HeadlessResult {
+  code: number;
+  timedOut: boolean;
+  /** Final assistant text reduced from the adapter's structured output. */
+  text: string;
+  /** Full structured log, surfaced in fail-closed error messages. */
+  raw: string;
+}
+
+export interface InteractivePlanContext {
+  cwd: string;
+  seed: string;
+  model?: string;
+}
+
+export interface InteractivePlanResult {
+  code: number;
+}
+
 /** A pluggable coding harness (claude, codex, …). Add one file per harness. */
 export interface HarnessAdapter {
   readonly id: string;
@@ -34,4 +62,8 @@ export interface HarnessAdapter {
   runTask(ctx: RunContext): Promise<RunResult>;
   /** Review a PR (read-mostly). */
   runReview(ctx: ReviewContext): Promise<RunResult>;
+  /** Run a structured prompt for planner/judge use. Optional adapter capability. */
+  runHeadless?(ctx: HeadlessContext): Promise<HeadlessResult>;
+  /** Hand an interactive planning session to the human. Optional adapter capability. */
+  runInteractivePlan?(ctx: InteractivePlanContext): Promise<InteractivePlanResult>;
 }

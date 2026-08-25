@@ -58,7 +58,7 @@ single-user, single-machine surface rather than an off-box API.
   `agent:`/`effort:` labels only; the merge gate and its `reviewed-by:` invariant
   are untouched.
 - The judge runs in-process (like `buildSnapshot`), so `orch serve` now needs the
-  `claude` CLI available to answer `/actions/suggest`; a missing/failed judge is
+  configured lead adapter CLI available to answer `/actions/suggest`; a missing/failed judge is
   handled as `502`, not a crash.
 
 ## Addendum (2026-08-25): the Plan panel

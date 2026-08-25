@@ -1,15 +1,12 @@
 import type { PlanEntry } from "./assign.js";
 import type { OrchConfig } from "../config.js";
+import { makeAdapter } from "../adapters/index.js";
 import {
   lastFencedBlock,
-  resultTextFromStreamJson,
   runHeadlessAgent,
   truncate,
   type HeadlessResult,
 } from "../adapters/headless.js";
-
-// Re-exported so existing importers (and tests) keep a stable judge API.
-export { resultTextFromStreamJson };
 
 /** The judge's output contract, embedded verbatim in the prompt. */
 const CONTRACT = [
@@ -84,7 +81,7 @@ export function extractPlan(resultText: string): PlanEntry[] {
 /** Result of one headless judge invocation. */
 export type JudgeRun = HeadlessResult;
 
-/** The spawn boundary — injectable so tests never launch a real `claude`. */
+/** The spawn boundary — injectable so tests never launch a real adapter. */
 export type JudgeRunner = (
   prompt: string,
   model: string | undefined,
@@ -93,7 +90,7 @@ export type JudgeRunner = (
 ) => Promise<JudgeRun>;
 
 const defaultRunner: JudgeRunner = (prompt, model, cfg, cwd) =>
-  runHeadlessAgent(prompt, model, cfg, cwd, "judge");
+  runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, "judge", cfg.taskTimeoutMs);
 
 /**
  * Run the judge headlessly at the lead's `hard` model and return a validated

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   extractPlan,
   formatJudgePrompt,
-  resultTextFromStreamJson,
   runJudge,
   type JudgeRun,
   type JudgeRunner,
@@ -10,6 +9,10 @@ import {
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
 
 const cfg: OrchConfig = DEFAULT_CONFIG;
+const adapterFixtures: Array<[string, OrchConfig]> = [
+  ["Claude", { ...DEFAULT_CONFIG, lead: "claude" }],
+  ["Codex", { ...DEFAULT_CONFIG, lead: "codex" }],
+];
 
 function runnerReturning(run: Partial<JudgeRun>): JudgeRunner {
   return async () => ({ code: 0, timedOut: false, text: "", raw: "", ...run });
@@ -69,28 +72,14 @@ describe("extractPlan", () => {
   });
 });
 
-describe("resultTextFromStreamJson", () => {
-  it("returns the final result line's text and ignores non-result lines", () => {
-    const log =
-      '{"type":"system","subtype":"init"}\n' +
-      '{"type":"assistant","message":"thinking"}\n' +
-      '{"type":"result","result":"FINAL TEXT"}\n';
-    expect(resultTextFromStreamJson(log)).toBe("FINAL TEXT");
-  });
-
-  it("returns empty string when there is no result line", () => {
-    expect(resultTextFromStreamJson('{"type":"assistant"}\n')).toBe("");
-  });
-});
-
 describe("runJudge (fail-closed)", () => {
   const brief = "some brief";
 
-  it("returns the parsed plan on a clean run", async () => {
+  it.each(adapterFixtures)("returns the parsed plan with the %s lead fixture", async (_name, fixtureCfg) => {
     const runner = runnerReturning({
       text: '```json\n[{"issue": 5, "agent": "codex", "effort": "hard", "rationale": "design"}]\n```',
     });
-    await expect(runJudge(brief, cfg, ".", runner)).resolves.toEqual([
+    await expect(runJudge(brief, fixtureCfg, ".", runner)).resolves.toEqual([
       { issue: 5, agent: "codex", effort: "hard", rationale: "design" },
     ]);
   });
@@ -115,13 +104,13 @@ describe("runJudge (fail-closed)", () => {
     await expect(runJudge(brief, cfg, ".", runner)).rejects.toThrow(/empty plan/i);
   });
 
-  it("resolves the judge model to the lead's hard tier", async () => {
+  it.each(adapterFixtures)("resolves the %s judge model to the lead's hard tier", async (_name, fixtureCfg) => {
     let seenModel: string | undefined = "unset";
     const runner: JudgeRunner = async (_prompt, model) => {
       seenModel = model;
       return { code: 0, timedOut: false, text: '```json\n[{"issue":1,"agent":"claude","effort":"hard"}]\n```', raw: "" };
     };
-    await runJudge(brief, cfg, ".", runner);
-    expect(seenModel).toBe(cfg.adapters[cfg.lead].models?.hard);
+    await runJudge(brief, fixtureCfg, ".", runner);
+    expect(seenModel).toBe(fixtureCfg.adapters[fixtureCfg.lead].models?.hard);
   });
 });

@@ -1,12 +1,18 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import type { OrchConfig } from "../config.js";
+import { makeAdapter } from "../adapters/index.js";
 import {
   lastFencedBlock,
   runHeadlessAgent,
   truncate,
   type HeadlessResult,
 } from "../adapters/headless.js";
+import type {
+  HarnessAdapter,
+  InteractivePlanContext,
+  InteractivePlanResult,
+} from "../adapters/types.js";
 import { parseTickets, resolvePlan, type Ticket } from "./plan.js";
 
 /**
@@ -55,7 +61,7 @@ export function extractTickets(resultText: string): Ticket[] {
 /** Result of one headless planner invocation. */
 export type PlannerRun = HeadlessResult;
 
-/** The spawn boundary — injectable so tests never launch a real `claude`. */
+/** The spawn boundary — injectable so tests never launch a real adapter. */
 export type PlannerRunner = (
   prompt: string,
   model: string | undefined,
@@ -64,7 +70,7 @@ export type PlannerRunner = (
 ) => Promise<PlannerRun>;
 
 const defaultRunner: PlannerRunner = (prompt, model, cfg, cwd) =>
-  runHeadlessAgent(prompt, model, cfg, cwd, "plan");
+  runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, "plan", cfg.taskTimeoutMs);
 
 /**
  * Draft a ticket list from a goal, headlessly at the lead's `hard` model.
@@ -99,8 +105,8 @@ export async function runPlanner(
   return tickets;
 }
 
-// --- Interactive planning (the default `orch plan`): hand the terminal to
-// Claude Code, let the human refine, then read back the tickets.json it writes. ---
+// --- Interactive planning (the default `orch plan`): hand the terminal to an
+// adapter that supports it, let the human refine, then read tickets.json back. ---
 
 /** Ensure the orch-plan skill is installed in the repo so the interactive session
  * (and `/orch-plan`) has the ticket contract. Idempotent. */
@@ -126,9 +132,15 @@ export function formatInteractiveSeed(outputPath: string): string {
   ].join(" ");
 }
 
-/** Build the `claude` argv for an interactive planning session. Pure. */
-export function interactivePlanArgs(model: string | undefined, seed: string): string[] {
-  const args = ["--append-system-prompt", seed, "--allowedTools", "Read", "Grep", "Glob", "Write"];
-  if (model !== undefined) args.push("--model", model);
-  return args;
+/** Invoke an adapter's optional interactive-planning capability. */
+export function runInteractivePlanner(
+  adapter: HarnessAdapter,
+  ctx: InteractivePlanContext,
+): Promise<InteractivePlanResult> {
+  if (!adapter.runInteractivePlan) {
+    throw new Error(
+      `lead adapter '${adapter.id}' does not support interactive planning; use \`orch plan --draft "<goal>"\` instead`,
+    );
+  }
+  return adapter.runInteractivePlan(ctx);
 }
