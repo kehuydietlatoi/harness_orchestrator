@@ -20,7 +20,8 @@ assign manually, then apply — the dashboard must be able to (a) run the judge 
 ## Decision
 
 Add a minimal **write surface** under `POST /actions/*`, guarded by a single
-locality chokepoint, without changing the two GET routes or the loopback bind.
+local-browser authorization chokepoint, without changing the two GET route
+implementations or the loopback bind.
 
 - `POST /actions/suggest` runs the judge in-process and returns
   `{ suggestions: PlanEntry[] }`. It **writes nothing**; a judge failure returns
@@ -29,24 +30,30 @@ locality chokepoint, without changing the two GET routes or the loopback bind.
   `editIssue`, returning `{ writes, skips }`. It is the **only** endpoint that
   mutates. `origin: "brain"` additionally stamps `assigned-by:brain`; `"human"`
   (the default) does not.
-- Every `/actions/*` request must pass `isLoopback(req.socket.remoteAddress)`
-  before any side effect; a non-loopback caller gets `403`. The server still
-  binds `127.0.0.1` only — `isLoopback` is belt-and-suspenders.
+- Before handler selection or body reads, every `/actions/*` request must pass
+  all of these checks: a loopback peer address, a literal loopback `Host`
+  (`127.0.0.1`, `localhost`, or `[::1]`) on the port that accepted the socket,
+  an `Origin` matching that Host origin, `X-Orch-Request: dashboard`, and an
+  `application/json` Content-Type. Authorization failures return `403`; a
+  non-JSON request returns `415`. The server still binds `127.0.0.1` only.
 
-**Trust model:** the machine's OS boundary is the sole authorization. There is no
-token today because nothing off-box can reach a loopback-bound port. This is
-appropriate for a single-user, single-machine daily-use tool.
+**Trust model:** writes are available only to a same-origin browser page or a
+deliberate local HTTP client that supplies the Orch header. The header is not a
+secret; its browser-security value is that it forces a hostile cross-origin
+page to preflight, while the server exposes no permissive CORS response. The
+Host allowlist prevents DNS rebinding from turning an attacker-controlled origin
+into a loopback caller. There is still no bearer token, so this remains a
+single-user, single-machine surface rather than an off-box API.
 
 ## Consequences
 
 - The dashboard is no longer read-only; `/status` and `/` are unchanged, but
   `/actions/*` can now change the board. The AGENTS.md "Dashboard boundary"
   convention is updated to say so.
-- **A future tunnel (Phase-2 phone control) MUST add a token check inside
-  `isLoopback`/the `/actions/*` guard before exposing writes off-box.** Exposing
-  the current surface through a tunnel without that check would let any reachable
-  client mutate the board. This is the single, localized place that upgrade lands
-  — the write path is not scattered.
+- **A future tunnel (Phase-2 phone control) MUST add real authentication inside
+  the `/actions/*` guard before exposing writes off-box.** The explicit Orch
+  header is a CSRF defense, not authentication. This is the single, localized
+  place that upgrade lands — the write path is not scattered.
 - ADR-0003 (cross-review is a process guarantee) is unaffected: routing writes
   `agent:`/`effort:` labels only; the merge gate and its `reviewed-by:` invariant
   are untouched.
@@ -65,7 +72,7 @@ The same pattern was extended to **planning** — creating issues from a
 - `POST /actions/plan-create` is the **second** (and only other) mutating route.
   It re-validates and refuses (`400`) on blocking errors, then creates the issues
   via the injectable `ServerDeps.createIssues` (default `createFromPlan`, faked
-  in `--demo`). Like `/actions/assign`, it sits behind the one `isLoopback`
-  chokepoint — so the future-tunnel token check still lands in exactly one place.
+  in `--demo`). Like `/actions/assign`, it sits behind the shared action-request
+  chokepoint — so future off-box authentication still lands in exactly one place.
 
 The read routes (`GET /`, `GET /status`) remain byte-stable.

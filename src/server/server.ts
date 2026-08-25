@@ -14,6 +14,8 @@ import { createFromPlan, parseTickets, resolvePlan, type Created, type Ticket } 
 // are siblings under the repo root.
 const dashboardPath = new URL("../../public/index.html", import.meta.url);
 const BODY_LIMIT = 1_000_000; // 1 MB cap on POST bodies
+const ORCH_REQUEST_HEADER = "x-orch-request";
+const ORCH_REQUEST_VALUE = "dashboard";
 
 /**
  * Injection seam for the write surface — defaults hit the real modules; tests
@@ -44,10 +46,73 @@ const defaultDeps: ServerDeps = {
   snapshot: buildSnapshot,
 };
 
-/** Loopback-only guard. The machine's OS boundary is the sole authz today; a
- * future tunnel MUST add a token check here before exposing writes off-box. */
+/** Socket-level half of the dashboard write guard. */
 export function isLoopback(addr: string | undefined): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+}
+
+interface RequestRejection {
+  status: 403 | 415;
+  error: string;
+}
+
+/** Parse a Host header as an HTTP origin and require a literal loopback name
+ * plus the port that accepted this connection. Matching localPort closes the
+ * door on a syntactically trusted Host header for some other local service. */
+function localHostOrigin(request: http.IncomingMessage): string | null {
+  const host = request.headers.host;
+  const localPort = request.socket.localPort;
+  if (!host || !localPort) return null;
+
+  try {
+    const parsed = new URL(`http://${host}`);
+    const hostname = parsed.hostname.toLowerCase();
+    const port = parsed.port === "" ? 80 : Number(parsed.port);
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.pathname !== "/" ||
+      parsed.search !== "" ||
+      parsed.hash !== "" ||
+      !["127.0.0.1", "localhost", "[::1]"].includes(hostname) ||
+      port !== localPort
+    ) {
+      return null;
+    }
+    return parsed.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/** Browser-facing authorization for every action. The custom header forces a
+ * cross-origin browser to preflight; Host and Origin then independently block
+ * DNS rebinding and ordinary CSRF. This must run before choosing a handler so
+ * no injected dependency or request body is touched for a rejected request. */
+function rejectActionRequest(request: http.IncomingMessage): RequestRejection | null {
+  if (!isLoopback(request.socket.remoteAddress)) {
+    return { status: 403, error: "forbidden: local requests only" };
+  }
+
+  const hostOrigin = localHostOrigin(request);
+  if (!hostOrigin) return { status: 403, error: "forbidden: invalid Host" };
+
+  const origin = request.headers.origin;
+  if (typeof origin !== "string" || origin.toLowerCase() !== hostOrigin) {
+    return { status: 403, error: "forbidden: invalid Origin" };
+  }
+
+  if (request.headers[ORCH_REQUEST_HEADER] !== ORCH_REQUEST_VALUE) {
+    return { status: 403, error: `forbidden: missing ${ORCH_REQUEST_HEADER}` };
+  }
+
+  const contentType = request.headers["content-type"];
+  const mediaType = typeof contentType === "string" ? contentType.split(";", 1)[0]?.trim().toLowerCase() : null;
+  if (mediaType !== "application/json") {
+    return { status: 415, error: "unsupported media type: application/json required" };
+  }
+
+  return null;
 }
 
 function sendJson(response: http.ServerResponse, code: number, body: unknown): void {
@@ -191,10 +256,11 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
   return http.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
 
-    // --- Write surface: loopback-only, the only routes that mutate the board ---
+    // --- Write surface: locally authorized actions; includes the only mutations ---
     if (request.method === "POST" && pathname.startsWith("/actions/")) {
-      if (!isLoopback(request.socket.remoteAddress)) {
-        sendJson(response, 403, { error: "forbidden: local requests only" });
+      const rejection = rejectActionRequest(request);
+      if (rejection) {
+        sendJson(response, rejection.status, { error: rejection.error });
         return;
       }
       const handler =
