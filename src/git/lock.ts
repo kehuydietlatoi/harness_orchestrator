@@ -1,4 +1,5 @@
 import { exec } from "../util/exec.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * Atomic task-claim primitive.
@@ -32,6 +33,26 @@ async function headSha(cwd?: string): Promise<string | null> {
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
+/**
+ * Create a unique Git object whose id can identify one claim attempt. The
+ * object is intentionally created before the lock ref: an unreferenced blob is
+ * harmless and lets a caller distinguish its own ambiguous write from a
+ * concurrent claimant's lock.
+ */
+export async function createOwnerToken(
+  issue: number,
+  agent: string,
+  opts: { cwd?: string } = {},
+): Promise<string> {
+  const marker = JSON.stringify({ issue, agent, nonce: randomUUID() });
+  const r = await exec("git", ["hash-object", "-w", "--stdin"], { cwd: opts.cwd, input: marker });
+  const sha = r.stdout.trim();
+  if (r.code !== 0 || !/^[0-9a-f]{40,64}$/i.test(sha)) {
+    throw new Error(`cannot create claim owner token: ${r.stderr.trim() || "invalid object id"}`);
+  }
+  return sha;
+}
+
 /** Attempt to atomically claim an issue. Exactly one racer can win. */
 export async function claim(
   issue: number,
@@ -54,6 +75,25 @@ export async function claim(
 /** Release a claim (called on merge or abandonment). */
 export async function release(issue: number, opts: { cwd?: string } = {}): Promise<boolean> {
   const input = `delete ${lockRef(issue)}\n`;
+  const r = await exec("git", ["update-ref", "--stdin"], { cwd: opts.cwd, input });
+  return r.code === 0;
+}
+
+/** Read the exact object id stored in a claim lock, or null when it is absent. */
+export async function owner(issue: number, opts: { cwd?: string } = {}): Promise<string | null> {
+  const r = await exec("git", ["rev-parse", "--verify", "--quiet", lockRef(issue)], {
+    cwd: opts.cwd,
+  });
+  return r.code === 0 ? r.stdout.trim() : null;
+}
+
+/** Release only the lock still owned by the supplied claim attempt. */
+export async function releaseOwned(
+  issue: number,
+  expectedOwner: string,
+  opts: { cwd?: string } = {},
+): Promise<boolean> {
+  const input = `delete ${lockRef(issue)} ${expectedOwner}\n`;
   const r = await exec("git", ["update-ref", "--stdin"], { cwd: opts.cwd, input });
   return r.code === 0;
 }

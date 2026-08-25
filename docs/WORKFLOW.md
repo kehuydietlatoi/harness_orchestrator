@@ -65,7 +65,7 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 |---|---|---|---|---|
 | Route (human) | `assign --apply` | `agent:X`, `effort:Y` | — | fill-blanks-only; skips already-pinned |
 | Route (judge) | `assign --auto` / `/actions/assign` | `agent:X`, `effort:Y`, `assigned-by:brain` | — | judge-authored; same fill-blanks-only writer |
-| Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | acquire lock, assign `@me`, cut worktree |
+| Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | owner-token lock, assign `@me`, cut worktree; compensate on incomplete setup |
 | Run start | `processNext` | `status:in-progress` | `status:claimed` | spawn harness at resolved model |
 | Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |
 | Run fails / times out | `processNext` | `needs-attention` | *(none — see wrinkle)* | safely prune only if clean, attached, and preserved; release lock |
@@ -76,6 +76,14 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Abandon | `abandon` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | release lock, explicitly discard worktree |
 
 ## Known wrinkles (documented, not yet fixed)
+
+Claim setup is a recoverable saga rather than a transaction. Before writing, it observes
+the issue, exact lock owner, and deterministic worktree path and checks the lifecycle
+transition. A unique Git-object id identifies the attempt's lock. After an ambiguous
+adapter failure, setup rolls forward only when re-observation proves that attempt owns
+the lock or finds the complete expected GitHub/worktree state. Otherwise it restores
+the pre-claim routing/assignment fields, removes `status:claimed`, and compare-deletes
+only its own lock. Conflicting or unobservable worktrees are never deleted as rollback.
 
 1. **`status:blocked` is vestigial.** It exists in the label set and has a color, but
    **no code path ever applies or removes it.** "Blocked" is computed on read from

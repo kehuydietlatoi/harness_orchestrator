@@ -6,6 +6,7 @@ import { exec } from "../src/util/exec.js";
 import {
   addWorktree,
   discardWorktree,
+  observeWorktree,
   removeWorktree,
   worktreePath,
 } from "../src/git/worktree.js";
@@ -48,6 +49,24 @@ describe("task worktrees", () => {
       /not registered/i,
     );
     expect(existsSync(recoverable)).toBe(true);
+  });
+
+  it("observes an expected registered task worktree without mutating it", async () => {
+    const worktree = await addWorktree(29, "Identity safe", "../wt", { cwd: repo });
+
+    expect(await observeWorktree(29, "Identity safe", "../wt", { cwd: repo })).toEqual({
+      outcome: "usable",
+      worktree,
+    });
+  });
+
+  it("reports an existing unregistered task path as a conflict", async () => {
+    const path = worktreePath("../wt", 29, repo);
+    mkdirSync(path, { recursive: true });
+
+    const observation = await observeWorktree(29, "Identity safe", "../wt", { cwd: repo });
+
+    expect(observation.outcome).toBe("conflict");
   });
 
   it("rejects a registered task path attached to a different branch", async () => {

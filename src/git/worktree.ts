@@ -30,6 +30,14 @@ interface RegisteredWorktree {
   branch: string | null;
 }
 
+export type WorktreeObservation =
+  | { outcome: "absent" }
+  | { outcome: "usable"; worktree: Worktree }
+  | { outcome: "conflict"; detail: string }
+  | { outcome: "error"; detail: string };
+
+class WorktreeReadError extends Error {}
+
 function pathIdentity(path: string): string {
   const absolute = resolve(path);
   const canonical = existsSync(absolute) ? realpathSync.native(absolute) : absolute;
@@ -53,12 +61,48 @@ function parseWorktrees(output: string): RegisteredWorktree[] {
 async function registeredWorktree(path: string, cwd: string): Promise<RegisteredWorktree> {
   const result = await exec("git", ["worktree", "list", "--porcelain"], { cwd });
   if (result.code !== 0) {
-    throw new Error(`worktree list failed: ${result.stderr.trim()}`);
+    throw new WorktreeReadError(`worktree list failed: ${result.stderr.trim()}`);
   }
   const expected = pathIdentity(path);
   const match = parseWorktrees(result.stdout).find((item) => pathIdentity(item.path) === expected);
   if (!match) throw new Error(`worktree path is not registered by Git: ${path}`);
   return match;
+}
+
+/**
+ * Observe whether the deterministic task path is a usable worktree without
+ * creating, attaching, or removing anything.
+ */
+export async function observeWorktree(
+  issue: number,
+  title: string,
+  root: string,
+  opts: { cwd?: string } = {},
+): Promise<WorktreeObservation> {
+  const cwd = opts.cwd ?? process.cwd();
+  const branch = branchName(issue, slugify(title));
+  const path = worktreePath(root, issue, cwd);
+  if (!existsSync(path)) return { outcome: "absent" };
+
+  let registered: RegisteredWorktree;
+  try {
+    registered = await registeredWorktree(path, cwd);
+  } catch (error) {
+    return {
+      outcome: error instanceof WorktreeReadError ? "error" : "conflict",
+      detail: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const expectedRef = `refs/heads/${branch}`;
+  if (registered.branch !== expectedRef) {
+    const actual = registered.branch?.replace(/^refs\/heads\//, "") ?? "detached HEAD";
+    return {
+      outcome: "conflict",
+      detail: `worktree path is attached to '${actual}', expected '${branch}': ${path}`,
+    };
+  }
+  return { outcome: "usable", worktree: { path, branch } };
 }
 
 /**
