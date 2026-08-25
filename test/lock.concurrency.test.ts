@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
-import { claim, release, isLocked, listLocks } from "../src/lock.js";
+import { claim, release, isLocked, listLocks } from "../src/git/lock.js";
 
 /** Create a throwaway git repo with a single commit; return its path. */
 async function makeRepo(): Promise<string> {

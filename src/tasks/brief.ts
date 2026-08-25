@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { Issue } from "./github.js";
-import type { Worktree } from "./worktree.js";
+import type { Issue } from "../github/github.js";
+import type { Worktree } from "../git/worktree.js";
 
 /** The consistent briefing handed to whichever harness picks up a task. */
 export function buildBrief(issue: Issue, worktree: Worktree, agent: string, cwd: string): string {

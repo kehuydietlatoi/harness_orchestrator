@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
-import type { Issue } from "../src/github.js";
-import { resolveTaskModel } from "../src/runner.js";
+import type { Issue } from "../src/github/github.js";
+import { resolveTaskModel } from "../src/tasks/runner.js";
 
 function issue(labels: string[] = []): Issue {
   return {

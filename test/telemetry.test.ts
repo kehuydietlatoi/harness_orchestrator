@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseUsage } from "../src/telemetry.js";
+import { parseUsage } from "../src/board/telemetry.js";
 
 describe("parseUsage", () => {
   it("extracts Claude result usage, cache input, and cost", () => {

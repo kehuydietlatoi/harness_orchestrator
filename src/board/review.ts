@@ -9,12 +9,12 @@ import {
   reviewPr,
   prChecksPass,
   mergePr,
-} from "./github.js";
-import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "./labels.js";
+} from "../github/github.js";
+import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "../github/labels.js";
 import { issueAgent, byNumber } from "./board.js";
-import { release as lockRelease } from "./lock.js";
-import { worktreePath, removeWorktree } from "./worktree.js";
-import type { OrchConfig } from "./config.js";
+import { release as lockRelease } from "../git/lock.js";
+import { worktreePath, removeWorktree } from "../git/worktree.js";
+import type { OrchConfig } from "../config.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
 export function prIssueNumber(pr: Pick<Pr, "headRefName" | "body">): number | null {

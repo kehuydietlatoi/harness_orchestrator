@@ -5,7 +5,7 @@
 
 ## Context
 
-Phase-1 shipped the dashboard (`src/server.ts`) deliberately **read-only**: it
+Phase-1 shipped the dashboard (`src/server/server.ts`) deliberately **read-only**: it
 served `GET /` (the page) and `GET /status` (the board snapshot) and nothing
 else, binding `127.0.0.1` only. That boundary was recorded as a convention so no
 mutation crept in by accident.

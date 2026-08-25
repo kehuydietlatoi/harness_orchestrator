@@ -1,6 +1,6 @@
 import { selectUnassigned, type PlanEntry } from "./assign.js";
-import type { OrchConfig } from "./config.js";
-import type { Issue } from "./github.js";
+import type { OrchConfig } from "../config.js";
+import type { Issue } from "../github/github.js";
 
 /**
  * Judge evaluation — the deterministic half of "is the routing judge any good?".

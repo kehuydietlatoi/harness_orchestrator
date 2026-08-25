@@ -1,9 +1,9 @@
 import pc from "picocolors";
 import { commandExists } from "../util/exec.js";
-import { isGitRepo, gitVersion, supportsWorktree, remoteUrl } from "../git.js";
-import { ghInstalled, ghAuthenticated, listLabels } from "../github.js";
+import { isGitRepo, gitVersion, supportsWorktree, remoteUrl } from "../git/git.js";
+import { ghInstalled, ghAuthenticated, listLabels } from "../github/github.js";
 import { configExists, loadConfig } from "../config.js";
-import { LABELS } from "../labels.js";
+import { LABELS } from "../github/labels.js";
 
 interface Check {
   name: string;

@@ -1,8 +1,8 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { listIssues } from "../github.js";
-import { issueStatus, issueAgent } from "../board.js";
-import { STATUS_LABELS } from "../labels.js";
+import { listIssues } from "../github/github.js";
+import { issueStatus, issueAgent } from "../board/board.js";
+import { STATUS_LABELS } from "../github/labels.js";
 
 export async function boardCommand(): Promise<void> {
   const cwd = process.cwd();

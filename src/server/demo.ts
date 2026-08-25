@@ -1,8 +1,8 @@
-import type { PlanEntry } from "./assign.js";
-import { DEFAULT_CONFIG, type OrchConfig } from "./config.js";
-import type { Issue } from "./github.js";
+import type { PlanEntry } from "../routing/assign.js";
+import { DEFAULT_CONFIG, type OrchConfig } from "../config.js";
+import type { Issue } from "../github/github.js";
 import type { ServerDeps } from "./server.js";
-import type { Snapshot, TaskView } from "./snapshot.js";
+import type { Snapshot, TaskView } from "../board/snapshot.js";
 
 /**
  * Self-contained demo backend for `orch serve --demo`.

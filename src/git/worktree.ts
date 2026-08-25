@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { existsSync } from "node:fs";
-import { exec } from "./util/exec.js";
+import { exec } from "../util/exec.js";
 
 export interface Worktree {
   path: string;

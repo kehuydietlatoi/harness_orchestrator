@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { makeDemoDeps } from "../src/demo.js";
-import { applyPlan, selectUnassigned } from "../src/assign.js";
+import { makeDemoDeps } from "../src/server/demo.js";
+import { applyPlan, selectUnassigned } from "../src/routing/assign.js";
 
 const CWD = process.cwd();
 

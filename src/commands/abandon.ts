@@ -1,11 +1,11 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent } from "../service.js";
-import { release as lockRelease } from "../lock.js";
-import { removeWorktree, worktreePath } from "../worktree.js";
-import { getIssue, editIssue } from "../github.js";
-import { issueAgent } from "../board.js";
-import { STATUS, NEEDS_ATTENTION, agentLabel } from "../labels.js";
+import { resolveAgent } from "../tasks/service.js";
+import { release as lockRelease } from "../git/lock.js";
+import { removeWorktree, worktreePath } from "../git/worktree.js";
+import { getIssue, editIssue } from "../github/github.js";
+import { issueAgent } from "../board/board.js";
+import { STATUS, NEEDS_ATTENTION, agentLabel } from "../github/labels.js";
 
 /**
  * Abandon a stuck task: release its claim lock, prune its worktree, and return

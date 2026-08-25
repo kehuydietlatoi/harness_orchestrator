@@ -1,7 +1,7 @@
-import { parseDeps } from "./board.js";
-import type { OrchConfig } from "./config.js";
-import type { Issue } from "./github.js";
-import type { RunRecord } from "./telemetry.js";
+import { parseDeps } from "../board/board.js";
+import type { OrchConfig } from "../config.js";
+import type { Issue } from "../github/github.js";
+import type { RunRecord } from "../board/telemetry.js";
 
 export type Effort = "easy" | "hard";
 

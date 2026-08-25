@@ -1,9 +1,9 @@
 import { type AddressInfo } from "node:net";
 import { request as httpRequest } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createServer, isLoopback, startServer, type ServerDeps } from "../src/server.js";
+import { createServer, isLoopback, startServer, type ServerDeps } from "../src/server/server.js";
 import type { OrchConfig } from "../src/config.js";
-import type { Issue } from "../src/github.js";
+import type { Issue } from "../src/github/github.js";
 
 vi.mock("../src/snapshot.js", () => ({
   buildSnapshot: vi.fn(async () => ({

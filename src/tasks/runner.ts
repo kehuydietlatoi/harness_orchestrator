@@ -1,17 +1,17 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { exec } from "./util/exec.js";
-import type { OrchConfig } from "./config.js";
+import { exec } from "../util/exec.js";
+import type { OrchConfig } from "../config.js";
 import { claimNext, submit } from "./service.js";
 import { buildBrief } from "./brief.js";
-import { makeAdapter } from "./adapters/index.js";
-import { getIssue, editIssue, type Issue } from "./github.js";
-import { issueEffort, issueStatus } from "./board.js";
-import { STATUS, NEEDS_ATTENTION } from "./labels.js";
-import { release as lockRelease } from "./lock.js";
-import { removeWorktree, worktreePath } from "./worktree.js";
-import { appendRun, parseUsage, projectId, type RunRecord } from "./telemetry.js";
+import { makeAdapter } from "../adapters/index.js";
+import { getIssue, editIssue, type Issue } from "../github/github.js";
+import { issueEffort, issueStatus } from "../board/board.js";
+import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
+import { release as lockRelease } from "../git/lock.js";
+import { removeWorktree, worktreePath } from "../git/worktree.js";
+import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 
 export interface RunSummary {
   issue: number;

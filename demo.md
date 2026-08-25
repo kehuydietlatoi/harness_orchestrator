@@ -83,7 +83,7 @@ review queue surfaces exactly the PRs awaiting that cross-model sign-off.
 | The board snapshot → dashboard render path | the judge's LLM call (canned plan) |
 | `Suggest → edit → Apply` round-trip, incl. `assigned-by:brain` | run telemetry (`runs.jsonl`) |
 
-The fixture lives in [`src/demo.ts`](src/demo.ts) and is wired through the same `ServerDeps`
+The fixture lives in [`src/server/demo.ts`](src/server/demo.ts) and is wired through the same `ServerDeps`
 seam the tests use, so the demo exercises the production code paths rather than a mock-up.
 
 ## More

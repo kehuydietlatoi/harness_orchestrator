@@ -1,11 +1,11 @@
-import { type Issue, type Pr, listIssues, listOpenPrs } from "./github.js";
+import { type Issue, type Pr, listIssues, listOpenPrs } from "../github/github.js";
 import { issueAgent, issueStatus, parseDeps } from "./board.js";
-import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "./labels.js";
-import { listLocks } from "./lock.js";
+import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "../github/labels.js";
+import { listLocks } from "../git/lock.js";
 import { prIssueNumber } from "./review.js";
 import { readRuns, type RunRecord } from "./telemetry.js";
-import { exec } from "./util/exec.js";
-import type { Worktree } from "./worktree.js";
+import { exec } from "../util/exec.js";
+import type { Worktree } from "../git/worktree.js";
 
 export interface TaskView {
   number: number;

@@ -6,8 +6,8 @@ it is built as a reliability problem first and a prompt second: a fixed output
 contract, an injectable spawn boundary, fail-closed parsing, and an explicit
 evaluation story.
 
-Everything below is in `src/judge.ts` (the judge), `src/assign.ts` (the brief and
-the writer), and `src/judge-eval.ts` (the evaluator).
+Everything below is in `src/routing/judge.ts` (the judge), `src/routing/assign.ts` (the brief and
+the writer), and `src/routing/judge-eval.ts` (the evaluator).
 
 ## The pipeline
 
@@ -28,12 +28,12 @@ judge testable end-to-end without spending a token: **`formatBrief` /
 `formatJudgePrompt`** on the way in, and **`extractPlan` / `evaluatePlan`** on the
 way out. The only impure step, the model call, sits behind the `JudgeRunner` type
 so tests inject a canned reply (`test/judge.test.ts`) and the `--demo` fixture
-injects a fixed plan (`src/demo.ts`).
+injects a fixed plan (`src/server/demo.ts`).
 
 ## The prompt is a contract
 
 `formatJudgePrompt(brief)` wraps the routing brief with an output contract that is
-embedded **verbatim** in the prompt (`CONTRACT` in `src/judge.ts`):
+embedded **verbatim** in the prompt (`CONTRACT` in `src/routing/judge.ts`):
 
 - Reply with **exactly one** fenced ` ```json ` block and nothing after it.
 - **One array element per unassigned issue — skip nothing.** (Completeness is part

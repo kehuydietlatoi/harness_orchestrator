@@ -1,8 +1,8 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent } from "../service.js";
-import { listIssues } from "../github.js";
-import { issueStatus, issueAgent, eligibleIssues } from "../board.js";
+import { resolveAgent } from "../tasks/service.js";
+import { listIssues } from "../github/github.js";
+import { issueStatus, issueAgent, eligibleIssues } from "../board/board.js";
 
 function section(title: string, lines: string[]): void {
   console.log(pc.bold(title));

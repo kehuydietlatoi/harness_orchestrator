@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent } from "../service.js";
-import { runLoop } from "../runner.js";
+import { resolveAgent } from "../tasks/service.js";
+import { runLoop } from "../tasks/runner.js";
 
 export async function runCommand(opts: {
   agent?: string;

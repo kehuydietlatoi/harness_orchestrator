@@ -1,6 +1,6 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { planFromFile } from "../plan.js";
+import { planFromFile } from "../tasks/plan.js";
 
 export async function planCommand(file: string): Promise<void> {
   const cwd = process.cwd();

@@ -1,8 +1,8 @@
 import { loadConfig } from "../config.js";
-import { resolveAgent } from "../service.js";
-import { getIssue } from "../github.js";
-import { worktreePath, branchName, slugify } from "../worktree.js";
-import { buildBrief } from "../brief.js";
+import { resolveAgent } from "../tasks/service.js";
+import { getIssue } from "../github/github.js";
+import { worktreePath, branchName, slugify } from "../git/worktree.js";
+import { buildBrief } from "../tasks/brief.js";
 
 export async function briefCommand(issueArg: string, opts: { agent?: string }): Promise<void> {
   const cwd = process.cwd();
