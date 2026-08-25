@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { extractTickets, formatPlanPrompt, runPlanner, type PlannerRunner } from "../src/tasks/planner.js";
+import {
+  extractTickets,
+  formatInteractiveSeed,
+  formatPlanPrompt,
+  interactivePlanArgs,
+  runPlanner,
+  type PlannerRunner,
+} from "../src/tasks/planner.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
 const cfg = DEFAULT_CONFIG;
@@ -38,6 +45,30 @@ describe("extractTickets", () => {
 
   it("throws when the block is not a JSON array", () => {
     expect(() => extractTickets('```json\n{"title":"x"}\n```')).toThrow(/must be a JSON array/i);
+  });
+});
+
+describe("interactive planning builders", () => {
+  it("formatInteractiveSeed embeds the output path + Write instruction as one safe line", () => {
+    const seed = formatInteractiveSeed("/abs/tickets.json");
+    expect(seed).toContain("/abs/tickets.json");
+    expect(seed).toContain("Write");
+    expect(seed).toContain("orch-plan skill");
+    // Must survive argv shell-quoting: single line, no double-quotes or backticks.
+    expect(seed).not.toContain("\n");
+    expect(seed).not.toContain('"');
+    expect(seed).not.toContain("`");
+  });
+
+  it("interactivePlanArgs carries the seed as a system prompt, allows Write, and sets the model", () => {
+    const args = interactivePlanArgs("opus", "SEED");
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe("SEED");
+    expect(args).toContain("Write");
+    expect(args.slice(-2)).toEqual(["--model", "opus"]);
+  });
+
+  it("interactivePlanArgs omits --model when none is configured", () => {
+    expect(interactivePlanArgs(undefined, "SEED")).not.toContain("--model");
   });
 });
 

@@ -76,3 +76,37 @@ export function spawnLogged(
     }
   });
 }
+
+/**
+ * Spawn a child that shares this process's terminal (`stdio: "inherit"`) so a
+ * human interacts with it directly — used to hand control to an interactive
+ * `claude` planning session. Nothing is captured and there is no timeout; the
+ * human ends the session. Windows shell-quoting matches spawnLogged, so keep
+ * argv values metachar-free (long text like a system prompt must be a single
+ * line with no embedded double-quotes). Resolves with the child's exit code
+ * (127 = failed to start).
+ */
+export function spawnInteractive(
+  cmd: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = {},
+): Promise<{ code: number }> {
+  return new Promise((resolve) => {
+    const useShell = opts.shell ?? false;
+    let command = cmd;
+    let spawnArgs = args;
+    if (useShell && args.length) {
+      const q = (s: string): string => (/\s/.test(s) ? `"${s}"` : s);
+      command = [cmd, ...args].map(q).join(" ");
+      spawnArgs = [];
+    }
+    const child = spawn(command, spawnArgs, {
+      cwd: opts.cwd,
+      shell: useShell,
+      env: opts.env ?? process.env,
+      stdio: "inherit",
+    });
+    child.on("error", () => resolve({ code: 127 }));
+    child.on("close", (code) => resolve({ code: code ?? 0 }));
+  });
+}

@@ -2,9 +2,21 @@ import { describe, it, expect, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawnLogged } from "../src/util/spawn.js";
+import { spawnInteractive, spawnLogged } from "../src/util/spawn.js";
 import { makeAdapter } from "../src/adapters/index.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
+
+describe("spawnInteractive", () => {
+  it("resolves with the child's exit code", async () => {
+    const { code } = await spawnInteractive(process.execPath, ["-e", "process.exit(3)"]);
+    expect(code).toBe(3);
+  });
+
+  it("returns 127 when the command cannot start", async () => {
+    const { code } = await spawnInteractive("definitely-not-a-real-binary-xyz", []);
+    expect(code).toBe(127);
+  });
+});
 
 describe("spawnLogged", () => {
   const dirs: string[] = [];

@@ -1,10 +1,11 @@
-import { writeFileSync, existsSync, readFileSync, mkdirSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { writeFileSync, existsSync } from "node:fs";
+import { resolve } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, DEFAULT_CONFIG, configExists } from "../config.js";
 import { isGitRepo, remoteUrl } from "../git/git.js";
 import { ghInstalled, ensureLabel } from "../github/github.js";
 import { LABELS } from "../github/labels.js";
+import { ensurePlanSkill } from "../tasks/planner.js";
 
 const AGENTS_MD = `# Project memory (canonical — read by ALL harnesses)
 
@@ -33,13 +34,11 @@ function writeIfAbsent(path: string, content: string, log: string[]): void {
   log.push(pc.green(`  + ${path}`));
 }
 
-/** Install the shipped orch-plan skill so `/orch-plan` is available interactively
- * (the same contract `orch plan --draft` inlines headlessly). */
+/** Install the shipped orch-plan skill so `/orch-plan` — and the interactive
+ * `orch plan` session — have the ticket contract. */
 function installPlanSkill(cwd: string, log: string[]): void {
-  const dest = resolve(cwd, ".claude", "skills", "orch-plan", "SKILL.md");
-  const src = new URL("../../assets/skills/orch-plan/SKILL.md", import.meta.url);
-  mkdirSync(dirname(dest), { recursive: true });
-  writeIfAbsent(dest, readFileSync(src, "utf8"), log);
+  const { path, created } = ensurePlanSkill(cwd);
+  log.push(created ? pc.green(`  + ${path}`) : pc.dim(`  = ${path} (exists, left as-is)`));
 }
 
 export async function initCommand(): Promise<void> {

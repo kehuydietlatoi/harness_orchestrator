@@ -53,7 +53,8 @@ orch doctor                    # verify git, gh auth, worktrees, adapters, label
 ## The loop
 
 ```bash
-orch plan --draft "add SSO login" > tickets.json  # LLM drafts tickets via the orch-plan skill
+orch plan                                          # interactive Claude Code session -> refine -> writes tickets.json
+orch plan --draft "add SSO login" > tickets.json   # or one-shot: LLM drafts headlessly (no refinement)
 orch plan --dry-run tickets.json                   # preview the issues + dep graph, no writes
 orch plan tickets.json                             # create the GitHub issues (deps + file hints)
 orch assign                            # emit whole-graph routing brief + telemetry
@@ -90,7 +91,7 @@ every two seconds.
 | Command | Purpose |
 |---|---|
 | `orch init` / `orch doctor` | scaffold config + memory + labels / verify environment |
-| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | draft tickets from a goal (LLM, via the `orch-plan` skill), preview them, or create issues from a JSON file |
+| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | **no args:** interactive Claude Code planning session → `tickets.json`; `--draft`: headless one-shot draft; `--dry-run`: preview a file; `<file>`: create issues |
 | `orch assign [--apply <file\|->] [--dry-run]` | emit a routing brief or fill blank agent + effort labels from a plan |
 | `orch assign --round-robin` | legacy round-robin assignment for eligible issues |
 | `orch next` / `orch claim <n>` | atomically claim a task, open its worktree |

@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { OrchConfig } from "../config.js";
 import {
   lastFencedBlock,
@@ -96,4 +97,38 @@ export async function runPlanner(
   const { errors } = resolvePlan(tickets);
   if (errors.length) throw new Error(`planner produced invalid tickets: ${errors.join("; ")}`);
   return tickets;
+}
+
+// --- Interactive planning (the default `orch plan`): hand the terminal to
+// Claude Code, let the human refine, then read back the tickets.json it writes. ---
+
+/** Ensure the orch-plan skill is installed in the repo so the interactive session
+ * (and `/orch-plan`) has the ticket contract. Idempotent. */
+export function ensurePlanSkill(cwd: string): { path: string; created: boolean } {
+  const path = resolve(cwd, ".claude", "skills", "orch-plan", "SKILL.md");
+  if (existsSync(path)) return { path, created: false };
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, loadPlanSkill(), "utf8");
+  return { path, created: true };
+}
+
+/** Single-line system-prompt seed for the interactive session. No newlines,
+ * double-quotes, or backticks, so it survives argv shell-quoting; the schema
+ * comes from the installed orch-plan skill, so only session framing + the output
+ * path live here. Pure. */
+export function formatInteractiveSeed(outputPath: string): string {
+  return [
+    "You are in an interactive orch plan session: help the user break a goal into a tickets.json for the orch orchestrator.",
+    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, files).",
+    "Explore the repository with Read/Grep/Glob to ground file-ownership hints in the real structure.",
+    "Refine the plan conversationally with the user.",
+    `When the user is satisfied, use the Write tool to save the final tickets as a JSON array to the absolute path ${outputPath}, then tell the user it is saved.`,
+  ].join(" ");
+}
+
+/** Build the `claude` argv for an interactive planning session. Pure. */
+export function interactivePlanArgs(model: string | undefined, seed: string): string[] {
+  const args = ["--append-system-prompt", seed, "--allowedTools", "Read", "Grep", "Glob", "Write"];
+  if (model !== undefined) args.push("--model", model);
+  return args;
 }
