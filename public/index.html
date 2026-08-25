@@ -576,7 +576,9 @@
         </div>
         <div class="routing-status" id="routing-status" role="status" aria-live="polite">
           Click <strong>Suggest routing</strong> to have the judge propose an agent and effort for
-          each unassigned issue — or <strong>Add row</strong> to assign one yourself.
+          each unassigned issue — or <strong>Add row</strong> to assign one yourself. Applying sets each
+          issue's <em>owner</em>; a dispatcher (<code>orch run</code>) then claims it and starts the work,
+          so a just-routed issue stays <code>todo</code> until it is claimed.
         </div>
         <div class="table-wrap">
           <table id="routing-table" hidden>
@@ -1027,7 +1029,7 @@
             const skips = results.reduce((sum, r) => sum + r.skips.length, 0);
             rows = [];
             renderRows();
-            setRoutingStatus(`Applied ${writes} assignment(s)${skips ? `, ${skips} skipped` : ""}.`, "ok");
+            setRoutingStatus(`Applied ${writes} assignment(s)${skips ? `, ${skips} skipped` : ""} — owners set. A dispatcher (orch run) claims and starts the work next.`, "ok");
             void refresh();
           } catch (error) {
             setRoutingStatus(error instanceof Error ? error.message : String(error), "error");
