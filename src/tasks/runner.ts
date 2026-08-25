@@ -10,7 +10,7 @@ import { getIssue, editIssue, type Issue } from "../github/github.js";
 import { issueEffort, issueStatus } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
-import { removeWorktree, worktreePath } from "../git/worktree.js";
+import { removeWorktree } from "../git/worktree.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 
 export interface RunSummary {
@@ -99,7 +99,7 @@ export async function processNext(
 
   if (!result.ok) {
     await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
-    await releaseClaim(n, cfg, cwd);
+    await releaseClaim(n, task.worktree.path, cwd);
     console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
     recordRun(n, agent, "failed", result.durationMs, logFile, cwd);
     return { issue: n, outcome: "failed", durationMs: result.durationMs };
@@ -122,7 +122,7 @@ export async function processNext(
   }
 
   await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.inProgress] });
-  await releaseClaim(n, cfg, cwd);
+  await releaseClaim(n, task.worktree.path, cwd);
   console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
   recordRun(n, agent, "needs-attention", result.durationMs, logFile, cwd);
   return { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
@@ -130,12 +130,12 @@ export async function processNext(
 
 /**
  * Free a task's resources when a run does not produce a mergeable PR: drop the
- * claim lock and prune the worktree so the issue can be re-claimed later. The
- * `needs-attention` label stays on the issue as the human signal.
+ * claim lock and safely prune the worktree only when it contains no recoverable
+ * work. The `needs-attention` label stays on the issue as the human signal.
  */
-async function releaseClaim(n: number, cfg: OrchConfig, cwd: string): Promise<void> {
+async function releaseClaim(n: number, worktree: string, cwd: string): Promise<void> {
+  await removeWorktree(worktree, { cwd });
   await lockRelease(n, { cwd });
-  await removeWorktree(worktreePath(cfg.worktreeRoot, n, cwd), { cwd });
 }
 
 /**
