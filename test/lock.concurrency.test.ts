@@ -3,7 +3,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
-import { claim, release, isLocked, listLocks } from "../src/git/lock.js";
+import {
+  claim,
+  createOwnerToken,
+  owner,
+  release,
+  releaseOwned,
+  isLocked,
+  listLocks,
+} from "../src/git/lock.js";
 
 /** Create a throwaway git repo with a single commit; return its path. */
 async function makeRepo(): Promise<string> {
@@ -57,5 +65,18 @@ describe("atomic claim (git ref mutex)", () => {
     await claim(3, { cwd: repo });
     const locks = (await listLocks({ cwd: repo })).sort((a, b) => a - b);
     expect(locks).toEqual([1, 2, 3]);
+  });
+
+  it("releases a saga lock only when its unique owner token still matches", async () => {
+    const ours = await createOwnerToken(9, "codex", { cwd: repo });
+    const other = await createOwnerToken(9, "claude", { cwd: repo });
+    expect(ours).not.toBe(other);
+    expect((await claim(9, { cwd: repo, sha: ours })).outcome).toBe("acquired");
+    expect(await owner(9, { cwd: repo })).toBe(ours);
+
+    expect(await releaseOwned(9, other, { cwd: repo })).toBe(false);
+    expect(await owner(9, { cwd: repo })).toBe(ours);
+    expect(await releaseOwned(9, ours, { cwd: repo })).toBe(true);
+    expect(await owner(9, { cwd: repo })).toBeNull();
   });
 });
