@@ -983,11 +983,12 @@
         };
 
         const toEntry = (row) => ({ issue: row.issue, agent: row.agent, effort: row.effort });
+        const actionHeaders = { "Content-Type": "application/json", "X-Orch-Request": "dashboard" };
 
         const sendAssign = async (plan, origin) => {
           const response = await fetch("/actions/assign", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: actionHeaders,
             body: JSON.stringify({ plan, origin }),
           });
           const data = await response.json().catch(() => ({}));
@@ -999,7 +1000,7 @@
           setRoutingStatus("Running the judge…");
           routing.suggestBtn.disabled = true;
           try {
-            const response = await fetch("/actions/suggest", { method: "POST" });
+            const response = await fetch("/actions/suggest", { method: "POST", headers: actionHeaders });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `suggest failed (${response.status})`);
             const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
@@ -1125,7 +1126,7 @@
           try {
             const response = await fetch("/actions/plan-preview", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: actionHeaders,
               body: rawText,
             });
             const data = await response.json().catch(() => ({}));
@@ -1161,7 +1162,7 @@
           try {
             const response = await fetch("/actions/plan-create", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
+              headers: actionHeaders,
               body: planDraft,
             });
             const data = await response.json().catch(() => ({}));

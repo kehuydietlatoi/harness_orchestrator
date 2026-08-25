@@ -44,13 +44,32 @@ function request(port: number, path: string): Promise<ResponseView> {
   });
 }
 
-function post(port: number, path: string, body?: unknown): Promise<ResponseView> {
+interface PostOptions {
+  headers?: Record<string, string>;
+  omitHeaders?: string[];
+  omitHost?: boolean;
+}
+
+function post(port: number, path: string, body?: unknown, options: PostOptions = {}): Promise<ResponseView> {
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    const headers = payload
-      ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) }
-      : {};
-    const req = httpRequest({ host: "127.0.0.1", port, path, method: "POST", headers }, (response) => {
+    const headers: Record<string, string | number> = {
+      "Content-Type": "application/json",
+      "X-Orch-Request": "dashboard",
+      Origin: `http://127.0.0.1:${port}`,
+      ...options.headers,
+    };
+    if (payload !== undefined) headers["Content-Length"] = Buffer.byteLength(payload);
+    for (const name of options.omitHeaders ?? []) delete headers[name];
+
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port,
+      path,
+      method: "POST",
+      headers,
+      setHost: !options.omitHost,
+    }, (response) => {
       let received = "";
       response.setEncoding("utf8");
       response.on("data", (chunk) => (received += chunk));
@@ -134,6 +153,7 @@ describe("dashboard server", () => {
     expect(response.body).toContain("Suggest routing");
     expect(response.body).toContain("/actions/suggest");
     expect(response.body).toContain("/actions/assign");
+    expect(response.body).toContain('"X-Orch-Request": "dashboard"');
   });
 
   it("starts on the IPv4 localhost interface only", async () => {
@@ -166,6 +186,100 @@ describe("write surface", () => {
     servers.push(server);
     return listen(server);
   };
+
+  it("rejects untrusted action requests before any injected dependency runs", async () => {
+    const touched = vi.fn();
+    const { deps } = fakeDeps({
+      loadConfig: () => {
+        touched();
+        return { agents: ["claude", "codex"] } as OrchConfig;
+      },
+      listOpenIssues: async () => {
+        touched();
+        return [];
+      },
+      readRuns: () => {
+        touched();
+        return [];
+      },
+      runJudge: async () => {
+        touched();
+        return [];
+      },
+      editIssue: async () => {
+        touched();
+      },
+      createIssues: async () => {
+        touched();
+        return [];
+      },
+    });
+    const port = await start(deps);
+    const cases: Array<{ name: string; options: PostOptions; status: number }> = [
+      // Node's HTTP/1.1 parser rejects a missing Host before createServer's callback runs.
+      { name: "missing Host", options: { omitHost: true }, status: 400 },
+      {
+        name: "hostile Host",
+        options: { headers: { Host: `dashboard.attacker.example:${port}` } },
+        status: 403,
+      },
+      {
+        name: "wrong local port in Host",
+        options: { headers: { Host: `127.0.0.1:${port + 1}` } },
+        status: 403,
+      },
+      {
+        name: "hostile Origin",
+        options: { headers: { Origin: "https://attacker.example" } },
+        status: 403,
+      },
+      { name: "missing Origin", options: { omitHeaders: ["Origin"] }, status: 403 },
+      {
+        name: "missing Orch header",
+        options: { omitHeaders: ["X-Orch-Request"] },
+        status: 403,
+      },
+      {
+        name: "wrong Orch header",
+        options: { headers: { "X-Orch-Request": "attacker" } },
+        status: 403,
+      },
+      {
+        name: "non-JSON Content-Type",
+        options: { headers: { "Content-Type": "text/plain" } },
+        status: 415,
+      },
+      {
+        name: "missing Content-Type",
+        options: { omitHeaders: ["Content-Type"] },
+        status: 415,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const response = await post(port, "/actions/assign", { plan: [], origin: "human" }, testCase.options);
+      expect(response.status, testCase.name).toBe(testCase.status);
+    }
+    expect(touched).not.toHaveBeenCalled();
+  });
+
+  it("accepts a same-origin localhost Host and JSON Content-Type parameters", async () => {
+    const { deps, edits } = fakeDeps();
+    const port = await start(deps);
+    const response = await post(port, "/actions/assign", {
+      origin: "human",
+      plan: [{ issue: 1, agent: "codex", effort: "easy" }],
+    }, {
+      headers: {
+        Host: `localhost:${port}`,
+        Origin: `http://localhost:${port}`,
+        "Content-Type": "Application/JSON; Charset=UTF-8",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(edits).toEqual([{ n: 1, labels: ["agent:codex", "effort:easy"] }]);
+  });
 
   it("POST /actions/suggest returns the judge's suggestions and writes nothing", async () => {
     const { deps, edits } = fakeDeps();
