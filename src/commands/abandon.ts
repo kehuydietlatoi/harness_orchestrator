@@ -2,7 +2,7 @@ import pc from "picocolors";
 import { loadConfig } from "../config.js";
 import { resolveAgent } from "../tasks/service.js";
 import { release as lockRelease } from "../git/lock.js";
-import { removeWorktree, worktreePath } from "../git/worktree.js";
+import { discardWorktree, worktreePath } from "../git/worktree.js";
 import { getIssue, editIssue } from "../github/github.js";
 import { issueAgent } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION, agentLabel } from "../github/labels.js";
@@ -24,7 +24,7 @@ export async function abandonCommand(issueArg: string, opts: { agent?: string })
   const owner = issueAgent(issue);
 
   const released = await lockRelease(number, { cwd });
-  const removed = await removeWorktree(worktreePath(cfg.worktreeRoot, number, cwd), { cwd });
+  const removed = await discardWorktree(worktreePath(cfg.worktreeRoot, number, cwd), { cwd });
 
   const removeLabels = [STATUS.claimed, STATUS.inProgress, STATUS.inReview, NEEDS_ATTENTION];
   if (owner) removeLabels.push(agentLabel(owner));

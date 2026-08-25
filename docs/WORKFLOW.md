@@ -68,12 +68,12 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | acquire lock, assign `@me`, cut worktree |
 | Run start | `processNext` | `status:in-progress` | `status:claimed` | spawn harness at resolved model |
 | Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |
-| Run fails / times out | `processNext` | `needs-attention` | *(none — see wrinkle)* | release lock, prune worktree |
-| Run, no commits | `processNext` | `needs-attention` | `status:in-progress` | release lock, prune worktree |
+| Run fails / times out | `processNext` | `needs-attention` | *(none — see wrinkle)* | safely prune only if clean, attached, and preserved; release lock |
+| Run, no commits | `processNext` | `needs-attention` | `status:in-progress` | safely prune only if clean, attached, and preserved; release lock |
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | `gh pr review --approve` |
 | Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | `gh pr review --request-changes` |
-| Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, prune worktree, release lock |
-| Abandon | `abandon` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | release lock, prune worktree |
+| Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, safely prune worktree, release lock |
+| Abandon | `abandon` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | release lock, explicitly discard worktree |
 
 ## Known wrinkles (documented, not yet fixed)
 
