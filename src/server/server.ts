@@ -7,6 +7,7 @@ import { runJudge } from "../routing/judge.js";
 import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../github/labels.js";
 import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
 import { readRuns } from "../board/telemetry.js";
+import { createFromPlan, parseTickets, resolvePlan, type Created, type Ticket } from "../tasks/plan.js";
 
 // Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
 // (build); "../../public" resolves to <repo>/public in both, since src and dist
@@ -24,6 +25,8 @@ export interface ServerDeps {
   readRuns: (cwd: string) => ReturnType<typeof readRuns>;
   runJudge: (brief: string, cfg: OrchConfig, cwd: string) => Promise<PlanEntry[]>;
   editIssue: (n: number, labels: string[], cwd: string) => Promise<void>;
+  /** Create issues from a ticket draft (`POST /actions/plan-create`); overridable for --demo/tests. */
+  createIssues: (tickets: Ticket[], cwd: string) => Promise<Created[]>;
   /** Board projection for `GET /status`; overridable so `--demo` can serve a fixture. */
   snapshot: (cwd: string) => Promise<Snapshot>;
 }
@@ -34,6 +37,7 @@ const defaultDeps: ServerDeps = {
   readRuns,
   runJudge,
   editIssue: (n, labels, cwd) => editIssue(n, { cwd, addLabels: labels }).then(() => undefined),
+  createIssues: createFromPlan,
   snapshot: buildSnapshot,
 };
 
@@ -141,6 +145,45 @@ async function handleAssign(
   sendJson(response, 200, { writes: result.writes, skips: result.skips });
 }
 
+/** Preview a ticket draft: parse + validate, return the resolved plan. Writes nothing. */
+async function handlePlanPreview(
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  let tickets: Ticket[];
+  try {
+    tickets = parseTickets(await readBody(request));
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  sendJson(response, 200, resolvePlan(tickets)); // { tickets, errors, warnings }
+}
+
+/** Create issues from a ticket draft — the second mutating route. Refuses (400) on
+ * blocking validation errors so a bad draft never half-creates a board. */
+async function handlePlanCreate(
+  cwd: string,
+  deps: ServerDeps,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  let tickets: Ticket[];
+  try {
+    tickets = parseTickets(await readBody(request));
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+  const { errors } = resolvePlan(tickets);
+  if (errors.length) {
+    sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
+    return;
+  }
+  const created = await deps.createIssues(tickets, cwd);
+  sendJson(response, 200, { created });
+}
+
 export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.Server {
   return http.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -156,7 +199,11 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
           ? handleSuggest(cwd, deps, response)
           : pathname === "/actions/assign"
             ? handleAssign(cwd, deps, request, response)
-            : null;
+            : pathname === "/actions/plan-preview"
+              ? handlePlanPreview(request, response)
+              : pathname === "/actions/plan-create"
+                ? handlePlanCreate(cwd, deps, request, response)
+                : null;
       if (!handler) {
         sendJson(response, 404, { error: "unknown action" });
         return;

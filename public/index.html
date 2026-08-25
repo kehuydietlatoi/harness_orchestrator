@@ -596,6 +596,36 @@
         </div>
       </section>
 
+      <section class="panel" id="plan" aria-labelledby="plan-heading">
+        <div class="panel-header">
+          <h2 id="plan-heading">Plan</h2>
+          <div class="routing-actions">
+            <label class="btn btn-ghost" for="plan-file">Choose tickets.json</label>
+            <input type="file" id="plan-file" accept=".json,application/json" hidden />
+            <button type="button" class="btn btn-ghost" id="plan-example-btn">Load example</button>
+            <button type="button" class="btn btn-accent" id="plan-create-btn" disabled>Create issues</button>
+          </div>
+        </div>
+        <div class="routing-status" id="plan-status" role="status" aria-live="polite">
+          Select a <code>tickets.json</code> — or <strong>Load example</strong> — to preview the issues it
+          would create. Draft one with <code>orch plan --draft "&lt;goal&gt;"</code>. Nothing is created
+          until you click <strong>Create issues</strong>.
+        </div>
+        <div class="table-wrap">
+          <table id="plan-table" hidden>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Title</th>
+                <th>Depends on</th>
+                <th>Files</th>
+              </tr>
+            </thead>
+            <tbody id="plan-body"></tbody>
+          </table>
+        </div>
+      </section>
+
       <section class="panel" aria-labelledby="tasks-heading">
         <div class="panel-header">
           <h2 id="tasks-heading">Tasks</h2>
@@ -1035,6 +1065,116 @@
             setRoutingStatus(error instanceof Error ? error.message : String(error), "error");
           } finally {
             routing.applyBtn.disabled = rows.length === 0;
+          }
+        });
+
+        // ---- Plan panel (preview a tickets.json, then create the issues) ----
+        const planUI = {
+          fileInput: document.querySelector("#plan-file"),
+          exampleBtn: document.querySelector("#plan-example-btn"),
+          createBtn: document.querySelector("#plan-create-btn"),
+          status: document.querySelector("#plan-status"),
+          table: document.querySelector("#plan-table"),
+          body: document.querySelector("#plan-body"),
+        };
+        const PLAN_EXAMPLE = [
+          { id: "auth-config", title: "Add OAuth provider config", body: "Load client id/secret + issuer from env.", files: ["src/auth/config.ts"] },
+          { id: "session-mw", title: "Add session middleware", body: "Verify the session cookie; 401 on protected routes.", dependsOn: ["auth-config"], files: ["src/mw/session.ts"] },
+          { id: "login-route", title: "Add /login and /callback routes", body: "Run the OAuth flow and set the session cookie.", dependsOn: ["auth-config", "session-mw"], files: ["src/routes/auth.ts"] },
+        ];
+        let planDraft = null; // raw tickets JSON currently previewed, or null
+
+        const setPlanStatus = (text, kind) => {
+          planUI.status.className = `routing-status${kind ? ` is-${kind}` : ""}`;
+          planUI.status.textContent = text;
+        };
+        const planCell = (text) => {
+          const td = document.createElement("td");
+          td.textContent = text;
+          return td;
+        };
+
+        const renderPlanPreview = (data) => {
+          const tickets = Array.isArray(data.tickets) ? data.tickets : [];
+          const errors = Array.isArray(data.errors) ? data.errors : [];
+          const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+          planUI.body.replaceChildren();
+          for (const t of tickets) {
+            const tr = document.createElement("tr");
+            tr.append(
+              planCell(String(t.index)),
+              planCell(t.title || "—"),
+              planCell(t.knownDeps && t.knownDeps.length ? t.knownDeps.join(", ") : "—"),
+              planCell(t.files && t.files.length ? t.files.join(", ") : "—"),
+            );
+            planUI.body.append(tr);
+          }
+          planUI.table.hidden = tickets.length === 0;
+          planUI.createBtn.disabled = tickets.length === 0 || errors.length > 0;
+
+          const notes = [...warnings.map((w) => `warning: ${w}`), ...errors.map((e) => `error: ${e}`)].join(" · ");
+          const summary = `${tickets.length} issue(s) to create`;
+          if (errors.length) setPlanStatus(`${summary} — ${errors.length} error(s) block creation. ${notes}`, "error");
+          else if (warnings.length) setPlanStatus(`${summary}. ${notes}`, "ok");
+          else setPlanStatus(`${summary}. Review, then Create issues.`, "ok");
+        };
+
+        const previewPlan = async (rawText) => {
+          setPlanStatus("Validating draft…");
+          planUI.createBtn.disabled = true;
+          try {
+            const response = await fetch("/actions/plan-preview", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: rawText,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `preview failed (${response.status})`);
+            planDraft = rawText;
+            renderPlanPreview(data);
+          } catch (error) {
+            planDraft = null;
+            planUI.table.hidden = true;
+            planUI.createBtn.disabled = true;
+            setPlanStatus(error instanceof Error ? error.message : String(error), "error");
+          }
+        };
+
+        planUI.fileInput.addEventListener("change", () => {
+          const file = planUI.fileInput.files && planUI.fileInput.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => previewPlan(String(reader.result || ""));
+          reader.onerror = () => setPlanStatus("Could not read that file.", "error");
+          reader.readAsText(file);
+          planUI.fileInput.value = ""; // allow re-selecting the same file
+        });
+
+        planUI.exampleBtn.addEventListener("click", () => previewPlan(JSON.stringify(PLAN_EXAMPLE, null, 2)));
+
+        planUI.createBtn.addEventListener("click", async () => {
+          if (!planDraft) return;
+          const count = planUI.body.childElementCount;
+          if (!window.confirm(`Create ${count} GitHub issue(s)? This cannot be undone from here.`)) return;
+          setPlanStatus("Creating issues…");
+          planUI.createBtn.disabled = true;
+          try {
+            const response = await fetch("/actions/plan-create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: planDraft,
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `create failed (${response.status})`);
+            const created = Array.isArray(data.created) ? data.created : [];
+            planDraft = null;
+            planUI.body.replaceChildren();
+            planUI.table.hidden = true;
+            setPlanStatus(`Created ${created.length} issue(s): ${created.map((c) => `#${c.number}`).join(", ")}.`, "ok");
+            void refresh();
+          } catch (error) {
+            setPlanStatus(error instanceof Error ? error.message : String(error), "error");
+            planUI.createBtn.disabled = false;
           }
         });
 

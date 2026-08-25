@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, isLoopback, startServer, type ServerDeps } from "../src/server/server.js";
 import type { OrchConfig } from "../src/config.js";
 import type { Issue } from "../src/github/github.js";
+import type { Ticket } from "../src/tasks/plan.js";
 
-vi.mock("../src/snapshot.js", () => ({
+vi.mock("../src/board/snapshot.js", () => ({
   buildSnapshot: vi.fn(async () => ({
     generatedAt: "2026-08-23T12:00:00.000Z",
     tasks: [],
@@ -70,8 +71,10 @@ function issue(number: number, labels: string[] = []): Issue {
 function fakeDeps(over: Partial<ServerDeps> = {}): {
   deps: ServerDeps;
   edits: Array<{ n: number; labels: string[] }>;
+  creates: Ticket[][];
 } {
   const edits: Array<{ n: number; labels: string[] }> = [];
+  const creates: Ticket[][] = [];
   const deps: ServerDeps = {
     loadConfig: () => ({ agents: ["claude", "codex"] }) as OrchConfig,
     listOpenIssues: async () => [issue(1), issue(2, ["agent:claude"])],
@@ -80,9 +83,13 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
     editIssue: async (n, labels) => {
       edits.push({ n, labels });
     },
+    createIssues: async (tickets) => {
+      creates.push(tickets);
+      return tickets.map((t, i) => ({ id: t.id, number: 100 + i, title: t.title }));
+    },
     ...over,
   };
-  return { deps, edits };
+  return { deps, edits, creates };
 }
 
 describe("dashboard server", () => {
@@ -236,6 +243,55 @@ describe("write surface", () => {
 
     expect(res.status).toBe(400);
     expect(edits).toHaveLength(0);
+  });
+
+  it("POST /actions/plan-preview validates a draft and writes nothing", async () => {
+    const { deps, creates } = fakeDeps();
+    const port = await start(deps);
+    const res = await post(port, "/actions/plan-preview", [
+      { id: "a", title: "A", files: ["src/x.ts"] },
+      { id: "b", title: "B", dependsOn: ["a"], files: ["src/x.ts"] },
+    ]);
+
+    expect(res.status).toBe(200);
+    const parsed = JSON.parse(res.body);
+    expect(parsed.tickets).toHaveLength(2);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.warnings.some((w: string) => /claimed by tickets 1, 2/.test(w))).toBe(true);
+    expect(creates).toHaveLength(0);
+  });
+
+  it("POST /actions/plan-preview rejects a non-array draft with 400", async () => {
+    const { deps } = fakeDeps();
+    const port = await start(deps);
+    const res = await post(port, "/actions/plan-preview", { not: "an array" });
+    expect(res.status).toBe(400);
+  });
+
+  it("POST /actions/plan-create creates issues from a valid draft", async () => {
+    const { deps, creates } = fakeDeps();
+    const port = await start(deps);
+    const res = await post(port, "/actions/plan-create", [
+      { id: "a", title: "First" },
+      { id: "b", title: "Second", dependsOn: ["a"] },
+    ]);
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body).created).toEqual([
+      { id: "a", number: 100, title: "First" },
+      { id: "b", number: 101, title: "Second" },
+    ]);
+    expect(creates).toHaveLength(1);
+  });
+
+  it("POST /actions/plan-create refuses a draft with blocking errors (400, no creates)", async () => {
+    const { deps, creates } = fakeDeps();
+    const port = await start(deps);
+    const res = await post(port, "/actions/plan-create", [{ id: "a" }]); // missing title
+
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/invalid tickets/i);
+    expect(creates).toHaveLength(0);
   });
 
   it("returns 404 for an unknown action", async () => {
