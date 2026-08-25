@@ -47,7 +47,7 @@ export async function doctorCommand(): Promise<void> {
     checks.push({
       name: "orch labels present",
       ok: missing.length === 0,
-      note: missing.length ? `missing: ${missing.join(", ")}` : "",
+      note: missing.length ? `missing: ${missing.join(", ")} — run \`orch init\`` : "",
     });
   }
 

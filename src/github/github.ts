@@ -48,6 +48,12 @@ export async function ensureLabel(
   return "error";
 }
 
+/** Ensure each label exists (idempotent, best-effort). A label that fails to
+ * create is skipped — the subsequent `--add-label` surfaces any real problem. */
+export async function ensureLabels(labels: GhLabel[], cwd: string = process.cwd()): Promise<void> {
+  for (const label of labels) await ensureLabel(label, cwd);
+}
+
 export async function listLabels(cwd: string = process.cwd()): Promise<string[]> {
   const r = await exec("gh", ["label", "list", "--json", "name", "-L", "200"], { cwd });
   if (r.code !== 0) return [];

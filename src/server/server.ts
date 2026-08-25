@@ -2,9 +2,9 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "../routing/assign.js";
 import { loadConfig, type OrchConfig } from "../config.js";
-import { editIssue, listIssues, type Issue } from "../github/github.js";
+import { editIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
 import { runJudge } from "../routing/judge.js";
-import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../github/labels.js";
+import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github/labels.js";
 import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
 import { readRuns } from "../board/telemetry.js";
 import { createFromPlan, parseTickets, resolvePlan, type Created, type Ticket } from "../tasks/plan.js";
@@ -36,7 +36,10 @@ const defaultDeps: ServerDeps = {
   listOpenIssues: (cwd) => listIssues({ cwd, state: "open" }),
   readRuns,
   runJudge,
-  editIssue: (n, labels, cwd) => editIssue(n, { cwd, addLabels: labels }).then(() => undefined),
+  editIssue: (n, labels, cwd) =>
+    ensureLabels(labelDefs(labels), cwd) // self-heal: create routing labels a stale repo lacks
+      .then(() => editIssue(n, { cwd, addLabels: labels }))
+      .then(() => undefined),
   createIssues: createFromPlan,
   snapshot: buildSnapshot,
 };
