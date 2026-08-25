@@ -22,8 +22,8 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | Label | Color | Meaning | Set by | Cleared by |
 |---|---|---|---|---|
 | `status:todo` | `ededed` | Ready to be claimed (the implicit default when no `status:*` present) | `orch init`; `abandon` (reset) | `claimSpecific` |
-| `status:claimed` | `fbca04` | Lock held, worktree being set up | `claimSpecific` | `processNext` start; `submit`; `abandon` |
-| `status:in-progress` | `0e8a16` | Harness is running | `processNext` start; `requestChanges` (bounce back) | `submit`; no-commits path; `abandon` |
+| `status:claimed` | `fbca04` | Lock held, worktree being set up | `claimSpecific` | `processNext` start/recovery; `submit`; `abandon` |
+| `status:in-progress` | `0e8a16` | Harness is running | `processNext` start; `requestChanges` (bounce back) | `submit`; runner recovery; `abandon` |
 | `status:in-review` | `1d76db` | PR open, awaiting cross-review | `submit` | `requestChanges`; `merge`; `abandon` |
 | `status:done` | `5319e7` | Merged | `merge` | — (terminal) |
 | `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | *(nothing)* |
@@ -32,7 +32,7 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign` | — (**sticky**) |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit` | `approve`; `requestChanges` |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Cross-review approval recorded | `approve` | — (terminal) |
-| `needs-attention` | `d93f0b` | Run failed / produced nothing — a human must look | `processNext` (fail, timeout, no-commits) | `abandon` |
+| `needs-attention` | `d93f0b` | Run failed / produced nothing — a human must look | `processNext` recovery (fail, timeout, exception, no-commits) | `abandon` |
 | `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
 **Sticky** = set once at routing/claim time and honored on every future run; only
@@ -68,8 +68,9 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | owner-token lock, assign `@me`, cut worktree; compensate on incomplete setup |
 | Run start | `processNext` | `status:in-progress` | `status:claimed` | spawn harness at resolved model |
 | Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |
-| Run fails / times out | `processNext` | `needs-attention` | *(none — see wrinkle)* | safely prune only if clean, attached, and preserved; release lock |
-| Run, no commits | `processNext` | `needs-attention` | `status:in-progress` | safely prune only if clean, attached, and preserved; release lock |
+| Run fails / times out | `processNext` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
+| Run exception / submit uncertainty | `processNext` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
+| Run, no commits | `processNext` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | `gh pr review --approve` |
 | Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | `gh pr review --request-changes` |
 | Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, safely prune worktree, release lock |
@@ -92,13 +93,7 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
    *display* blocked-ness, but the label is not the source of that truth. Either wire it
    up or drop it — tracked as a hardening candidate.
 
-2. **A failed run leaves `status:in-progress` on.** The fail/timeout path adds
-   `needs-attention` but does **not** remove `status:in-progress`, so a failed issue
-   reads as `in-progress + needs-attention` — while the *no-commits* path on the same
-   function removes `in-progress`. Inconsistent; the lock is released either way so the
-   issue is still re-claimable. Harden by making both paths reset status uniformly.
-
-3. **`effort:` is never cleared.** Once routed, an issue keeps its effort tier forever
+2. **`effort:` is never cleared.** Once routed, an issue keeps its effort tier forever
    unless a human edits it. Intentional (sticky routing), but means re-routing effort
    requires a manual label edit or `abandon`.
 
