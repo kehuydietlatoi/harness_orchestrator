@@ -18,11 +18,10 @@ the source of truth for what the words mean. Hard-to-reverse decisions live in
 
 ## The board
 
-- **board** — the set of GitHub Issues + PRs for the repo. There is **no database**;
-  GitHub is the state, git is the code, `runs.jsonl` is the telemetry. Everything else
-  is a *derived projection* over those three.
-- **issue** — one unit of work. Its **status** (`status:*` label), **owner**
-  (`agent:*`), and **effort** (`effort:*`) are all carried as labels.
+- **board** — the set of tasks and their observed GitHub, git, and telemetry facts.
+  There is no separate database; views and labels are derived projections.
+- **issue** — one unit of work. Its lifecycle state is derived from **task facts**;
+  `status:*` labels project that state, while `agent:*` and `effort:*` labels route it.
 - **dependency** — a `Depends-on: #n` line in an issue body. An issue is **blocked**
   while any dependency is still open. Blocking is *computed on read*
   (`isEligible` / `openDepsFromMap`), never stored — see the `status:blocked` note in
@@ -74,6 +73,16 @@ The pieces of the routing pipeline:
 
 ## The work loop
 
+- **task facts** — one observation of an issue, claim lock, worktree, branch, PR, and
+  latest unresolved run outcome. Lifecycle labels are not facts.
+- **task state** — the authoritative lifecycle interpretation of task facts: `ready`,
+  `claimed`, `in-progress`, `in-review`, `needs-attention`, `done`, or `inconsistent`.
+- **needs-attention** — a coherent but interrupted task that needs an explicit recovery
+  choice, such as a failed run, closed PR, or unprotected branch work.
+- **inconsistent** — a task whose facts are missing or contradict lifecycle invariants,
+  so no automatic transition is safe until those facts are reconciled.
+- **transition decision** — a pure allow/deny judgment for a requested task event from
+  its current state. Adapters perform the resulting external changes.
 - **claim** — atomically take an eligible issue: acquire a git-ref lock
   (`refs/orch/lock/issue-<n>`), label it `status:claimed` + `agent:<me>`, cut a
   **worktree**. Rolls the lock back on setup failure (ADR-0002).
