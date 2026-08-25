@@ -31,6 +31,32 @@ export async function currentLogin(opts: { cwd?: string } = {}): Promise<string>
 }
 
 // ---------------------------------------------------------------------------
+// REST pagination
+// ---------------------------------------------------------------------------
+
+const REST_PAGE_SIZE = 100;
+
+/** Page through a REST list endpoint via `gh api`, following `page`/`per_page`
+ * until a page comes back short — the only way to get a complete result set
+ * without an artificial cap (the `gh <noun> list` subcommands only take a
+ * single `--limit`, which silently truncates instead of paging). */
+async function paginatedApi<T>(
+  path: string,
+  params: Record<string, string>,
+  opts: { cwd?: string },
+): Promise<T[]> {
+  const results: T[] = [];
+  for (let page = 1; ; page++) {
+    const qs = new URLSearchParams({ ...params, per_page: String(REST_PAGE_SIZE), page: String(page) });
+    const r = await exec("gh", ["api", `${path}?${qs.toString()}`], { cwd: opts.cwd });
+    if (r.code !== 0) throw new Error(`gh api ${path} failed: ${r.stderr.trim()}`);
+    const items = JSON.parse(r.stdout) as T[];
+    results.push(...items);
+    if (items.length < REST_PAGE_SIZE) return results;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Labels
 // ---------------------------------------------------------------------------
 
@@ -55,10 +81,9 @@ export async function ensureLabels(labels: GhLabel[], cwd: string = process.cwd(
 }
 
 export async function listLabels(cwd: string = process.cwd()): Promise<string[]> {
-  const r = await exec("gh", ["label", "list", "--json", "name", "-L", "200"], { cwd });
-  if (r.code !== 0) return [];
   try {
-    return (JSON.parse(r.stdout) as { name: string }[]).map((l) => l.name);
+    const labels = await paginatedApi<{ name: string }>("repos/{owner}/{repo}/labels", {}, { cwd });
+    return labels.map((l) => l.name);
   } catch {
     return [];
   }
@@ -83,16 +108,31 @@ function parseIssue(o: any): Issue {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function parseRestIssue(o: any): Issue {
+  return {
+    number: o.number,
+    title: o.title ?? "",
+    body: o.body ?? "",
+    state: String(o.state ?? "open").toUpperCase(),
+    labels: (o.labels ?? []).map((l: any) => (typeof l === "string" ? l : (l.name as string))),
+    assignees: (o.assignees ?? []).map((a: any) => a.login as string),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 export async function listIssues(
   opts: { cwd?: string; state?: "open" | "closed" | "all" } = {},
 ): Promise<Issue[]> {
-  const r = await exec(
-    "gh",
-    ["issue", "list", "--state", opts.state ?? "open", "--json", ISSUE_FIELDS, "--limit", "200"],
+  // The REST issues endpoint also returns PRs (flagged via `pull_request`);
+  // filter them out to match `gh issue list` semantics.
+  /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
+  const items = await paginatedApi<any>(
+    "repos/{owner}/{repo}/issues",
+    { state: opts.state ?? "open" },
     { cwd: opts.cwd },
   );
-  if (r.code !== 0) throw new Error(`gh issue list failed: ${r.stderr.trim()}`);
-  return (JSON.parse(r.stdout) as unknown[]).map(parseIssue);
+  return items.filter((o) => !o.pull_request).map(parseRestIssue);
 }
 
 export async function getIssue(number: number, opts: { cwd?: string } = {}): Promise<Issue> {
@@ -193,14 +233,25 @@ export async function getPr(number: number, opts: { cwd?: string } = {}): Promis
   return parsePr(JSON.parse(r.stdout));
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function parseRestPr(o: any): Pr {
+  return {
+    number: o.number,
+    title: o.title ?? "",
+    body: o.body ?? "",
+    headRefName: o.head?.ref ?? "",
+    state: String(o.state ?? "open").toUpperCase(),
+  };
+}
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 export async function listOpenPrs(opts: { cwd?: string } = {}): Promise<Pr[]> {
-  const r = await exec(
-    "gh",
-    ["pr", "list", "--state", "open", "--json", PR_FIELDS, "--limit", "200"],
+  const items = await paginatedApi<unknown>(
+    "repos/{owner}/{repo}/pulls",
+    { state: "open" },
     { cwd: opts.cwd },
   );
-  if (r.code !== 0) throw new Error(`gh pr list failed: ${r.stderr.trim()}`);
-  return (JSON.parse(r.stdout) as unknown[]).map(parsePr);
+  return items.map(parseRestPr);
 }
 
 export async function prDiff(number: number, opts: { cwd?: string } = {}): Promise<string> {
