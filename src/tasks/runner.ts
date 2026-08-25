@@ -42,24 +42,29 @@ function recordRun(
   logFile: string,
   cwd: string,
 ): void {
-  let logText = "";
   try {
-    logText = readFileSync(logFile, "utf8");
-  } catch {
-    // Preserve one record per completed run even when its log is unavailable.
-  }
+    let logText = "";
+    try {
+      logText = readFileSync(logFile, "utf8");
+    } catch {
+      // Preserve one record per completed run even when its log is unavailable.
+    }
 
-  const usage = parseUsage(logText, agent);
-  const rec: RunRecord = {
-    ts: new Date().toISOString(),
-    project: projectId(cwd),
-    issue,
-    agent,
-    outcome,
-    durationMs,
-    ...usage,
-  };
-  appendRun(rec, cwd);
+    const usage = parseUsage(logText, agent);
+    const rec: RunRecord = {
+      ts: new Date().toISOString(),
+      project: projectId(cwd),
+      issue,
+      agent,
+      outcome,
+      durationMs,
+      ...usage,
+    };
+    appendRun(rec, cwd);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`warning: could not record run telemetry: ${message}`);
+  }
 }
 
 /**
@@ -77,65 +82,116 @@ export async function processNext(
   if (!task) return null;
 
   const n = task.issue.number;
+  const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");
-  mkdirSync(logDir, { recursive: true });
   const logFile = resolve(logDir, `issue-${n}.jsonl`);
+  let summary: RunSummary;
+  let telemetryOutcome: string;
+  let harnessDurationMs: number | undefined;
+  let preserveWorktree = false;
 
-  await editIssue(n, { cwd, addLabels: [STATUS.inProgress], removeLabels: [STATUS.claimed] });
-  console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
+  try {
+    mkdirSync(logDir, { recursive: true });
+    await editIssue(n, { cwd, addLabels: [STATUS.inProgress], removeLabels: [STATUS.claimed] });
+    console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
-  const adapter = makeAdapter(agent, cfg);
-  const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
-  const model = resolveTaskModel(agent, task.issue, cfg);
-  const result = await adapter.runTask({
-    issue: n,
-    agent,
-    worktree: task.worktree.path,
-    prompt,
-    model,
-    logFile,
-    timeoutMs: cfg.taskTimeoutMs,
-  });
+    const adapter = makeAdapter(agent, cfg);
+    const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
+    const model = resolveTaskModel(agent, task.issue, cfg);
+    const result = await adapter.runTask({
+      issue: n,
+      agent,
+      worktree: task.worktree.path,
+      prompt,
+      model,
+      logFile,
+      timeoutMs: cfg.taskTimeoutMs,
+    });
+    harnessDurationMs = result.durationMs;
 
-  if (!result.ok) {
-    await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
-    await releaseClaim(n, task.worktree.path, cwd);
-    console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
-    recordRun(n, agent, "failed", result.durationMs, logFile, cwd);
-    return { issue: n, outcome: "failed", durationMs: result.durationMs };
+    if (!result.ok) {
+      await recoverClaim(n, task.worktree.path, cwd);
+      console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
+      summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
+      telemetryOutcome = "failed";
+    } else {
+      // From this point a transient inspection/submit error may hide committed
+      // work or an already-open PR, so unexpected recovery must retain ownership.
+      preserveWorktree = true;
+      // Did the agent submit itself (issue now in-review)?
+      const cur = await getIssue(n, { cwd });
+      if (issueStatus(cur) === STATUS.inReview) {
+        console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
+        summary = { issue: n, outcome: "submitted", durationMs: result.durationMs };
+        telemetryOutcome = "submitted";
+      } else if ((await commitsAhead(task.worktree.path)) > 0) {
+        // Agent finished but didn't submit — auto-submit if it produced work.
+        const url = await submit(n, agent, cfg, cwd);
+        console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
+        summary = { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
+        telemetryOutcome = "auto-submitted";
+      } else {
+        await recoverClaim(n, task.worktree.path, cwd);
+        console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
+        summary = { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
+        telemetryOutcome = "needs-attention";
+      }
+    }
+  } catch (error) {
+    const durationMs = harnessDurationMs ?? Date.now() - startedAt;
+    await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree });
+    console.error(pc.red(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`));
+    summary = { issue: n, outcome: "failed", durationMs };
+    telemetryOutcome = "failed";
   }
 
-  // Did the agent submit itself (issue now in-review)?
-  const cur = await getIssue(n, { cwd });
-  if (issueStatus(cur) === STATUS.inReview) {
-    console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
-    recordRun(n, agent, "submitted", result.durationMs, logFile, cwd);
-    return { issue: n, outcome: "submitted", durationMs: result.durationMs };
-  }
-
-  // Agent finished but didn't submit — auto-submit if it produced work.
-  if ((await commitsAhead(task.worktree.path)) > 0) {
-    const url = await submit(n, agent, cfg, cwd);
-    console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
-    recordRun(n, agent, "auto-submitted", result.durationMs, logFile, cwd);
-    return { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
-  }
-
-  await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.inProgress] });
-  await releaseClaim(n, task.worktree.path, cwd);
-  console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
-  recordRun(n, agent, "needs-attention", result.durationMs, logFile, cwd);
-  return { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
+  recordRun(n, agent, telemetryOutcome, summary.durationMs, logFile, cwd);
+  return summary;
 }
 
 /**
- * Free a task's resources when a run does not produce a mergeable PR: drop the
- * claim lock and safely prune the worktree only when it contains no recoverable
- * work. The `needs-attention` label stays on the issue as the human signal.
+ * Free a task's resources when a run does not produce a mergeable PR. Release
+ * the claim lock only after safe cleanup proves there is no retained worktree;
+ * otherwise the lock continues to protect recoverable work.
  */
-async function releaseClaim(n: number, worktree: string, cwd: string): Promise<void> {
-  await removeWorktree(worktree, { cwd });
-  await lockRelease(n, { cwd });
+async function recoverClaim(
+  n: number,
+  worktree: string,
+  cwd: string,
+  opts: { preserveWorktree?: boolean } = {},
+): Promise<void> {
+  try {
+    await editIssue(n, {
+      cwd,
+      addLabels: [NEEDS_ATTENTION],
+      removeLabels: [STATUS.claimed, STATUS.inProgress],
+    });
+  } catch (error) {
+    warnRecovery(n, "could not mark needs-attention", error);
+    return;
+  }
+
+  if (opts.preserveWorktree) return;
+
+  let removed = false;
+  try {
+    removed = await removeWorktree(worktree, { cwd });
+  } catch (error) {
+    warnRecovery(n, "safe worktree cleanup failed", error);
+    return;
+  }
+  if (!removed) return;
+
+  try {
+    await lockRelease(n, { cwd });
+  } catch (error) {
+    warnRecovery(n, "claim lock release failed", error);
+  }
+}
+
+function warnRecovery(n: number, action: string, error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`warning: #${n} recovery ${action}: ${message}`);
 }
 
 /**
@@ -158,6 +214,7 @@ export async function runLoop(
 
   const max = Math.max(1, opts.max ?? cfg.maxConcurrent ?? 1);
   const active = new Set<Promise<void>>();
+  const dispatcherFailures: unknown[] = [];
   let drained = false;
 
   const launch = (): void => {
@@ -167,7 +224,8 @@ export async function runLoop(
         else summaries.push(s);
       })
       .catch((e: unknown) => {
-        console.error(pc.red("runner error: ") + (e instanceof Error ? e.message : String(e)));
+        dispatcherFailures.push(e);
+        drained = true;
       })
       .finally(() => active.delete(p));
     active.add(p);
@@ -178,5 +236,6 @@ export async function runLoop(
     if (active.size > 0) await Promise.race(active);
     else break;
   }
+  if (dispatcherFailures.length > 0) throw dispatcherFailures[0];
   return summaries;
 }
