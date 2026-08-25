@@ -91,9 +91,11 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
   deps: ServerDeps;
   edits: Array<{ n: number; labels: string[] }>;
   creates: Ticket[][];
+  dispatches: number[];
 } {
   const edits: Array<{ n: number; labels: string[] }> = [];
   const creates: Ticket[][] = [];
+  const dispatches: number[] = [];
   const deps: ServerDeps = {
     loadConfig: () => ({ agents: ["claude", "codex"] }) as OrchConfig,
     listOpenIssues: async () => [issue(1), issue(2, ["agent:claude"])],
@@ -106,9 +108,13 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
       creates.push(tickets);
       return tickets.map((t, i) => ({ id: t.id, number: 100 + i, title: t.title }));
     },
+    snapshot: async () => ({ generatedAt: "2026-08-23T12:00:00.000Z", tasks: [], reviewQueue: [] }),
+    dispatchIssue: async (n) => {
+      dispatches.push(n);
+    },
     ...over,
   };
-  return { deps, edits, creates };
+  return { deps, edits, creates, dispatches };
 }
 
 describe("dashboard server", () => {
@@ -154,6 +160,7 @@ describe("dashboard server", () => {
     expect(response.body).toContain("/actions/suggest");
     expect(response.body).toContain("/actions/assign");
     expect(response.body).toContain('"X-Orch-Request": "dashboard"');
+    expect(response.body).toContain("/actions/dispatch");
   });
 
   it("starts on the IPv4 localhost interface only", async () => {
@@ -406,6 +413,39 @@ describe("write surface", () => {
     expect(res.status).toBe(400);
     expect(JSON.parse(res.body).error).toMatch(/invalid tickets/i);
     expect(creates).toHaveLength(0);
+  });
+
+  it("POST /actions/dispatch returns 202 before starting the background run", async () => {
+    let release!: () => void;
+    const running = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started: number[] = [];
+    const { deps } = fakeDeps({
+      dispatchIssue: async (n) => {
+        started.push(n);
+        await running;
+      },
+    });
+    const port = await start(deps);
+
+    const res = await post(port, "/actions/dispatch", { issue: 2 });
+    expect(res.status).toBe(202);
+    expect(JSON.parse(res.body)).toEqual({ accepted: true, issue: 2 });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(started).toEqual([2]);
+    release();
+  });
+
+  it("POST /actions/dispatch rejects an invalid issue without starting a run", async () => {
+    const { deps, dispatches } = fakeDeps();
+    const port = await start(deps);
+    const res = await post(port, "/actions/dispatch", { issue: "2" });
+
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/positive integer/);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(dispatches).toEqual([]);
   });
 
   it("returns 404 for an unknown action", async () => {

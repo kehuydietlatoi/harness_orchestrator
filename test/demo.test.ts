@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeDemoDeps } from "../src/server/demo.js";
 import { applyPlan, selectUnassigned } from "../src/routing/assign.js";
 
@@ -45,5 +45,40 @@ describe("demo backend", () => {
     for (const w of writes) {
       expect(snap.tasks.find((t) => t.number === w.issue)?.agent).toBe(w.agent);
     }
+  });
+
+  it("simulates dispatch from claimed through in-progress to in-review", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDemoDeps({ lifecycleStepMs: 100 });
+      await deps.editIssue(107, ["agent:claude", "effort:hard"], CWD);
+
+      await deps.dispatchIssue(107, CWD);
+      expect((await deps.snapshot(CWD)).tasks.find((t) => t.number === 107)).toMatchObject({
+        status: "status:claimed",
+        locked: true,
+        worktree: "../wt/issue-107",
+      });
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await deps.snapshot(CWD)).tasks.find((t) => t.number === 107)?.status).toBe("status:in-progress");
+
+      await vi.advanceTimersByTimeAsync(100);
+      const finished = await deps.snapshot(CWD);
+      expect(finished.tasks.find((t) => t.number === 107)).toMatchObject({
+        status: "status:in-review",
+        prNumber: 205,
+      });
+      expect(finished.reviewQueue).toContain(205);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses to simulate dispatch for an unrouted or dependency-blocked todo", async () => {
+    const deps = makeDemoDeps();
+    await expect(deps.dispatchIssue(107, CWD)).rejects.toThrow(/not routed/);
+    await deps.editIssue(108, ["agent:codex", "effort:easy"], CWD);
+    await expect(deps.dispatchIssue(108, CWD)).rejects.toThrow(/blocked by.*#103/);
   });
 });

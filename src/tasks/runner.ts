@@ -3,11 +3,11 @@ import { resolve } from "node:path";
 import pc from "picocolors";
 import { exec } from "../util/exec.js";
 import type { OrchConfig } from "../config.js";
-import { claimNext, submit } from "./service.js";
+import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
-import { getIssue, editIssue, type Issue } from "../github/github.js";
-import { issueEffort, issueStatus } from "../board/board.js";
+import { getIssue, editIssue, listIssues, type Issue } from "../github/github.js";
+import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
@@ -27,6 +27,27 @@ export function resolveTaskModel(
 ): string | undefined {
   const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
   return cfg.adapters[agent]?.models?.[tier];
+}
+
+/** Validate that a specific open issue is a routed todo ready for dispatch. */
+export function resolveDispatchAgent(
+  issue: Issue,
+  open: ReadonlyMap<number, Issue>,
+  cfg: OrchConfig,
+): string {
+  if (issueStatus(issue) !== STATUS.todo) {
+    throw new Error(`#${issue.number} is ${issueStatus(issue)}, not a todo.`);
+  }
+  const agent = issueAgent(issue);
+  if (!agent) throw new Error(`#${issue.number} is not routed to an agent.`);
+  if (!cfg.agents.includes(agent)) {
+    throw new Error(`#${issue.number} is routed to unknown agent '${agent}'.`);
+  }
+  const blockers = openDepsFromMap(issue, new Map(open));
+  if (blockers.length > 0) {
+    throw new Error(`#${issue.number} is blocked by open issue(s): ${blockers.map((n) => `#${n}`).join(", ")}.`);
+  }
+  return agent;
 }
 
 async function commitsAhead(worktree: string, base = "main"): Promise<number> {
@@ -81,6 +102,35 @@ export async function processNext(
   const task = await claimNext(agent, cfg, cwd);
   if (!task) return null;
 
+  return processClaimed(task, agent, cfg, cwd);
+}
+
+/**
+ * Claim and run one routed todo by issue number. Unlike `processNext`, selection
+ * is explicit; execution and finalisation are shared through `processClaimed`.
+ */
+export async function dispatchSpecific(
+  number: number,
+  cfg: OrchConfig,
+  cwd: string,
+): Promise<RunSummary> {
+  const issues = await listIssues({ cwd, state: "open" });
+  const open = byNumber(issues);
+  const issue = open.get(number);
+  if (!issue) throw new Error(`#${number} is not an open issue.`);
+
+  const agent = resolveDispatchAgent(issue, open, cfg);
+  const task = await claimSpecific(number, agent, cfg, cwd);
+  return processClaimed(task, agent, cfg, cwd);
+}
+
+/** Drive an already-claimed task through harness execution and finalisation. */
+async function processClaimed(
+  task: ClaimedTask,
+  agent: string,
+  cfg: OrchConfig,
+  cwd: string,
+): Promise<RunSummary> {
   const n = task.issue.number;
   const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");

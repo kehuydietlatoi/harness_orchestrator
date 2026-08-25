@@ -23,6 +23,7 @@ import { planCommand } from "./commands/plan.js";
 import { assignCommand } from "./commands/assign.js";
 import { snapshotCommand } from "./commands/snapshot.js";
 import { serveCommand } from "./commands/serve.js";
+import { dispatchCommand } from "./commands/dispatch.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -103,7 +104,7 @@ program
 
 program
   .command("serve")
-  .description("Serve a live, read-only dashboard on localhost")
+  .description("Serve the live localhost control-plane dashboard")
   .option("--port <n>", "localhost port", "4000")
   .option("--demo", "serve a self-contained demo with seeded data (no gh, git, or claude needed)")
   .action(wrap(serveCommand));
@@ -115,6 +116,11 @@ program
   .option("-m, --max <n>", "max concurrent tasks (defaults to config.maxConcurrent)")
   .option("--once", "process a single task then exit")
   .action(wrap(runCommand));
+
+program
+  .command("dispatch <issue>")
+  .description("Claim and drive one routed todo by issue number")
+  .action(wrap(dispatchCommand));
 
 program
   .command("review-queue")
