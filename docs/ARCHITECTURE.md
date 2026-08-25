@@ -12,29 +12,31 @@ three shared sources of truth, so the two harnesses cannot diverge:
 
 ## Module map
 
+`src/` is grouped by subsystem. Dependencies flow **downward** only —
+`server`/`commands` → `routing`/`tasks` → `board` → `github`/`git` → `util` — so
+each folder is a clean layer with no cross-folder cycles.
+
 ```
-cli.ts                 command router (commander)
-config.ts              orch.config.json (BOM-tolerant)
-util/exec.ts           buffered subprocess helper (no shell)
-util/spawn.ts          streaming subprocess + log capture + timeout
-git.ts / github.ts     thin `git` / `gh` wrappers (issues, PRs, labels, checks, refs)
-lock.ts                atomic claim: git-ref mutex (create-only)
-worktree.ts            per-task worktree lifecycle
-board.ts               eligibility + dependency parsing + rendering
-labels.ts              status / agent / reviewed-by label vocabulary
-service.ts             claim (specific/next), submit
-brief.ts               buildBrief — task briefing handed to each harness (used by runner.ts)
-review.ts              review routing + the merge gate (evaluateGate is pure)
-runner.ts              the `orch run` dispatcher loop
-memory.ts              shared-memory append/list
-plan.ts                tickets -> issues, round-robin assignment
-adapters/              HarnessAdapter seam + claude/codex implementations
-commands/              one file per CLI command
+cli.ts                 command router (commander)               [entry]
+config.ts              orch.config.json (BOM-tolerant)          [shared kernel]
+memory.ts              shared memory (AGENTS.md) append/list     [shared kernel]
+
+util/    exec.ts (buffered subprocess, no shell) · spawn.ts (streaming + log capture + timeout)
+git/     git.ts (git wrapper) · worktree.ts (per-task lifecycle) · lock.ts (git-ref claim mutex, create-only)
+github/  github.ts (gh: issues, PRs, labels, checks, refs) · labels.ts (status/agent/reviewed-by vocabulary)
+board/   board.ts (eligibility + dependency parsing) · snapshot.ts (canonical read model) ·
+         telemetry.ts (runs.jsonl) · review.ts (review routing + the merge gate, evaluateGate is pure)
+routing/ assign.ts (routing brief + applyPlan) · judge.ts (LLM routing judge) · judge-eval.ts (plan validity)
+tasks/   service.ts (claim/submit) · runner.ts (the `orch run` dispatcher) · brief.ts (task briefing) ·
+         plan.ts (tickets -> issues, round-robin assignment)
+server/  server.ts (localhost dashboard + write surface) · demo.ts (in-memory --demo fixture)
+adapters/ HarnessAdapter seam + claude/codex implementations
+commands/ one file per CLI command
 ```
 
 ## The three load-bearing mechanisms
 
-### 1. Atomic claim (`lock.ts`)
+### 1. Atomic claim (`git/lock.ts`)
 
 Two agents must never work the same ticket. Claiming creates a ref
 `refs/orch/lock/issue-<n>` with `git update-ref --stdin`'s `create` verb, which
@@ -42,7 +44,7 @@ Two agents must never work the same ticket. Claiming creates a ref
 repo, so a local ref is a sound mutex (and is shared across worktrees). Exactly
 one racer wins; losers move on. See ADR-0002.
 
-### 2. Cross-harness merge gate (`review.ts`)
+### 2. Cross-harness merge gate (`board/review.ts`)
 
 The gate enforces a **process guarantee**: a PR may merge only when its issue has
 an author label and a `reviewed-by:<agent>` label naming different configured
@@ -59,7 +61,7 @@ requireHumanMerge, humanApproved }` (where `requireCrossReview` toggles the
 cross-review gate and `checksDetail` explains a red CI) it returns the blocking
 reasons — and is unit-tested in isolation.
 
-### 3. Harness adapters + dispatcher (`adapters/`, `runner.ts`)
+### 3. Harness adapters + dispatcher (`adapters/`, `tasks/runner.ts`)
 
 `HarnessAdapter` abstracts "run a harness headless in a worktree" behind
 `runTask` / `runReview` / `healthCheck`. Adding a harness = one file. The prompt

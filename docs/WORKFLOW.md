@@ -1,11 +1,12 @@
 # WORKFLOW — labels & issue lifecycle
 
 The single reference for **every label orch relies on** and **exactly when each is set
-or cleared**. Traced from source (`src/labels.ts`, `service.ts`, `runner.ts`,
-`review.ts`, `board.ts`, `commands/abandon.ts`) — if code and this table disagree, the
+or cleared**. Traced from source (`src/github/labels.ts`, `src/tasks/service.ts`,
+`src/tasks/runner.ts`, `src/board/review.ts`, `src/board/board.ts`,
+`src/commands/abandon.ts`) — if code and this table disagree, the
 code wins and this file is the bug. Vocabulary lives in `CONTEXT.md`.
 
-All labels are created by `orch init` from the canonical set in `src/labels.ts`.
+All labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
 
 ## Label catalogue
 

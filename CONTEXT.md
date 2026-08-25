@@ -45,10 +45,10 @@ Routing gives each issue two decisions, each recorded as a label:
 The pieces of the routing pipeline:
 
 - **brief** — the deterministic text a judge reads: every unrouted open issue (body,
-  deps, files-hint) plus a per-agent **telemetry rollup** (`formatBrief`, `src/assign.ts`).
+  deps, files-hint) plus a per-agent **telemetry rollup** (`formatBrief`, `src/routing/assign.ts`).
 - **judge** — the reasoning step that turns a brief into a plan. **External and
   swappable**: the interactive lead in-session today, a headless `claude -p` later
-  (`src/judge.ts`, planned). Both emit the *same* plan shape. The judge only *proposes*.
+  (`src/routing/judge.ts`, planned). Both emit the *same* plan shape. The judge only *proposes*.
 - **plan** — the machine-readable routing decision:
   `[{ issue, agent, effort, rationale }]`. The contract between judge and writer.
 - **writer** — the deterministic step that applies a plan to labels
@@ -66,8 +66,8 @@ The pieces of the routing pipeline:
 ## Surfaces
 
 - **snapshot** — the canonical read model of the open board (`buildSnapshot` /
-  `assemble`, `src/snapshot.ts`). Terminal, JSON, and dashboard all render from it.
-- **dashboard** — the localhost web UI (`src/server.ts`, `127.0.0.1` only). **Read-only
+  `assemble`, `src/board/snapshot.ts`). Terminal, JSON, and dashboard all render from it.
+- **dashboard** — the localhost web UI (`src/server/server.ts`, `127.0.0.1` only). **Read-only
   today** (`GET /` + `GET /status`). The routing UI (planned) adds an authenticated-by-
   locality **mutation surface** (`POST /actions/*`) behind a single `assertLocal`
   chokepoint — the first writes the dashboard is allowed to make.

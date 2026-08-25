@@ -8,14 +8,14 @@ import {
   type PlannedAssignments,
   type PlanEntry,
   type PlanSkip,
-} from "../assign.js";
+} from "../routing/assign.js";
 import { loadConfig } from "../config.js";
-import { editIssue, listIssues, type Issue } from "../github.js";
-import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../labels.js";
-import { runJudge } from "../judge.js";
-import { evaluatePlan, type EvalReport } from "../judge-eval.js";
-import { assignRoundRobin } from "../plan.js";
-import { readRuns } from "../telemetry.js";
+import { editIssue, listIssues, type Issue } from "../github/github.js";
+import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../github/labels.js";
+import { runJudge } from "../routing/judge.js";
+import { evaluatePlan, type EvalReport } from "../routing/judge-eval.js";
+import { assignRoundRobin } from "../tasks/plan.js";
+import { readRuns } from "../board/telemetry.js";
 
 export interface AssignOptions {
   apply?: string;

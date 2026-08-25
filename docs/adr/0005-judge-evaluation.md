@@ -5,7 +5,7 @@
 
 ## Context
 
-The routing judge (`src/judge.ts`, ADR-adjacent to the assignment design) is an
+The routing judge (`src/routing/judge.ts`, ADR-adjacent to the assignment design) is an
 LLM-as-judge: it reads a telemetry-grounded brief and returns, for every
 unassigned issue, `{issue, agent, effort, rationale}`. It is the one component
 whose output we cannot fully predict, so "is it any good?" needs an explicit
@@ -28,7 +28,7 @@ Split evaluation into the two questions that need different tools, and build onl
 the one that can be answered offline now.
 
 1. **Validity — built now, deterministic, in CI.** A pure function
-   `evaluatePlan(plan, issues, cfg)` (`src/judge-eval.ts`) scores a plan against
+   `evaluatePlan(plan, issues, cfg)` (`src/routing/judge-eval.ts`) scores a plan against
    the issues it was asked to route and returns every violation:
    `coverage-missing`, `coverage-extra`, `duplicate`, `invalid-agent`,
    `invalid-effort`, `missing-rationale`. It has no IO and no model call, so it

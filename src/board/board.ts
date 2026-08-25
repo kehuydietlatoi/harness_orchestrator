@@ -1,6 +1,6 @@
-import { type Issue, listIssues, getIssue } from "./github.js";
-import { STATUS } from "./labels.js";
-import { isLocked } from "./lock.js";
+import { type Issue, listIssues, getIssue } from "../github/github.js";
+import { STATUS } from "../github/labels.js";
+import { isLocked } from "../git/lock.js";
 
 export function issueStatus(i: Issue): string {
   const s = i.labels.find((l) => l.startsWith("status:"));

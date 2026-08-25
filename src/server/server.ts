@@ -1,14 +1,17 @@
 import http from "node:http";
 import { readFile } from "node:fs/promises";
-import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "./assign.js";
-import { loadConfig, type OrchConfig } from "./config.js";
-import { editIssue, listIssues, type Issue } from "./github.js";
-import { runJudge } from "./judge.js";
-import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "./labels.js";
-import { buildSnapshot, type Snapshot } from "./snapshot.js";
-import { readRuns } from "./telemetry.js";
+import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "../routing/assign.js";
+import { loadConfig, type OrchConfig } from "../config.js";
+import { editIssue, listIssues, type Issue } from "../github/github.js";
+import { runJudge } from "../routing/judge.js";
+import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../github/labels.js";
+import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
+import { readRuns } from "../board/telemetry.js";
 
-const dashboardPath = new URL("../public/index.html", import.meta.url);
+// Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
+// (build); "../../public" resolves to <repo>/public in both, since src and dist
+// are siblings under the repo root.
+const dashboardPath = new URL("../../public/index.html", import.meta.url);
 const BODY_LIMIT = 1_000_000; // 1 MB cap on POST bodies
 
 /**

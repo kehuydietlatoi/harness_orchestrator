@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { basename } from "node:path";
 import { loadConfig } from "../config.js";
-import { buildSnapshot, type Snapshot, type TaskView } from "../snapshot.js";
+import { buildSnapshot, type Snapshot, type TaskView } from "../board/snapshot.js";
 
 function latestRun(task: TaskView): string {
   if (!task.latestRun) return "-";

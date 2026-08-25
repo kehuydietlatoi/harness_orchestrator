@@ -6,7 +6,7 @@ import {
   runJudge,
   type JudgeRun,
   type JudgeRunner,
-} from "../src/judge.js";
+} from "../src/routing/judge.js";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
 
 const cfg: OrchConfig = DEFAULT_CONFIG;

@@ -1,14 +1,14 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent } from "../service.js";
-import { prDiff } from "../github.js";
+import { resolveAgent } from "../tasks/service.js";
+import { prDiff } from "../github/github.js";
 import {
   reviewQueue,
   approve,
   requestChanges,
   prIssueNumber,
-} from "../review.js";
-import { getPr } from "../github.js";
+} from "../board/review.js";
+import { getPr } from "../github/github.js";
 
 function parsePr(arg: string): number {
   const n = Number(arg);

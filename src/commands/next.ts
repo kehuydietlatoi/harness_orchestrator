@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent, claimNext } from "../service.js";
-import { buildBrief } from "../brief.js";
+import { resolveAgent, claimNext } from "../tasks/service.js";
+import { buildBrief } from "../tasks/brief.js";
 
 export async function nextCommand(opts: { agent?: string }): Promise<void> {
   const cwd = process.cwd();

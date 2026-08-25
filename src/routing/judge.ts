@@ -1,9 +1,9 @@
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { buildClaudeTaskArgs } from "./adapters/claude.js";
+import { buildClaudeTaskArgs } from "../adapters/claude.js";
 import type { PlanEntry } from "./assign.js";
-import type { OrchConfig } from "./config.js";
-import { spawnLogged } from "./util/spawn.js";
+import type { OrchConfig } from "../config.js";
+import { spawnLogged } from "../util/spawn.js";
 
 const WIN = process.platform === "win32";
 const RAW_LIMIT = 4000;

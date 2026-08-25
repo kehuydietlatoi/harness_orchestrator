@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { evaluateGate, prIssueNumber } from "../src/review.js";
+import { evaluateGate, prIssueNumber } from "../src/board/review.js";
 
 const base = {
   agents: ["claude", "codex"],

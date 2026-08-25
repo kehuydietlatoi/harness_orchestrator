@@ -1,6 +1,6 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent, submit } from "../service.js";
+import { resolveAgent, submit } from "../tasks/service.js";
 
 export async function submitCommand(issueArg: string, opts: { agent?: string }): Promise<void> {
   const cwd = process.cwd();

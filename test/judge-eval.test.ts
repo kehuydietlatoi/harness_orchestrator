@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluatePlan, summarizeReport } from "../src/judge-eval.js";
-import { formatBrief, rollupTelemetry, type PlanEntry } from "../src/assign.js";
-import { runJudge } from "../src/judge.js";
+import { evaluatePlan, summarizeReport } from "../src/routing/judge-eval.js";
+import { formatBrief, rollupTelemetry, type PlanEntry } from "../src/routing/assign.js";
+import { runJudge } from "../src/routing/judge.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import type { Issue } from "../src/github.js";
+import type { Issue } from "../src/github/github.js";
 
 const cfg = DEFAULT_CONFIG;
 

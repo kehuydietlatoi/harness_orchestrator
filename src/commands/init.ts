@@ -2,9 +2,9 @@ import { writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { CONFIG_FILE, DEFAULT_CONFIG, configExists } from "../config.js";
-import { isGitRepo, remoteUrl } from "../git.js";
-import { ghInstalled, ensureLabel } from "../github.js";
-import { LABELS } from "../labels.js";
+import { isGitRepo, remoteUrl } from "../git/git.js";
+import { ghInstalled, ensureLabel } from "../github/github.js";
+import { LABELS } from "../github/labels.js";
 
 const AGENTS_MD = `# Project memory (canonical — read by ALL harnesses)
 

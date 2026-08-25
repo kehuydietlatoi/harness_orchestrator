@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { createIssue, listIssues, editIssue } from "./github.js";
-import { STATUS, agentLabel } from "./labels.js";
-import { issueAgent, isEligible } from "./board.js";
-import type { OrchConfig } from "./config.js";
+import { createIssue, listIssues, editIssue } from "../github/github.js";
+import { STATUS, agentLabel } from "../github/labels.js";
+import { issueAgent, isEligible } from "../board/board.js";
+import type { OrchConfig } from "../config.js";
 
 export interface Ticket {
   id?: string; // local id other tickets reference in dependsOn

@@ -1,4 +1,4 @@
-import { exec } from "./util/exec.js";
+import { exec } from "../util/exec.js";
 
 export async function isGitRepo(cwd: string = process.cwd()): Promise<boolean> {
   const r = await exec("git", ["rev-parse", "--is-inside-work-tree"], { cwd });

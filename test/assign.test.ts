@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned } from "../src/assign.js";
+import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned } from "../src/routing/assign.js";
 import type { OrchConfig } from "../src/config.js";
-import type { Issue } from "../src/github.js";
-import type { RunRecord } from "../src/telemetry.js";
+import type { Issue } from "../src/github/github.js";
+import type { RunRecord } from "../src/board/telemetry.js";
 
 function issue(number: number, labels: string[] = [], body = ""): Issue {
   return {

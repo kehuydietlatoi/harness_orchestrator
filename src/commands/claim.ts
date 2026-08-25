@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { resolveAgent, claimSpecific } from "../service.js";
-import { buildBrief } from "../brief.js";
+import { resolveAgent, claimSpecific } from "../tasks/service.js";
+import { buildBrief } from "../tasks/brief.js";
 
 export async function claimCommand(issueArg: string, opts: { agent?: string }): Promise<void> {
   const cwd = process.cwd();

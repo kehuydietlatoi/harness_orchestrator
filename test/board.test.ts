@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { byNumber, issueEffort, openDepsFromMap, parseDeps } from "../src/board.js";
-import type { Issue } from "../src/github.js";
+import { byNumber, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
+import type { Issue } from "../src/github/github.js";
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
   return {

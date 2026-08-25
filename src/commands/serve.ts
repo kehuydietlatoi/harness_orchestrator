@@ -1,6 +1,6 @@
 import { loadConfig } from "../config.js";
-import { makeDemoDeps } from "../demo.js";
-import { startServer } from "../server.js";
+import { makeDemoDeps } from "../server/demo.js";
+import { startServer } from "../server/server.js";
 
 export async function serveCommand(opts: { port?: string; demo?: boolean }): Promise<void> {
   const cwd = process.cwd();

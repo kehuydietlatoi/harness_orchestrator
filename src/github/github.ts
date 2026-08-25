@@ -1,4 +1,4 @@
-import { exec } from "./util/exec.js";
+import { exec } from "../util/exec.js";
 
 export interface GhLabel {
   name: string;

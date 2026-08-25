@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
-import { exec } from "./util/exec.js";
-import { claim as lockClaim, release as lockRelease } from "./lock.js";
-import { type Issue, getIssue, editIssue, createPr } from "./github.js";
-import { STATUS, agentLabel, REVIEW_NEEDED } from "./labels.js";
-import { addWorktree, worktreePath, type Worktree } from "./worktree.js";
-import { eligibleIssues, issueAgent } from "./board.js";
-import type { OrchConfig } from "./config.js";
+import { exec } from "../util/exec.js";
+import { claim as lockClaim, release as lockRelease } from "../git/lock.js";
+import { type Issue, getIssue, editIssue, createPr } from "../github/github.js";
+import { STATUS, agentLabel, REVIEW_NEEDED } from "../github/labels.js";
+import { addWorktree, worktreePath, type Worktree } from "../git/worktree.js";
+import { eligibleIssues, issueAgent } from "../board/board.js";
+import type { OrchConfig } from "../config.js";
 
 export interface ClaimedTask {
   issue: Issue;

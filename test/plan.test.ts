@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderTicketBody } from "../src/plan.js";
+import { renderTicketBody } from "../src/tasks/plan.js";
 
 describe("renderTicketBody", () => {
   it("includes body, file-ownership hints, and resolved deps", () => {

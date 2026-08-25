@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
-import { listOpenPrs } from "../github.js";
-import { checkMergeGate, merge, prIssueNumber } from "../review.js";
+import { listOpenPrs } from "../github/github.js";
+import { checkMergeGate, merge, prIssueNumber } from "../board/review.js";
 
 function parsePr(arg: string): number {
   const n = Number(arg);

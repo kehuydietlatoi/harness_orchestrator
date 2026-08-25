@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { STATUS, REVIEW_NEEDED } from "../src/labels.js";
-import { assemble } from "../src/snapshot.js";
-import type { Issue, Pr } from "../src/github.js";
-import type { SnapshotRun } from "../src/snapshot.js";
-import type { Worktree } from "../src/worktree.js";
+import { STATUS, REVIEW_NEEDED } from "../src/github/labels.js";
+import { assemble } from "../src/board/snapshot.js";
+import type { Issue, Pr } from "../src/github/github.js";
+import type { SnapshotRun } from "../src/board/snapshot.js";
+import type { Worktree } from "../src/git/worktree.js";
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
   return {
