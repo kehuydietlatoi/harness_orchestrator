@@ -1,4 +1,5 @@
 import type { PlanEntry } from "../routing/assign.js";
+import type { Created, Ticket } from "../tasks/plan.js";
 import { DEFAULT_CONFIG, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
 import type { ServerDeps } from "./server.js";
@@ -173,6 +174,32 @@ export function makeDemoDeps(): ServerDeps {
       const agent = labels.map((l) => /^agent:(.+)$/.exec(l)?.[1]).find(Boolean);
       const task = tasks.find((t) => t.number === n);
       if (task && agent) task.agent = agent;
+    },
+    createIssues: async (tickets: Ticket[]): Promise<Created[]> => {
+      const created: Created[] = [];
+      const idToNumber = new Map<string, number>();
+      let next = Math.max(0, ...tasks.map((t) => t.number)) + 1;
+      for (const t of tickets) {
+        const number = next++;
+        const deps = (t.dependsOn ?? [])
+          .map((d) => idToNumber.get(d))
+          .filter((n): n is number => n !== undefined);
+        tasks.push({
+          number,
+          title: t.title,
+          status: "status:todo",
+          agent: null,
+          deps,
+          prNumber: null,
+          reviewedBy: [],
+          locked: false,
+          worktree: null,
+          latestRun: null,
+        });
+        if (t.id) idToNumber.set(t.id, number);
+        created.push({ id: t.id, number, title: t.title });
+      }
+      return created;
     },
     snapshot: async (): Promise<Snapshot> => ({
       generatedAt: new Date().toISOString(),

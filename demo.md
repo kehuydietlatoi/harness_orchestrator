@@ -69,7 +69,24 @@ Note they stay **`todo`**: routing only assigns an *owner*, never status. In rea
 the harness. `--demo` runs no agents, so the lifecycle deliberately stops at routing; the seeded
 tasks **#103–#106** show those later states statically.
 
-## 4. Cross-review queue
+## 4. Plan — from a draft to issues
+
+The **Plan** panel is the front of the lifecycle: turn a `tickets.json` into GitHub issues.
+Draft one on the CLI with `orch plan --draft "<goal>"` (the LLM planner via the `orch-plan`
+skill), then here **Choose tickets.json** — or **Load example** — to preview exactly what would
+be created: each ticket's title, its resolved `dependsOn`, and its file-ownership hints,
+validated by the same pure `resolvePlan` the CLI uses. Blocking errors (missing title, duplicate
+id) disable **Create**; advisory warnings (a dropped dependency, two tickets claiming one file)
+are shown but don't.
+
+![The Plan panel previewing a tickets.json](docs/demo/05-plan.jpg)
+
+Nothing is written until you click **Create issues** and confirm. `POST /actions/plan-preview`
+is read-only; `POST /actions/plan-create` is the only other mutating route besides assign, behind
+the same `isLoopback` guard. In `--demo` the new issues append to the in-memory board, so they
+show up in **Tasks** as fresh `todo`s.
+
+## 5. Cross-review queue
 
 The merge gate is a **process guarantee**: a PR may merge only when its issue carries an
 author label and a `reviewed-by:<agent>` label naming a *different* configured harness. The
@@ -87,6 +104,7 @@ review queue surfaces exactly the PRs awaiting that cross-model sign-off.
 | `applyPlan` / `selectUnassigned` routing validation | git worktrees + the claim lock |
 | The board snapshot → dashboard render path | the judge's LLM call (canned plan) |
 | `Suggest → edit → Apply` round-trip, incl. `assigned-by:brain` | run telemetry (`runs.jsonl`) |
+| `resolvePlan` validation + the `Plan` preview → create round-trip | issue creation (`createIssues` appends in-memory) |
 
 The fixture lives in [`src/server/demo.ts`](src/server/demo.ts) and is wired through the same `ServerDeps`
 seam the tests use, so the demo exercises the production code paths rather than a mock-up.

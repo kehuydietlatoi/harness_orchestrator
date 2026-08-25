@@ -53,3 +53,19 @@ appropriate for a single-user, single-machine daily-use tool.
 - The judge runs in-process (like `buildSnapshot`), so `orch serve` now needs the
   `claude` CLI available to answer `/actions/suggest`; a missing/failed judge is
   handled as `502`, not a crash.
+
+## Addendum (2026-08-25): the Plan panel
+
+The same pattern was extended to **planning** — creating issues from a
+`tickets.json` — without changing the trust model:
+
+- `POST /actions/plan-preview` parses + validates a ticket draft via the pure
+  `parseTickets`/`resolvePlan` and returns the resolved plan. It **writes
+  nothing**; a malformed/invalid draft is a `400`.
+- `POST /actions/plan-create` is the **second** (and only other) mutating route.
+  It re-validates and refuses (`400`) on blocking errors, then creates the issues
+  via the injectable `ServerDeps.createIssues` (default `createFromPlan`, faked
+  in `--demo`). Like `/actions/assign`, it sits behind the one `isLoopback`
+  chokepoint — so the future-tunnel token check still lands in exactly one place.
+
+The read routes (`GET /`, `GET /status`) remain byte-stable.
