@@ -31,25 +31,45 @@ export interface Created {
   title: string;
 }
 
-/** Parse a tickets file into the `Ticket[]` shape. Structural validation only \u2014
- * it must be a JSON array of objects; per-ticket semantics (title, deps) are the
- * job of `resolvePlan`. Throws on anything that is not shaped like a ticket list. */
+/** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
+ * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
+ * `body` must be a string and any present `dependsOn`/`files` must be an array of
+ * strings. Malformed field values are reported (ticket-indexed, all at once) rather
+ * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
+ * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
+ * shaped like a valid ticket list. */
 export function parseTickets(raw: string): Ticket[] {
   const value: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
   if (!Array.isArray(value)) throw new Error("tickets file must be a JSON array");
-  return value.map((t, i) => {
-    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(`ticket ${i + 1} must be an object`);
+  const errors: string[] = [];
+  const tickets = value.map((t, i) => {
+    const index = i + 1;
+    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(`ticket ${index} must be an object`);
     const o = t as Record<string, unknown>;
-    const strings = (v: unknown): string[] | undefined =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined;
+
+    const stringArray = (v: unknown, field: string): string[] | undefined => {
+      if (v === undefined) return undefined;
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
+        errors.push(`ticket ${index}: ${field} must be an array of strings`);
+        return undefined;
+      }
+      return v;
+    };
+
+    if (o.id !== undefined && typeof o.id !== "string") errors.push(`ticket ${index}: id must be a string`);
+    if (o.title !== undefined && typeof o.title !== "string") errors.push(`ticket ${index}: title must be a string`);
+    if (o.body !== undefined && typeof o.body !== "string") errors.push(`ticket ${index}: body must be a string`);
+
     return {
       id: typeof o.id === "string" ? o.id : undefined,
       title: typeof o.title === "string" ? o.title : "",
       body: typeof o.body === "string" ? o.body : undefined,
-      dependsOn: strings(o.dependsOn),
-      files: strings(o.files),
+      dependsOn: stringArray(o.dependsOn, "dependsOn"),
+      files: stringArray(o.files, "files"),
     };
   });
+  if (errors.length) throw new Error(errors.join("; "));
+  return tickets;
 }
 
 export interface ResolvedTicket {
