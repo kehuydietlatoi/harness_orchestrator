@@ -8,6 +8,15 @@ code wins and this file is the bug. Vocabulary lives in `CONTEXT.md`.
 
 All labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
 
+**Schema drift & self-heal.** The canonical set is **additive** — new labels arrive with
+new features (e.g. `effort:*` in #20, `assigned-by:brain` with the judge), so a repo
+initialised earlier can lag behind. `gh issue edit --add-label` fails hard on a label the
+repo lacks, so two safety nets close the gap: (1) `orch doctor` reports any missing canonical
+labels with a `run orch init` hint, and (2) the routing writers — `orch assign` and the
+dashboard `POST /actions/assign` — call `ensureLabels(labelDefs(...))` before adding
+`agent:`/`effort:`/`assigned-by:brain`, so applying routing to a stale repo self-heals rather
+than failing. Re-running `orch init` still backfills the whole set at once.
+
 ## Label catalogue
 
 | Label | Color | Meaning | Set by | Cleared by |

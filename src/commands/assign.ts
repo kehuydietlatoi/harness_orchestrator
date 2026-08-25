@@ -10,8 +10,8 @@ import {
   type PlanSkip,
 } from "../routing/assign.js";
 import { loadConfig } from "../config.js";
-import { editIssue, listIssues, type Issue } from "../github/github.js";
-import { agentLabel, effortLabel, ASSIGNED_BY_BRAIN } from "../github/labels.js";
+import { editIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
+import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github/labels.js";
 import { runJudge } from "../routing/judge.js";
 import { evaluatePlan, type EvalReport } from "../routing/judge-eval.js";
 import { assignRoundRobin } from "../tasks/plan.js";
@@ -61,6 +61,20 @@ async function writeAssignments(
   opts: { brain: boolean; dryRun: boolean },
 ): Promise<void> {
   console.log(pc.bold(opts.dryRun ? "Assignment plan (dry run):" : "Assignment plan:"));
+
+  // Ensure the routing labels exist before adding them — a repo initialised
+  // before the label set grew (e.g. effort:*/assigned-by:brain) would otherwise
+  // fail `--add-label` with "label not found".
+  if (!opts.dryRun && result.writes.length) {
+    const names = new Set<string>();
+    for (const write of result.writes) {
+      names.add(agentLabel(write.agent));
+      names.add(effortLabel(write.effort));
+      if (opts.brain) names.add(ASSIGNED_BY_BRAIN);
+    }
+    await ensureLabels(labelDefs([...names]), cwd);
+  }
+
   for (const write of result.writes) {
     const labels = [agentLabel(write.agent), effortLabel(write.effort)];
     if (opts.brain) labels.push(ASSIGNED_BY_BRAIN);

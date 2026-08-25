@@ -58,3 +58,23 @@ export const LABELS: GhLabel[] = [
   { name: EFFORT.hard, color: "f9d0c4", description: "Use the agent's hard model tier" },
   { name: ASSIGNED_BY_BRAIN, color: "bfd4f2", description: "Routing chosen by the judge, not a human" },
 ];
+
+const LABEL_BY_NAME = new Map(LABELS.map((l) => [l.name, l]));
+
+/**
+ * Resolve label names to their canonical `GhLabel` definitions (deduplicated),
+ * defaulting the cosmetics for a name outside the canonical set — e.g. a newly
+ * configured agent's `agent:<name>`. Pure; used to ensure routing labels exist
+ * before they are applied, so a repo initialised before the label set grew does
+ * not fail the write. See the "label schema-drift" note in WORKFLOW.md.
+ */
+export function labelDefs(names: readonly string[]): GhLabel[] {
+  const seen = new Set<string>();
+  const out: GhLabel[] = [];
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    out.push(LABEL_BY_NAME.get(name) ?? { name, color: "ededed", description: "" });
+  }
+  return out;
+}
