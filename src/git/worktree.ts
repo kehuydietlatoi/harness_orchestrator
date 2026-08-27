@@ -113,7 +113,7 @@ export async function addWorktree(
   issue: number,
   title: string,
   root: string,
-  opts: { cwd?: string } = {},
+  opts: { baseRef: string; cwd?: string },
 ): Promise<Worktree> {
   const cwd = opts.cwd ?? process.cwd();
   const branch = branchName(issue, slugify(title));
@@ -132,7 +132,7 @@ export async function addWorktree(
   }
 
   // Try to create a fresh branch; fall back to attaching an existing branch.
-  const r = await exec("git", ["worktree", "add", "-b", branch, path], { cwd });
+  const r = await exec("git", ["worktree", "add", "-b", branch, path, opts.baseRef], { cwd });
   if (r.code !== 0) {
     const r2 = await exec("git", ["worktree", "add", path, branch], { cwd });
     if (r2.code !== 0) {

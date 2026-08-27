@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
     costUsd: null,
   })),
   projectId: vi.fn(() => "project"),
-  exec: vi.fn(),
+  resolveBaseBranch: vi.fn(),
+  countCommitsAhead: vi.fn(),
 }));
 
 vi.mock("../src/tasks/service.js", () => ({
@@ -48,7 +49,10 @@ vi.mock("../src/board/telemetry.js", () => ({
   parseUsage: mocks.parseUsage,
   projectId: mocks.projectId,
 }));
-vi.mock("../src/util/exec.js", () => ({ exec: mocks.exec }));
+vi.mock("../src/git/git.js", () => ({
+  resolveBaseBranch: mocks.resolveBaseBranch,
+  countCommitsAhead: mocks.countCommitsAhead,
+}));
 
 const { processNext, runLoop } = await import("../src/tasks/runner.js");
 
@@ -76,6 +80,8 @@ describe("processNext recovery", () => {
     mocks.removeWorktree.mockResolvedValue(true);
     mocks.lockRelease.mockResolvedValue(true);
     mocks.appendRun.mockReturnValue(undefined);
+    mocks.resolveBaseBranch.mockResolvedValue({ name: "main", ref: "refs/heads/main" });
+    mocks.countCommitsAhead.mockResolvedValue(0);
   });
 
   afterEach(() => {
@@ -153,7 +159,7 @@ describe("processNext recovery", () => {
       timedOut: false,
     });
     mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
-    mocks.exec.mockResolvedValue({ code: 0, stdout: "1\n", stderr: "" });
+    mocks.countCommitsAhead.mockResolvedValue(1);
     mocks.submit.mockRejectedValue(new Error("push failed"));
     mocks.removeWorktree.mockResolvedValue(false);
 
@@ -163,6 +169,25 @@ describe("processNext recovery", () => {
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
     expect(mocks.lockRelease).not.toHaveBeenCalled();
     expect(mocks.appendRun).toHaveBeenCalledOnce();
+  });
+
+  it("does not misclassify a git comparison failure as no commits", async () => {
+    mocks.runTask.mockResolvedValue({
+      ok: true,
+      code: 0,
+      durationMs: 25,
+      timedOut: false,
+    });
+    mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
+    mocks.countCommitsAhead.mockRejectedValue(new Error("git rev-list failed"));
+
+    const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+    expect(outcome).toEqual({ issue: 35, outcome: "failed", durationMs: 25 });
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+    expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
   });
 
   it("still finalizes once when safe cleanup itself fails", async () => {
