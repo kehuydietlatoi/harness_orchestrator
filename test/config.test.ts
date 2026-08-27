@@ -44,4 +44,20 @@ describe("loadConfig", () => {
       models: { easy: "haiku", hard: "opus" },
     });
   });
+
+  it("leaves baseBranch unset so repositories use their GitHub default", () => {
+    const config = loadConfig(writeConfig({}));
+
+    expect(config.baseBranch).toBeUndefined();
+  });
+
+  it("preserves a configured custom base branch", () => {
+    const config = loadConfig(writeConfig({ baseBranch: "release/v2" }));
+
+    expect(config.baseBranch).toBe("release/v2");
+  });
+
+  it.each(["", "   ", null, 42])("rejects an invalid configured base branch: %j", (baseBranch) => {
+    expect(() => loadConfig(writeConfig({ baseBranch }))).toThrow(/baseBranch.*non-empty string/);
+  });
 });

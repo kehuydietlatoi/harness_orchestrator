@@ -1,7 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { exec } from "../util/exec.js";
 import type { OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
@@ -11,6 +10,7 @@ import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from 
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
+import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 
 export interface RunSummary {
@@ -27,6 +27,11 @@ export function resolveTaskModel(
 ): string | undefined {
   const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
   return cfg.adapters[agent]?.models?.[tier];
+}
+
+async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Promise<number> {
+  const base = await resolveBaseBranch(cfg.baseBranch, cwd);
+  return countCommitsAhead(base.ref, "HEAD", worktree);
 }
 
 /** Validate that a specific open issue is a routed todo ready for dispatch. */
@@ -48,11 +53,6 @@ export function resolveDispatchAgent(
     throw new Error(`#${issue.number} is blocked by open issue(s): ${blockers.map((n) => `#${n}`).join(", ")}.`);
   }
   return agent;
-}
-
-async function commitsAhead(worktree: string, base = "main"): Promise<number> {
-  const r = await exec("git", ["rev-list", "--count", `${base}..HEAD`], { cwd: worktree });
-  return r.code === 0 ? Number(r.stdout.trim()) || 0 : 0;
 }
 
 function recordRun(
@@ -174,7 +174,7 @@ async function processClaimed(
         console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
         summary = { issue: n, outcome: "submitted", durationMs: result.durationMs };
         telemetryOutcome = "submitted";
-      } else if ((await commitsAhead(task.worktree.path)) > 0) {
+      } else if ((await commitsAhead(task.worktree.path, cfg, cwd)) > 0) {
         // Agent finished but didn't submit — auto-submit if it produced work.
         const url = await submit(n, agent, cfg, cwd);
         console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));

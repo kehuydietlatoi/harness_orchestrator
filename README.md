@@ -112,10 +112,15 @@ Agent identity comes from `--agent`, `$ORCH_AGENT`, or `config.lead`.
 
 ```json
 { "agents": ["claude","codex"], "lead": "claude",
+  "baseBranch": "main",
   "requireCrossReview": true, "requireHumanMerge": false,
   "worktreeRoot": "../wt", "maxConcurrent": 2, "taskTimeoutMs": 1800000,
   "adapters": { "claude": {"cmd":"claude"}, "codex": {"cmd":"codex"} } }
 ```
+
+`baseBranch` is optional. When omitted, orch uses GitHub's default branch. In
+either case the branch must exist locally or as `origin/<name>` before work can
+be claimed, compared, repaired, or submitted.
 
 ## Design
 

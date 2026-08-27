@@ -64,6 +64,7 @@ function harness(faults: Faults = {}): Harness {
   let labelWrites = 0;
 
   const deps: ClaimSagaDeps = {
+    resolveBaseBranch: vi.fn(async () => ({ name: "main", ref: "refs/heads/main" })),
     createOwnerToken: vi.fn(async () => "owner-a"),
     observeLock: vi.fn(async () => state.lock),
     acquireLock: vi.fn(async (_number, owner) => {
@@ -131,6 +132,17 @@ describe("recoverable claim setup saga", () => {
     });
 
     await expect(claim(h)).rejects.toThrow(/unowned task worktree/i);
+
+    expect(h.deps.acquireLock).not.toHaveBeenCalled();
+    expect(h.deps.editIssue).not.toHaveBeenCalled();
+    expect(h.deps.addWorktree).not.toHaveBeenCalled();
+  });
+
+  it("validates the base before acquiring ownership", async () => {
+    const h = harness();
+    vi.mocked(h.deps.resolveBaseBranch).mockRejectedValueOnce(new Error("base ref missing"));
+
+    await expect(claim(h)).rejects.toThrow(/base ref missing/);
 
     expect(h.deps.acquireLock).not.toHaveBeenCalled();
     expect(h.deps.editIssue).not.toHaveBeenCalled();
@@ -208,6 +220,13 @@ describe("recoverable claim setup saga", () => {
     expect(result.worktree).toEqual(taskWorktree);
     expect(h.state.lock).toBe("owner-a");
     expect(h.state.issue.labels).toContain(STATUS.claimed);
+    expect(h.deps.addWorktree).toHaveBeenCalledWith(
+      34,
+      "Recoverable claim",
+      DEFAULT_CONFIG.worktreeRoot,
+      "refs/heads/main",
+      "/repo",
+    );
   });
 
   it("accepts a complete GitHub projection whose success response was lost", async () => {

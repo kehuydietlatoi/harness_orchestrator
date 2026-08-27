@@ -22,6 +22,10 @@ import {
   type Worktree,
   type WorktreeObservation,
 } from "../git/worktree.js";
+import {
+  resolveBaseBranch,
+  type RepositoryBase,
+} from "../git/git.js";
 import { eligibleIssues, issueAgent } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
@@ -40,6 +44,7 @@ interface IssueEdit {
 
 /** Narrow adapter seam used by failure-injection tests for the claim saga. */
 export interface ClaimSagaDeps {
+  resolveBaseBranch(configured: string | undefined, cwd: string): Promise<RepositoryBase>;
   createOwnerToken(number: number, agent: string, cwd: string): Promise<string>;
   observeLock(number: number, cwd: string): Promise<string | null>;
   acquireLock(number: number, owner: string, cwd: string): Promise<ClaimResult>;
@@ -57,11 +62,13 @@ export interface ClaimSagaDeps {
     number: number,
     title: string,
     root: string,
+    baseRef: string,
     cwd: string,
   ): Promise<Worktree>;
 }
 
 const claimSagaDeps: ClaimSagaDeps = {
+  resolveBaseBranch,
   createOwnerToken: (number, agent, cwd) => createOwnerToken(number, agent, { cwd }),
   observeLock: (number, cwd) => lockOwner(number, { cwd }),
   acquireLock: (number, owner, cwd) => lockClaim(number, { cwd, sha: owner }),
@@ -71,7 +78,8 @@ const claimSagaDeps: ClaimSagaDeps = {
   editIssue: (number, edit, cwd) => editIssue(number, { cwd, ...edit }),
   observeWorktree: (number, title, root, cwd) =>
     observeWorktree(number, title, root, { cwd }),
-  addWorktree: (number, title, root, cwd) => addWorktree(number, title, root, { cwd }),
+  addWorktree: (number, title, root, baseRef, cwd) =>
+    addWorktree(number, title, root, { cwd, baseRef }),
 };
 
 interface ClaimContext {
@@ -80,6 +88,7 @@ interface ClaimContext {
   cwd: string;
   root: string;
   owner: string;
+  base: RepositoryBase;
   login: string;
   initialIssue: Issue;
 }
@@ -193,6 +202,7 @@ async function createUsableWorktree(
       ctx.number,
       ctx.initialIssue.title,
       ctx.root,
+      ctx.base.ref,
       ctx.cwd,
     );
   } catch (error) {
@@ -300,12 +310,14 @@ export async function claimSpecific(
 ): Promise<ClaimedTask> {
   const observation = await observeClaim(number, cfg, cwd, deps);
   decideClaim(number, observation);
+  const base = await deps.resolveBaseBranch(cfg.baseBranch, cwd);
   const ctx: ClaimContext = {
     number,
     agent,
     cwd,
     root: cfg.worktreeRoot,
     owner: await deps.createOwnerToken(number, agent, cwd),
+    base,
     login: observation.login,
     initialIssue: observation.issue,
   };
@@ -334,11 +346,20 @@ export async function claimNext(
   cfg: OrchConfig,
   cwd: string,
 ): Promise<ClaimedTask | null> {
-  for (const candidate of await eligibleIssues(cwd)) {
+  const candidates = await eligibleIssues(cwd);
+  if (candidates.length === 0) return null;
+  // Resolve once outside the retry loop. A repository configuration/ref error
+  // applies to every candidate and must not look like an empty eligible queue.
+  const base = await claimSagaDeps.resolveBaseBranch(cfg.baseBranch, cwd);
+  const deps: ClaimSagaDeps = {
+    ...claimSagaDeps,
+    resolveBaseBranch: async () => base,
+  };
+  for (const candidate of candidates) {
     const owner = issueAgent(candidate);
     if (owner && owner !== agent) continue; // reserved for another agent
     try {
-      return await claimSpecific(candidate.number, agent, cfg, cwd);
+      return await claimSpecific(candidate.number, agent, cfg, cwd, deps);
     } catch {
       continue; // lost the race or transient error; try the next candidate
     }
@@ -349,7 +370,7 @@ export async function claimNext(
 /**
  * Submit finished work: push the branch, open a PR that closes the issue, move
  * it to in-review, and route the review to the *other* harness.
- * Run from the main repo root (worktree path derived from config).
+ * Run from the primary repo root (worktree path derived from config).
  */
 export async function submit(
   number: number,
@@ -357,9 +378,12 @@ export async function submit(
   cfg: OrchConfig,
   cwd: string,
 ): Promise<string> {
-  // Run from the main repo (derive the worktree) or from inside the worktree itself.
+  // Run from the primary repo (derive the worktree) or from inside the worktree itself.
   const derived = worktreePath(cfg.worktreeRoot, number, cwd);
   const wt = existsSync(derived) ? derived : cwd;
+  // Resolve and validate before pushing so an invalid base cannot leave a
+  // remote branch behind without a PR.
+  const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const push = await exec("git", ["push", "-u", "origin", "HEAD"], { cwd: wt });
   if (push.code !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
 
@@ -368,7 +392,7 @@ export async function submit(
   const body =
     `Closes #${number}\n\n` +
     `Authored by \`${agent}\`. **Cross-review required from \`${reviewer}\` before merge.**`;
-  const url = await createPr({ cwd: wt, title: issue.title, body, base: "main" });
+  const url = await createPr({ cwd: wt, title: issue.title, body, base: base.name });
 
   await editIssue(number, {
     cwd,

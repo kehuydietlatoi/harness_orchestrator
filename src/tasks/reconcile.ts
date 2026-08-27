@@ -32,6 +32,11 @@ import {
   slugify,
   worktreePath,
 } from "../git/worktree.js";
+import {
+  compareBranchToBase,
+  resolveBaseBranch,
+  type RepositoryBase,
+} from "../git/git.js";
 import { exec } from "../util/exec.js";
 import {
   deriveTaskState,
@@ -130,19 +135,12 @@ async function registeredWorktrees(cwd: string): Promise<RegisteredWorktree[]> {
   return parseWorktrees(result.stdout);
 }
 
-async function branchFact(branch: string, cwd: string): Promise<TaskFacts["branch"]> {
-  const exists = await exec("git", ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], {
-    cwd,
-  });
-  if (exists.code === 1) return "absent";
-  if (exists.code !== 0) {
-    throw new Error(`cannot observe branch '${branch}': ${exists.stderr.trim()}`);
-  }
-  const ahead = await exec("git", ["rev-list", "--count", `main..${branch}`], { cwd });
-  if (ahead.code !== 0) {
-    throw new Error(`cannot compare branch '${branch}' to main: ${ahead.stderr.trim()}`);
-  }
-  return Number(ahead.stdout.trim()) > 0 ? "ahead" : "unchanged";
+async function branchFact(
+  branch: string,
+  base: RepositoryBase,
+  cwd: string,
+): Promise<TaskFacts["branch"]> {
+  return compareBranchToBase(branch, base, cwd);
 }
 
 async function removalSafety(
@@ -373,7 +371,7 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
         facts.worktree = true;
       }
       if (facts.branch !== "ahead") {
-        blocked.push("the open PR branch has no commits ahead of main");
+        blocked.push("the open PR branch has no commits ahead of the repository base");
       }
       if (unresolvedRun && facts.lock && facts.worktree && facts.branch === "ahead") {
         pushAction(actions, { kind: "supersede-telemetry", issue: observation.number });
@@ -491,6 +489,7 @@ async function observeRepair(
   cfg: OrchConfig,
   cwd: string,
 ): Promise<RepairObservation> {
+  const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   let issue: Issue | null = null;
   try {
     issue = await getIssue(number, { cwd });
@@ -503,7 +502,7 @@ async function observeRepair(
     listPrs({ cwd, state: "all" }).then((all) => all.filter((pr) => prIssueNumber(pr) === number)),
     Promise.resolve(readRuns(cwd)),
   ]);
-  const branch = expectedBranch ? await branchFact(expectedBranch, cwd) : "absent";
+  const branch = expectedBranch ? await branchFact(expectedBranch, base, cwd) : "absent";
   const worktree = expectedBranch
     ? await observeWorktreeForRepair(number, expectedBranch, cfg, cwd)
     : { kind: "absent" as const };
@@ -545,7 +544,11 @@ async function executeRepair(
     }
     case "add-worktree": {
       if (!observation.issue) throw new Error(`cannot add worktree for missing issue #${action.issue}`);
-      await addWorktree(action.issue, observation.issue.title, cfg.worktreeRoot, { cwd });
+      const base = await resolveBaseBranch(cfg.baseBranch, cwd);
+      await addWorktree(action.issue, observation.issue.title, cfg.worktreeRoot, {
+        cwd,
+        baseRef: base.ref,
+      });
       return;
     }
     case "safe-remove-worktree": {

@@ -12,6 +12,9 @@ export interface AdapterConfig {
 export interface OrchConfig {
   agents: string[];
   lead: string;
+  /** GitHub branch name used as the base for task branches and pull requests.
+   * When omitted, orch asks GitHub for the repository default branch. */
+  baseBranch?: string;
   requireCrossReview: boolean;
   requireHumanMerge: boolean;
   worktreeRoot: string;
@@ -53,6 +56,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "baseBranch") &&
+    (typeof raw.baseBranch !== "string" || raw.baseBranch.trim().length === 0)
+  ) {
+    throw new Error("baseBranch must be a non-empty string when configured");
+  }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
     const defaults = DEFAULT_CONFIG.adapters[agent];
