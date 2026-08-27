@@ -1217,10 +1217,24 @@
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `create failed (${response.status})`);
             const created = Array.isArray(data.created) ? data.created : [];
-            planDraft = null;
-            planUI.body.replaceChildren();
-            planUI.table.hidden = true;
-            setPlanStatus(`Created ${created.length} issue(s): ${created.map((c) => `#${c.number}`).join(", ")}.`, "ok");
+            const reused = Array.isArray(data.reused) ? data.reused : [];
+            const failed = Array.isArray(data.failed) ? data.failed : [];
+            const completed = [...created, ...reused];
+            const issueList = completed.length ? ` Issues: ${completed.map((item) => `#${item.number}`).join(", ")}.` : "";
+            const failureList = failed.length
+              ? ` Failures: ${failed.map((item) => `${item.title}: ${item.error}`).join(" · ")}.`
+              : "";
+            setPlanStatus(
+              `${created.length} created, ${reused.length} reused, ${failed.length} failed.${issueList}${failureList}`,
+              failed.length ? "error" : "ok",
+            );
+            if (!failed.length) {
+              planDraft = null;
+              planUI.body.replaceChildren();
+              planUI.table.hidden = true;
+            } else {
+              planUI.createBtn.disabled = false;
+            }
             void refresh();
           } catch (error) {
             setPlanStatus(error instanceof Error ? error.message : String(error), "error");

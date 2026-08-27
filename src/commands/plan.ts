@@ -3,7 +3,8 @@ import { resolve } from "node:path";
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
-import { createFromPlan, parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
+import { parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
+import { createFromPlan, type Created, type Failed } from "../tasks/plan-create.js";
 import {
   ensurePlanSkill,
   formatInteractiveSeed,
@@ -45,6 +46,18 @@ function printPreview(plan: ResolvedPlan): void {
   if (!plan.errors.length) console.log(pc.dim("  (dry run — no issues created)"));
 }
 
+function printIssueResults(label: string, issues: readonly Created[], color: (text: string) => string): void {
+  console.log(color(`${label} ${issues.length} issue(s):`));
+  issues.forEach((issue) =>
+    console.log(`  #${issue.number} ${issue.title}${issue.id ? pc.dim(` (${issue.id})`) : ""}`),
+  );
+}
+
+function printFailures(failed: readonly Failed[]): void {
+  console.log(pc.red(`Failed ${failed.length} issue(s):`));
+  failed.forEach((item) => console.log(`  ${item.title}${item.id ? pc.dim(` (${item.id})`) : ""}: ${item.error}`));
+}
+
 export async function planCommand(file: string | undefined, opts: PlanOptions): Promise<void> {
   const cwd = process.cwd();
 
@@ -81,9 +94,11 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
       throw new Error(`refusing to create: ${plan.errors.length} error(s) in ${file}`);
     }
     loadConfig(cwd); // ensure an initialised orch repo before writing
-    const created = await createFromPlan(tickets, cwd);
-    console.log(pc.green(`Created ${created.length} issue(s):`));
-    created.forEach((c) => console.log(`  #${c.number} ${c.title}${c.id ? pc.dim(` (${c.id})`) : ""}`));
+    const result = await createFromPlan(tickets, cwd);
+    printIssueResults("Created", result.created, pc.green);
+    printIssueResults("Reused", result.reused, pc.cyan);
+    printFailures(result.failed);
+    if (result.failed.length) process.exitCode = 1;
     return;
   }
 
