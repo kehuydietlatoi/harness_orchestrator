@@ -24,6 +24,7 @@ import { assignCommand } from "./commands/assign.js";
 import { snapshotCommand } from "./commands/snapshot.js";
 import { serveCommand } from "./commands/serve.js";
 import { dispatchCommand } from "./commands/dispatch.js";
+import { repairCommand } from "./commands/repair.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,9 +82,16 @@ program
 
 program
   .command("abandon <issue>")
-  .description("Release a stuck claim: drop the lock, prune the worktree, return the issue to todo")
+  .description("Release a stuck claim safely; destructive cleanup requires --discard")
   .option(agentOpt, agentDesc)
+  .option("--discard", "explicitly destroy retained work in the task worktree")
   .action(wrap(abandonCommand));
+
+program
+  .command("repair [issue]")
+  .description("Preview lifecycle reconciliation, or execute safe idempotent repairs with --apply")
+  .option("--apply", "execute the proposed repairs (preview-only by default)")
+  .action(wrap(repairCommand));
 
 program
   .command("board")
