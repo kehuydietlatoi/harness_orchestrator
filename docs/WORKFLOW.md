@@ -3,7 +3,7 @@
 The single reference for **every label orch relies on** and **exactly when each is set
 or cleared**. Traced from source (`src/github/labels.ts`, `src/tasks/service.ts`,
 `src/tasks/runner.ts`, `src/board/review.ts`, `src/board/board.ts`,
-`src/commands/abandon.ts`) — if code and this table disagree, the
+`src/commands/abandon.ts`, `src/tasks/reconcile.ts`) — if code and this table disagree, the
 code wins and this file is the bug. Vocabulary lives in `CONTEXT.md`.
 
 All labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
@@ -21,18 +21,18 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 
 | Label | Color | Meaning | Set by | Cleared by |
 |---|---|---|---|---|
-| `status:todo` | `ededed` | Ready to be claimed (the implicit default when no `status:*` present) | `orch init`; `abandon` (reset) | `claimSpecific` |
-| `status:claimed` | `fbca04` | Lock held, worktree being set up | `claimSpecific` | `processClaimed` start/recovery; `submit`; `abandon` |
-| `status:in-progress` | `0e8a16` | Harness is running | `processClaimed` start; `requestChanges` (bounce back) | `submit`; runner recovery; `abandon` |
-| `status:in-review` | `1d76db` | PR open, awaiting cross-review | `submit` | `requestChanges`; `merge`; `abandon` |
-| `status:done` | `5319e7` | Merged | `merge` | — (terminal) |
-| `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | *(nothing)* |
+| `status:todo` | `ededed` | Ready to be claimed (the implicit default when no `status:*` present) | `orch init`; `abandon` (reset); `repair` projection | `claimSpecific`; `repair` projection |
+| `status:claimed` | `fbca04` | Lock held, worktree being set up | `claimSpecific`; `repair` projection | `processClaimed` start/recovery; `submit`; `abandon`; `repair` projection |
+| `status:in-progress` | `0e8a16` | Harness is running | `processClaimed` start; `requestChanges` (bounce back); `repair` projection | `submit`; runner recovery; `abandon`; `repair` projection |
+| `status:in-review` | `1d76db` | PR open, awaiting cross-review | `submit`; `repair` projection | `requestChanges`; `merge`; `abandon`; `repair` projection |
+| `status:done` | `5319e7` | Merged | `merge`; `repair` projection | `repair` projection only if observed facts no longer derive `done` |
+| `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | `repair` (stale lifecycle projection) |
 | `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `claimSpecific` | `abandon` only (**sticky**) |
 | `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign` | — (**sticky**; no path removes it) |
 | `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign` | — (**sticky**) |
-| `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit` | `approve`; `requestChanges` |
+| `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open unreviewed task PR | `approve`; `requestChanges`; `repair` when no task PR is open |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Cross-review approval recorded | `approve` | — (terminal) |
-| `needs-attention` | `d93f0b` | Run failed / produced nothing — a human must look | `processClaimed` recovery (fail, timeout, exception, no-commits) | `abandon` |
+| `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
 | `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
 **Sticky** = set once at routing/claim time and honored on every future run; only
@@ -74,7 +74,25 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | `gh pr review --approve` |
 | Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | `gh pr review --request-changes` |
 | Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, safely prune worktree, release lock |
-| Abandon | `abandon` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | release lock, explicitly discard worktree |
+| Repair preview | `repair [issue]` | — | — | re-observe issue/PR, lock, branch, worktree, and telemetry; print safe idempotent actions only |
+| Repair apply | `repair [issue] --apply` | derived lifecycle label; sometimes `review:needed` | stale lifecycle labels; stale `review:needed` | run one action, re-observe, and re-plan; may restore locks/branches/worktrees, safely prune terminal worktrees, release stale locks, close a merged PR's issue, or supersede resolved failure telemetry |
+| Abandon (safe) | `abandon` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | safely remove only clean, attached, externally preserved work; otherwise stop with lock/labels intact |
+| Abandon (destructive) | `abandon --discard` | `status:todo` | `status:claimed`, `status:in-progress`, `status:in-review`, `needs-attention`, `agent:X` | explicit human intent: force-remove retained worktree, then release lock |
+
+## Repair and destructive intent
+
+`orch repair [issue]` is preview-only unless `--apply` is present. The reconciler
+collects fresh external facts, derives state through `deriveTaskState`, and plans from
+those facts rather than trusting labels. Apply executes exactly one idempotent action,
+then re-observes and re-plans. A lost response or interruption therefore has no hidden
+resume cursor: rerunning repair continues from whatever durable side effects are visible,
+and a second successful run converges to no actions.
+
+Repair may prune a registration whose directory is already absent, but it never force
+removes a worktree or deletes a branch. Dirty, untracked, ignored, detached, conflicted,
+or not-otherwise-preserved work is reported and kept under its lock. Destruction is a
+separate human decision: `orch abandon <issue> --discard`. Plain `abandon` now uses the
+same safe-removal proof and refuses to release the lock when retained work exists.
 
 ## Known wrinkles (documented, not yet fixed)
 
@@ -87,7 +105,8 @@ the pre-claim routing/assignment fields, removes `status:claimed`, and compare-d
 only its own lock. Conflicting or unobservable worktrees are never deleted as rollback.
 
 1. **`status:blocked` is vestigial.** It exists in the label set and has a color, but
-   **no code path ever applies or removes it.** "Blocked" is computed on read from
+   **no code path ever applies it** (repair removes it when found as a stale lifecycle
+   projection). "Blocked" is computed on read from
    `Depends-on:` lines (`isEligible` → `openDepsFromMap`): a blocked issue simply stays
    `status:todo` and is filtered out of `eligibleIssues`. The snapshot/dashboard may
    *display* blocked-ness, but the label is not the source of that truth. Either wire it

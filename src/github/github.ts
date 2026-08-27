@@ -240,15 +240,23 @@ function parseRestPr(o: any): Pr {
     title: o.title ?? "",
     body: o.body ?? "",
     headRefName: o.head?.ref ?? "",
-    state: String(o.state ?? "open").toUpperCase(),
+    state: o.merged_at ? "MERGED" : String(o.state ?? "open").toUpperCase(),
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export async function listOpenPrs(opts: { cwd?: string } = {}): Promise<Pr[]> {
+  return listPrs({ ...opts, state: "open" });
+}
+
+/** List PRs with complete REST pagination. Repair needs closed and merged PRs
+ * as well as open ones so it can rebuild lifecycle projections from facts. */
+export async function listPrs(
+  opts: { cwd?: string; state?: "open" | "closed" | "all" } = {},
+): Promise<Pr[]> {
   const items = await paginatedApi<unknown>(
     "repos/{owner}/{repo}/pulls",
-    { state: "open" },
+    { state: opts.state ?? "all" },
     { cwd: opts.cwd },
   );
   return items.map(parseRestPr);

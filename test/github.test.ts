@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
-const { listIssues, listOpenPrs, listLabels } = await import("../src/github/github.js");
+const { listIssues, listOpenPrs, listPrs, listLabels } = await import("../src/github/github.js");
 
 function restIssue(n: number, over: Record<string, unknown> = {}) {
   return {
@@ -90,6 +90,26 @@ describe("listOpenPrs", () => {
     expect(prs).toHaveLength(101);
     expect(prs[100].headRefName).toBe("branch-101");
     expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("distinguishes merged PRs when listing all lifecycle history", async () => {
+    execMock.mockResolvedValueOnce(
+      ok([
+        {
+          number: 102,
+          title: "merged",
+          body: "Closes #36",
+          state: "closed",
+          merged_at: "2026-08-27T10:00:00Z",
+          head: { ref: "task/36-repair" },
+        },
+      ]),
+    );
+
+    const [merged] = await listPrs({ state: "all" });
+
+    expect(merged.state).toBe("MERGED");
+    expect(execMock.mock.calls[0][1][1]).toContain("state=all");
   });
 });
 
