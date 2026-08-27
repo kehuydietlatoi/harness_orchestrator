@@ -53,7 +53,7 @@ orch doctor                    # verify git, gh auth, worktrees, adapters, label
 ## The loop
 
 ```bash
-orch plan                                          # interactive Claude Code session -> refine -> writes tickets.json
+orch plan                                          # interactive session when supported (Claude) -> tickets.json
 orch plan --draft "add SSO login" > tickets.json   # or one-shot: LLM drafts headlessly (no refinement)
 orch plan --dry-run tickets.json                   # preview the issues + dep graph, no writes
 orch plan tickets.json                             # create the GitHub issues (deps + file hints)
@@ -91,7 +91,7 @@ every two seconds.
 | Command | Purpose |
 |---|---|
 | `orch init` / `orch doctor` | scaffold config + memory + labels / verify environment |
-| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | **no args:** interactive Claude Code planning session → `tickets.json`; `--draft`: headless one-shot draft; `--dry-run`: preview a file; `<file>`: create issues |
+| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | **no args:** adapter-supported interactive planning (currently Claude) → `tickets.json`; `--draft`: headless one-shot draft; `--dry-run`: preview a file; `<file>`: create issues |
 | `orch assign [--apply <file\|->] [--dry-run]` | emit a routing brief or fill blank agent + effort labels from a plan |
 | `orch assign --round-robin` | legacy round-robin assignment for eligible issues |
 | `orch next` / `orch claim <n>` | atomically claim a task, open its worktree |
@@ -133,7 +133,7 @@ npm run dev -- <command>   # run from source (tsx)
 npm run lint               # eslint (typescript-eslint, flat config)
 npm run typecheck
 npm test                   # atomic-claim concurrency, spawn plumbing, merge gate, judge validity
-ORCH_JUDGE_LIVE=1 npm test # also runs the judge against a real model (needs `claude` on PATH)
+ORCH_JUDGE_LIVE=1 npm test # also runs the judge against the configured lead CLI
 ```
 
 CI runs `lint → typecheck → test → build` on Linux **and** Windows.

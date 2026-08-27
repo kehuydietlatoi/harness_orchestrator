@@ -2,18 +2,16 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
+import { makeAdapter } from "../adapters/index.js";
 import { createFromPlan, parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
 import {
   ensurePlanSkill,
   formatInteractiveSeed,
-  interactivePlanArgs,
   loadPlanSkill,
+  runInteractivePlanner,
   runPlanner,
 } from "../tasks/planner.js";
 import { exec } from "../util/exec.js";
-import { spawnInteractive } from "../util/spawn.js";
-
-const WIN = process.platform === "win32";
 
 export interface PlanOptions {
   draft?: string;
@@ -91,24 +89,29 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
 
   if (opts.dryRun) throw new Error("--dry-run needs a tickets file (or use --draft/--example)");
 
-  // No file and no flags: hand the terminal to an interactive Claude Code session.
-  // It refines a plan with you and writes tickets.json; orch then validates it.
+  // No file and no flags: use the lead adapter's optional interactive planning
+  // capability. It writes tickets.json; orch then validates it.
   const cfg = loadConfig(cwd);
-  const adapter = cfg.adapters[cfg.lead];
-  if (!adapter) throw new Error(`no adapter configured for lead '${cfg.lead}'`);
+  const adapter = makeAdapter(cfg.lead, cfg);
+  if (!adapter.runInteractivePlan) {
+    throw new Error(
+      `lead adapter '${adapter.id}' does not support interactive planning; use \`orch plan --draft "<goal>"\` instead`,
+    );
+  }
   ensurePlanSkill(cwd);
 
   const outputPath = resolve(cwd, "tickets.json");
   const before = existsSync(outputPath) ? statSync(outputPath).mtimeMs : 0;
-  console.log(pc.bold("Launching an interactive Claude Code planning session…"));
+  console.log(pc.bold(`Launching an interactive ${adapter.id} planning session…`));
   console.log(
-    pc.dim(`Tell Claude what to build; when the plan looks right, ask it to save, then exit. Target: ${outputPath}`),
+    pc.dim(`Tell ${adapter.id} what to build; when the plan looks right, ask it to save, then exit. Target: ${outputPath}`),
   );
 
   const seed = formatInteractiveSeed(outputPath);
-  const { code } = await spawnInteractive(adapter.cmd, interactivePlanArgs(adapter.models?.hard, seed), {
+  const { code } = await runInteractivePlanner(adapter, {
     cwd,
-    shell: WIN,
+    seed,
+    model: cfg.adapters[cfg.lead]?.models?.hard,
   });
 
   const written = existsSync(outputPath) && statSync(outputPath).mtimeMs > before;

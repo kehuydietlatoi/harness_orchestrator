@@ -15,8 +15,8 @@ the writer), and `src/routing/judge-eval.ts` (the evaluator).
 flowchart LR
   A["open issues<br/>+ runs.jsonl"] --> B["formatBrief()<br/>telemetry-grounded brief"]
   B --> C["formatJudgePrompt()<br/>brief + output contract"]
-  C --> D["JudgeRunner<br/>(spawns claude, injectable)"]
-  D --> E["resultTextFromStreamJson()<br/>reduce log → final text"]
+  C --> D["JudgeRunner<br/>(configured lead, injectable)"]
+  D --> E["adapter parser<br/>structured log → final text"]
   E --> F["extractPlan()<br/>last fenced json block"]
   F --> G["PlanEntry[]"]
   G --> H["evaluatePlan()<br/>validity gate"]
@@ -26,7 +26,7 @@ flowchart LR
 Two things never touch a model and are pure functions, which is what makes the
 judge testable end-to-end without spending a token: **`formatBrief` /
 `formatJudgePrompt`** on the way in, and **`extractPlan` / `evaluatePlan`** on the
-way out. The only impure step, the model call, sits behind the `JudgeRunner` type
+way out. The only impure step, the adapter-owned model call, sits behind the `JudgeRunner` type
 so tests inject a canned reply (`test/judge.test.ts`) and the `--demo` fixture
 injects a fixed plan (`src/server/demo.ts`).
 

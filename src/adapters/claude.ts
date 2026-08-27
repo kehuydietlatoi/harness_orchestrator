@@ -1,7 +1,17 @@
 import { commandExists } from "../util/exec.js";
-import { spawnLogged } from "../util/spawn.js";
+import { spawnInteractive, spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig } from "../config.js";
-import type { HarnessAdapter, RunContext, ReviewContext, RunResult } from "./types.js";
+import { runStructuredHeadless } from "./headless.js";
+import type {
+  HarnessAdapter,
+  HeadlessContext,
+  HeadlessResult,
+  InteractivePlanContext,
+  InteractivePlanResult,
+  RunContext,
+  ReviewContext,
+  RunResult,
+} from "./types.js";
 
 const WIN = process.platform === "win32";
 
@@ -16,6 +26,29 @@ export function buildClaudeTaskArgs(model?: string): string[] {
     "--allowedTools",
     "Read,Edit,Write,Bash",
   ];
+  if (model !== undefined) args.push("--model", model);
+  return args;
+}
+
+/** Reduce Claude stream-json output to the final result text. Pure. */
+export function resultTextFromClaudeStreamJson(logText: string): string {
+  let result = "";
+  for (const line of logText.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const obj = JSON.parse(trimmed) as Record<string, unknown>;
+      if (obj.type === "result" && typeof obj.result === "string") result = obj.result;
+    } catch {
+      // Ignore non-JSON lines and partial output; only a final result is usable.
+    }
+  }
+  return result;
+}
+
+/** Build Claude argv for an interactive planning session. Pure. */
+export function buildClaudeInteractivePlanArgs(model: string | undefined, seed: string): string[] {
+  const args = ["--append-system-prompt", seed, "--allowedTools", "Read", "Grep", "Glob", "Write"];
   if (model !== undefined) args.push("--model", model);
   return args;
 }
@@ -61,5 +94,16 @@ export class ClaudeAdapter implements HarnessAdapter {
       shell: WIN,
     });
     return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
+  }
+
+  runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
+    return runStructuredHeadless(this.cfg.cmd, buildClaudeTaskArgs(ctx.model), ctx, resultTextFromClaudeStreamJson);
+  }
+
+  runInteractivePlan(ctx: InteractivePlanContext): Promise<InteractivePlanResult> {
+    return spawnInteractive(this.cfg.cmd, buildClaudeInteractivePlanArgs(ctx.model, ctx.seed), {
+      cwd: ctx.cwd,
+      shell: WIN,
+    });
   }
 }

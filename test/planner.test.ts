@@ -3,13 +3,18 @@ import {
   extractTickets,
   formatInteractiveSeed,
   formatPlanPrompt,
-  interactivePlanArgs,
+  runInteractivePlanner,
   runPlanner,
   type PlannerRunner,
 } from "../src/tasks/planner.js";
-import { DEFAULT_CONFIG } from "../src/config.js";
+import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
+import { makeAdapter } from "../src/adapters/index.js";
 
 const cfg = DEFAULT_CONFIG;
+const adapterFixtures: Array<[string, OrchConfig]> = [
+  ["Claude", { ...DEFAULT_CONFIG, lead: "claude" }],
+  ["Codex", { ...DEFAULT_CONFIG, lead: "codex" }],
+];
 
 function runnerReturning(run: Partial<{ code: number; timedOut: boolean; text: string; raw: string }>): PlannerRunner {
   return async () => ({ code: 0, timedOut: false, text: "", raw: "", ...run });
@@ -60,15 +65,24 @@ describe("interactive planning builders", () => {
     expect(seed).not.toContain("`");
   });
 
-  it("interactivePlanArgs carries the seed as a system prompt, allows Write, and sets the model", () => {
-    const args = interactivePlanArgs("opus", "SEED");
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe("SEED");
-    expect(args).toContain("Write");
-    expect(args.slice(-2)).toEqual(["--model", "opus"]);
+  it("dispatches through an adapter's interactive-planning capability", async () => {
+    const adapter = makeAdapter("claude", cfg);
+    let seenSeed = "";
+    adapter.runInteractivePlan = async (ctx) => {
+      seenSeed = ctx.seed;
+      return { code: 7 };
+    };
+    await expect(runInteractivePlanner(adapter, { cwd: ".", seed: "SEED", model: "opus" })).resolves.toEqual({
+      code: 7,
+    });
+    expect(seenSeed).toBe("SEED");
   });
 
-  it("interactivePlanArgs omits --model when none is configured", () => {
-    expect(interactivePlanArgs(undefined, "SEED")).not.toContain("--model");
+  it("fails precisely when the lead adapter does not support interactive planning", () => {
+    const adapter = makeAdapter("codex", cfg);
+    expect(() => runInteractivePlanner(adapter, { cwd: ".", seed: "SEED", model: "high" })).toThrow(
+      'lead adapter \'codex\' does not support interactive planning; use `orch plan --draft "<goal>"` instead',
+    );
   });
 });
 
@@ -76,9 +90,9 @@ describe("runPlanner (fail-closed)", () => {
   const goal = "goal";
   const skill = "skill";
 
-  it("returns the parsed tickets on a clean run", async () => {
+  it.each(adapterFixtures)("returns the parsed tickets with the %s lead fixture", async (_name, fixtureCfg) => {
     const runner = runnerReturning({ text: '```json\n[{"id":"a","title":"First"}]\n```' });
-    await expect(runPlanner(goal, skill, "", cfg, ".", runner)).resolves.toEqual([
+    await expect(runPlanner(goal, skill, "", fixtureCfg, ".", runner)).resolves.toEqual([
       { id: "a", title: "First", body: undefined, dependsOn: undefined, files: undefined },
     ]);
   });
@@ -112,13 +126,13 @@ describe("runPlanner (fail-closed)", () => {
     ).rejects.toThrow(/invalid tickets/i);
   });
 
-  it("resolves the planner model to the lead's hard tier", async () => {
+  it.each(adapterFixtures)("resolves the %s planner model to the lead's hard tier", async (_name, fixtureCfg) => {
     let seenModel: string | undefined = "unset";
     const runner: PlannerRunner = async (_prompt, model) => {
       seenModel = model;
       return { code: 0, timedOut: false, text: '```json\n[{"title":"x"}]\n```', raw: "" };
     };
-    await runPlanner(goal, skill, "", cfg, ".", runner);
-    expect(seenModel).toBe(cfg.adapters[cfg.lead].models?.hard);
+    await runPlanner(goal, skill, "", fixtureCfg, ".", runner);
+    expect(seenModel).toBe(fixtureCfg.adapters[fixtureCfg.lead].models?.hard);
   });
 });

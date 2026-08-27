@@ -41,7 +41,7 @@ the one that can be answered offline now.
 2. **Live validity — opt-in, same gate, real model.** The golden-board test also
    has a `describe.skipIf(!ORCH_JUDGE_LIVE)` block that spawns the *real* judge and
    asserts its output clears the exact same `evaluatePlan` gate. It is skipped by
-   default so CI stays hermetic (no network, no `claude`), and run deliberately
+   default so CI stays hermetic (no network, no lead adapter CLI), and run deliberately
    (`ORCH_JUDGE_LIVE=1 npm test`) to catch prompt/model regressions.
 
 3. **Quality — designed, not faked.** Whether a route is *good* (not merely valid)

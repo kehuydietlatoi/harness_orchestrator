@@ -16,4 +16,13 @@ export function makeAdapter(agent: string, cfg: OrchConfig): HarnessAdapter {
   }
 }
 
-export type { HarnessAdapter, RunContext, ReviewContext, RunResult } from "./types.js";
+export type {
+  HarnessAdapter,
+  HeadlessContext,
+  HeadlessResult,
+  InteractivePlanContext,
+  InteractivePlanResult,
+  RunContext,
+  ReviewContext,
+  RunResult,
+} from "./types.js";

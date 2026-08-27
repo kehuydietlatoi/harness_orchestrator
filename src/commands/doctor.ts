@@ -3,12 +3,19 @@ import { commandExists } from "../util/exec.js";
 import { isGitRepo, gitVersion, supportsWorktree, remoteUrl } from "../git/git.js";
 import { ghInstalled, ghAuthenticated, listLabels } from "../github/github.js";
 import { configExists, loadConfig } from "../config.js";
+import type { OrchConfig } from "../config.js";
 import { LABELS } from "../github/labels.js";
 
 interface Check {
   name: string;
   ok: boolean;
   note?: string;
+}
+
+/** Commands doctor must validate, including a lead omitted from `agents`. Pure. */
+export function configuredAdapterCommands(cfg: OrchConfig): Array<{ id: string; cmd: string }> {
+  const ids = new Set([...cfg.agents, cfg.lead]);
+  return [...ids].map((id) => ({ id, cmd: cfg.adapters[id]?.cmd ?? id }));
 }
 
 export async function doctorCommand(): Promise<void> {
@@ -29,16 +36,21 @@ export async function doctorCommand(): Promise<void> {
   const cfg = configExists(cwd);
   checks.push({ name: "orch.config.json present", ok: cfg, note: cfg ? "" : "run `orch init`" });
 
-  let agents: string[] = [];
+  let adapters: Array<{ id: string; cmd: string }> = [];
   if (cfg) {
     try {
-      agents = loadConfig(cwd).agents;
+      const loaded = loadConfig(cwd);
+      adapters = configuredAdapterCommands(loaded);
     } catch {
       /* ignore malformed config here; presence check already recorded */
     }
   }
-  for (const a of agents) {
-    checks.push({ name: `adapter '${a}' CLI present`, ok: await commandExists(a) });
+  for (const adapter of adapters) {
+    checks.push({
+      name: `adapter '${adapter.id}' CLI present`,
+      ok: await commandExists(adapter.cmd),
+      note: adapter.cmd === adapter.id ? "" : `configured command: ${adapter.cmd}`,
+    });
   }
 
   if (gh && url) {

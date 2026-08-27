@@ -63,12 +63,15 @@ reasons — and is unit-tested in isolation.
 
 ### 3. Harness adapters + dispatcher (`adapters/`, `tasks/runner.ts`)
 
-`HarnessAdapter` abstracts "run a harness headless in a worktree" behind
-`runTask` / `runReview` / `healthCheck`. Adding a harness = one file. The prompt
-is delivered on **stdin** and the worktree is the process **cwd**, so nothing
-untrusted touches argv. `orch run` claims → worktrees → spawns the adapter →
-verifies the agent submitted (or auto-submits its commits), keeping up to
-`maxConcurrent` tasks in flight, each atomically claimed.
+`HarnessAdapter` abstracts harness execution behind `runTask` / `runReview` /
+`healthCheck`, plus optional `runHeadless` (planner/judge) and
+`runInteractivePlan` capabilities. Each adapter owns its CLI arguments and
+structured-output reduction; the shared headless module owns only log capture,
+timeouts, and capability dispatch. Prompts are delivered on **stdin** and the
+worktree is the process **cwd**, so nothing untrusted touches argv. `orch run`
+claims → worktrees → spawns the adapter → verifies the agent submitted (or
+auto-submits its commits), keeping up to `maxConcurrent` tasks in flight, each
+atomically claimed.
 
 ## The task lifecycle
 
