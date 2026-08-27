@@ -23,8 +23,8 @@ harness headless per ticket.
 ## See it in action
 
 `orch serve --demo` boots the dashboard against a seeded in-memory board — **no GitHub,
-git, or agent CLIs required** — so you can drive the judge's **Suggest → edit → Apply**
-routing loop in your browser. Walkthrough + screenshots: **[demo.md](demo.md)**.
+git, or agent CLIs required** — so you can drive **Suggest → edit → Apply → Dispatch**
+and watch a task advance into review. Walkthrough + screenshots: **[demo.md](demo.md)**.
 
 ```bash
 npm install && npm run build
@@ -81,10 +81,10 @@ orch merge <pr>                        # only if: green CI + approved by the OTH
 You watch `orch board` / `orch status`, and either trust the gate or set
 `requireHumanMerge` to sign off yourself.
 
-For a live, read-only view in a browser, run `orch serve` and open
+For a live control-plane view in a browser, run `orch serve` and open
 `http://127.0.0.1:4000`. Use `orch serve --port <n>` to choose another local
-port. The dashboard is localhost-only and refreshes from the canonical snapshot
-every two seconds.
+port. The dashboard is localhost-only, refreshes from the canonical snapshot
+every two seconds, and can dispatch a routed todo after confirmation.
 
 ## Command reference
 
@@ -98,6 +98,7 @@ every two seconds.
 | `orch brief <n>` | print the task briefing (spec + memory pointer + loop) |
 | `orch submit <n>` | push branch, open PR (`Closes #n`), route cross-review |
 | `orch run [--agent x] [--max n] [--once]` | dispatcher: claim + drive the harness |
+| `orch dispatch <issue>` | claim + drive one routed todo by issue number |
 | `orch review-queue` / `review <pr>` | list / inspect PRs awaiting your review |
 | `orch review-approve <pr>` / `review-changes <pr>` | record cross-review outcome |
 | `orch merge <pr>` / `orch integrate` | gated merge (one / all mergeable) |

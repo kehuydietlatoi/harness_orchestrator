@@ -8,6 +8,7 @@ import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github
 import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
 import { readRuns } from "../board/telemetry.js";
 import { createFromPlan, parseTickets, resolvePlan, type Created, type Ticket } from "../tasks/plan.js";
+import { dispatchSpecific } from "../tasks/runner.js";
 
 // Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
 // (build); "../../public" resolves to <repo>/public in both, since src and dist
@@ -31,6 +32,8 @@ export interface ServerDeps {
   createIssues: (tickets: Ticket[], cwd: string) => Promise<Created[]>;
   /** Board projection for `GET /status`; overridable so `--demo` can serve a fixture. */
   snapshot: (cwd: string) => Promise<Snapshot>;
+  /** Claim and run one routed todo; invoked after the dispatch response has ended. */
+  dispatchIssue: (issue: number, cwd: string) => Promise<unknown>;
 }
 
 const defaultDeps: ServerDeps = {
@@ -44,6 +47,7 @@ const defaultDeps: ServerDeps = {
       .then(() => undefined),
   createIssues: createFromPlan,
   snapshot: buildSnapshot,
+  dispatchIssue: (issue, cwd) => dispatchSpecific(issue, loadConfig(cwd), cwd),
 };
 
 /** Socket-level half of the dashboard write guard. */
@@ -252,6 +256,37 @@ async function handlePlanCreate(
   sendJson(response, 200, { created });
 }
 
+/** Accept a targeted run and start it on the next event-loop turn so the HTTP
+ * request never waits for claim setup or the long-lived agent process. */
+async function handleDispatch(
+  cwd: string,
+  deps: ServerDeps,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  let issue: number;
+  try {
+    const value: unknown = JSON.parse((await readBody(request)) || "null");
+    const candidate = value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>).issue
+      : undefined;
+    if (!Number.isInteger(candidate) || (candidate as number) < 1) {
+      throw new Error("body.issue must be a positive integer");
+    }
+    issue = candidate as number;
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+    return;
+  }
+
+  sendJson(response, 202, { accepted: true, issue });
+  setImmediate(() => {
+    void deps.dispatchIssue(issue, cwd).catch((error: unknown) => {
+      console.error(`dispatch #${issue} failed: ${error instanceof Error ? error.message : String(error)}`);
+    });
+  });
+}
+
 export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.Server {
   return http.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -272,7 +307,9 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
               ? handlePlanPreview(request, response)
               : pathname === "/actions/plan-create"
                 ? handlePlanCreate(cwd, deps, request, response)
-                : null;
+                : pathname === "/actions/dispatch"
+                  ? handleDispatch(cwd, deps, request, response)
+                  : null;
       if (!handler) {
         sendJson(response, 404, { error: "unknown action" });
         return;

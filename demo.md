@@ -1,7 +1,7 @@
 # Demo — the `orch` dashboard & routing judge
 
-A two-minute tour of the live control plane: watch two coding agents work a shared
-board, then let the **routing judge** decide who builds what — and apply it with one click.
+A two-minute tour of the live control plane: let the **routing judge** decide who
+builds what, apply it, then dispatch a task and watch it advance into review.
 
 ![Suggest → Apply — the routing loop end to end: the judge proposes an agent and effort tier for every unassigned issue, then one click writes the labels and the board updates live](docs/demo/routing.gif)
 
@@ -64,10 +64,10 @@ updates live.
 All three todos now carry an owner (`@claude` / `@codex`) and drop out of the unrouted set —
 a second **Suggest** would return nothing to route.
 
-Note they stay **`todo`**: routing only assigns an *owner*, never status. In real use a dispatcher
-(`orch run`) then claims each one — flipping it `claimed` → `in-progress` → `in-review` — and spawns
-the harness. `--demo` runs no agents, so the lifecycle deliberately stops at routing; the seeded
-tasks **#103–#106** show those later states statically.
+Note they stay **`todo`**: routing only assigns an *owner*, never status. Click a row's
+**Dispatch** button and confirm to start that task on demand. In normal mode the selected harness
+is spawned in the background; in `--demo`, timers simulate the same visible
+`claimed` → `in-progress` → `in-review` lifecycle without running an agent.
 
 ## 4. Plan — from a draft to issues
 
@@ -82,7 +82,7 @@ are shown but don't.
 ![The Plan panel previewing a tickets.json](docs/demo/05-plan.jpg)
 
 Nothing is written until you click **Create issues** and confirm. `POST /actions/plan-preview`
-is read-only; `POST /actions/plan-create` is the only other mutating route besides assign, behind
+is read-only; `POST /actions/plan-create`, assign, and dispatch are the mutating routes behind
 the same `isLoopback` guard. In `--demo` the new issues append to the in-memory board, so they
 show up in **Tasks** as fresh `todo`s.
 
@@ -103,7 +103,7 @@ review queue surfaces exactly the PRs awaiting that cross-model sign-off.
 | Every HTTP route + the `isLoopback` write guard | GitHub Issues/PRs (`gh`) |
 | `applyPlan` / `selectUnassigned` routing validation | git worktrees + the claim lock |
 | The board snapshot → dashboard render path | the judge's LLM call (canned plan) |
-| `Suggest → edit → Apply` round-trip, incl. `assigned-by:brain` | run telemetry (`runs.jsonl`) |
+| `Suggest → edit → Apply → Dispatch` HTTP round-trip | harness execution + timed lifecycle transitions |
 | `resolvePlan` validation + the `Plan` preview → create round-trip | issue creation (`createIssues` appends in-memory) |
 
 The fixture lives in [`src/server/demo.ts`](src/server/demo.ts) and is wired through the same `ServerDeps`

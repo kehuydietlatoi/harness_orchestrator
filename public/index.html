@@ -324,6 +324,10 @@
         line-height: 1.55;
       }
 
+      .task-action {
+        min-width: 102px;
+      }
+
       .run-cost {
         color: var(--accent);
       }
@@ -542,7 +546,7 @@
         <div>
           <p class="eyebrow">Local control plane</p>
           <h1>Orch dashboard</h1>
-          <p class="subtitle">A live, read-only view of tasks, agents, runs, and reviews.</p>
+          <p class="subtitle">A live view of tasks, agents, runs, and reviews — with on-demand dispatch.</p>
         </div>
         <div class="connection" id="connection" role="status" aria-live="polite">
           <span class="connection-dot" aria-hidden="true"></span>
@@ -642,10 +646,11 @@
                 <th>Reviewed by</th>
                 <th>Workspace</th>
                 <th>Latest run</th>
+                <th>Action</th>
               </tr>
             </thead>
             <tbody id="tasks-body">
-              <tr><td class="empty" colspan="7">Waiting for the first snapshot…</td></tr>
+              <tr><td class="empty" colspan="8">Waiting for the first snapshot…</td></tr>
             </tbody>
           </table>
         </div>
@@ -683,6 +688,7 @@
         };
 
         let latestSnapshot = null; // most recent /status payload, for the manual issue picker
+        const dispatchingIssues = new Map(); // issue -> accepted timestamp, cleared when status advances
 
         const make = (tag, className, text) => {
           const node = document.createElement(tag);
@@ -738,16 +744,40 @@
           return link;
         };
 
+        const dispatchTask = async (task, button) => {
+          if (!window.confirm(`Dispatch #${task.number} to ${task.agent}? This starts a real agent run.`)) return;
+          dispatchingIssues.set(task.number, Date.now());
+          button.disabled = true;
+          button.textContent = "Starting…";
+          try {
+            const response = await fetch("/actions/dispatch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Orch-Request": "dashboard" },
+              body: JSON.stringify({ issue: task.number }),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `dispatch failed (${response.status})`);
+            void refresh();
+          } catch (error) {
+            dispatchingIssues.delete(task.number);
+            button.disabled = false;
+            button.textContent = "Dispatch";
+            window.alert(error instanceof Error ? error.message : String(error));
+          }
+        };
+
         const renderTasks = (tasks) => {
           refs.taskBody.replaceChildren();
           if (tasks.length === 0) {
             const row = document.createElement("tr");
             const empty = make("td", "empty", "No open tasks.");
-            empty.colSpan = 7;
+            empty.colSpan = 8;
             row.append(empty);
             refs.taskBody.append(row);
             return;
           }
+
+          const openNumbers = new Set(tasks.map((candidate) => candidate.number));
 
           for (const task of tasks) {
             const row = document.createElement("tr");
@@ -799,7 +829,26 @@
               runNode.append(make("span", "muted", "No run yet"));
             }
 
-            row.append(taskNode, statusNode, agentNode, prNode, reviewNode, workspaceNode, runNode);
+            const actionNode = cell("Action");
+            actionNode.className = "task-action";
+            const button = make("button", "btn btn-accent", "Dispatch");
+            button.type = "button";
+            const blockers = (Array.isArray(task.deps) ? task.deps : []).filter((dep) => openNumbers.has(dep));
+            const acceptedAt = dispatchingIssues.get(task.number);
+            if (normalizedStatus !== "todo") dispatchingIssues.delete(task.number);
+            else if (acceptedAt && Date.now() - acceptedAt > 10_000) dispatchingIssues.delete(task.number);
+            const isStarting = dispatchingIssues.has(task.number);
+            const canDispatch = Boolean(task.agent) && normalizedStatus === "todo" && !task.locked && blockers.length === 0;
+            button.disabled = !canDispatch || isStarting;
+            if (isStarting) button.textContent = "Starting…";
+            else if (!task.agent) button.title = "Route this task to an agent first.";
+            else if (normalizedStatus !== "todo") button.title = "Only todo tasks can be dispatched.";
+            else if (task.locked) button.title = "This task is already locked.";
+            else if (blockers.length) button.title = `Blocked by ${blockers.map((dep) => `#${dep}`).join(", ")}.`;
+            button.addEventListener("click", () => void dispatchTask(task, button));
+            actionNode.append(button);
+
+            row.append(taskNode, statusNode, agentNode, prNode, reviewNode, workspaceNode, runNode, actionNode);
             refs.taskBody.append(row);
           }
         };
@@ -1060,7 +1109,7 @@
             const skips = results.reduce((sum, r) => sum + r.skips.length, 0);
             rows = [];
             renderRows();
-            setRoutingStatus(`Applied ${writes} assignment(s)${skips ? `, ${skips} skipped` : ""} — owners set. A dispatcher (orch run) claims and starts the work next.`, "ok");
+            setRoutingStatus(`Applied ${writes} assignment(s)${skips ? `, ${skips} skipped` : ""} — owners set. Use a task's Dispatch button to start it now, or let orch run claim it.`, "ok");
             void refresh();
           } catch (error) {
             setRoutingStatus(error instanceof Error ? error.message : String(error), "error");

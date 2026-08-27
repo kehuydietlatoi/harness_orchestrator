@@ -16,6 +16,6 @@ export async function serveCommand(opts: { port?: string; demo?: boolean }): Pro
   await startServer(cwd, port, opts.demo ? makeDemoDeps() : undefined);
   console.log(`Dashboard: http://127.0.0.1:${port}`);
   if (opts.demo) {
-    console.log("Demo mode: seeded in-memory board — no gh, git, or claude required. Try Suggest routing → Apply.");
+    console.log("Demo mode: seeded in-memory board — no gh, git, or claude required. Try Suggest → Apply → Dispatch.");
   }
 }

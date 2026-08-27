@@ -149,9 +149,11 @@ function toIssue(task: TaskView): Issue {
 }
 
 /** Build a `ServerDeps` backed by a fresh in-memory board. */
-export function makeDemoDeps(): ServerDeps {
+export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDeps {
   const tasks = seedTasks();
   const config: OrchConfig = { ...DEFAULT_CONFIG, agents: [...AGENTS] };
+  // Longer than the dashboard's 2s poll so each simulated state is visible.
+  const lifecycleStepMs = opts.lifecycleStepMs ?? 2_500;
 
   const reviewQueue = (): number[] =>
     tasks
@@ -211,5 +213,36 @@ export function makeDemoDeps(): ServerDeps {
       })),
       reviewQueue: reviewQueue(),
     }),
+    dispatchIssue: async (number): Promise<void> => {
+      const task = tasks.find((candidate) => candidate.number === number);
+      if (!task) throw new Error(`#${number} is not an open issue.`);
+      if (task.status !== "status:todo") throw new Error(`#${number} is ${task.status}, not a todo.`);
+      if (!task.agent) throw new Error(`#${number} is not routed to an agent.`);
+      const blockers = task.deps.filter((dep) => tasks.some((candidate) => candidate.number === dep));
+      if (blockers.length) {
+        throw new Error(`#${number} is blocked by open issue(s): ${blockers.map((dep) => `#${dep}`).join(", ")}.`);
+      }
+
+      task.status = "status:claimed";
+      task.locked = true;
+      task.worktree = `../wt/issue-${number}`;
+
+      const working = setTimeout(() => {
+        if (task.status === "status:claimed") task.status = "status:in-progress";
+      }, lifecycleStepMs);
+      working.unref();
+
+      const submitted = setTimeout(() => {
+        if (task.status !== "status:in-progress") return;
+        task.status = "status:in-review";
+        task.prNumber = Math.max(200, ...tasks.map((candidate) => candidate.prNumber ?? 0)) + 1;
+        task.latestRun = {
+          tokensTotal: task.agent === "claude" ? 58_400 : 43_700,
+          costUsd: task.agent === "claude" ? 0.78 : 0.29,
+          ts: new Date().toISOString(),
+        };
+      }, lifecycleStepMs * 2);
+      submitted.unref();
+    },
   };
 }
