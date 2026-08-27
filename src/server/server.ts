@@ -7,7 +7,8 @@ import { runJudge } from "../routing/judge.js";
 import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github/labels.js";
 import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
 import { readRuns } from "../board/telemetry.js";
-import { createFromPlan, parseTickets, resolvePlan, type Created, type Ticket } from "../tasks/plan.js";
+import { parseTickets, resolvePlan, type Ticket } from "../tasks/plan.js";
+import { createFromPlan, type PlanCreateResult } from "../tasks/plan-create.js";
 import { dispatchSpecific } from "../tasks/runner.js";
 
 // Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
@@ -29,7 +30,7 @@ export interface ServerDeps {
   runJudge: (brief: string, cfg: OrchConfig, cwd: string) => Promise<PlanEntry[]>;
   editIssue: (n: number, labels: string[], cwd: string) => Promise<void>;
   /** Create issues from a ticket draft (`POST /actions/plan-create`); overridable for --demo/tests. */
-  createIssues: (tickets: Ticket[], cwd: string) => Promise<Created[]>;
+  createIssues: (tickets: Ticket[], cwd: string) => Promise<PlanCreateResult>;
   /** Board projection for `GET /status`; overridable so `--demo` can serve a fixture. */
   snapshot: (cwd: string) => Promise<Snapshot>;
   /** Claim and run one routed todo; invoked after the dispatch response has ended. */
@@ -252,8 +253,8 @@ async function handlePlanCreate(
     sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
     return;
   }
-  const created = await deps.createIssues(tickets, cwd);
-  sendJson(response, 200, { created });
+  const result = await deps.createIssues(tickets, cwd);
+  sendJson(response, 200, result);
 }
 
 /** Accept a targeted run and start it on the next event-loop turn so the HTTP

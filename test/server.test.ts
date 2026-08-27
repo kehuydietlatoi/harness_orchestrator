@@ -106,7 +106,11 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
     },
     createIssues: async (tickets) => {
       creates.push(tickets);
-      return tickets.map((t, i) => ({ id: t.id, number: 100 + i, title: t.title }));
+      return {
+        created: tickets.map((t, i) => ({ id: t.id, number: 100 + i, title: t.title })),
+        reused: [],
+        failed: [],
+      };
     },
     snapshot: async () => ({ generatedAt: "2026-08-23T12:00:00.000Z", tasks: [], reviewQueue: [] }),
     dispatchIssue: async (n) => {
@@ -402,6 +406,8 @@ describe("write surface", () => {
       { id: "a", number: 100, title: "First" },
       { id: "b", number: 101, title: "Second" },
     ]);
+    expect(JSON.parse(res.body).reused).toEqual([]);
+    expect(JSON.parse(res.body).failed).toEqual([]);
     expect(creates).toHaveLength(1);
   });
 

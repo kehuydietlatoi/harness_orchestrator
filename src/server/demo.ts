@@ -1,5 +1,6 @@
 import type { PlanEntry } from "../routing/assign.js";
-import type { Created, Ticket } from "../tasks/plan.js";
+import type { Ticket } from "../tasks/plan.js";
+import { buildPlanMarkers, type PlanCreateResult } from "../tasks/plan-create.js";
 import { DEFAULT_CONFIG, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
 import type { ServerDeps } from "./server.js";
@@ -151,6 +152,7 @@ function toIssue(task: TaskView): Issue {
 /** Build a `ServerDeps` backed by a fresh in-memory board. */
 export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDeps {
   const tasks = seedTasks();
+  const createdByMarker = new Map<string, number>();
   const config: OrchConfig = { ...DEFAULT_CONFIG, agents: [...AGENTS] };
   // Longer than the dashboard's 2s poll so each simulated state is visible.
   const lifecycleStepMs = opts.lifecycleStepMs ?? 2_500;
@@ -177,11 +179,19 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
       const task = tasks.find((t) => t.number === n);
       if (task && agent) task.agent = agent;
     },
-    createIssues: async (tickets: Ticket[]): Promise<Created[]> => {
-      const created: Created[] = [];
+    createIssues: async (tickets: Ticket[]): Promise<PlanCreateResult> => {
+      const result: PlanCreateResult = { created: [], reused: [], failed: [] };
       const idToNumber = new Map<string, number>();
+      const markers = buildPlanMarkers(tickets);
       let next = Math.max(0, ...tasks.map((t) => t.number)) + 1;
-      for (const t of tickets) {
+      for (let index = 0; index < tickets.length; index++) {
+        const t = tickets[index];
+        const prior = createdByMarker.get(markers.tickets[index]);
+        if (prior !== undefined) {
+          result.reused.push({ id: t.id, number: prior, title: t.title });
+          if (t.id) idToNumber.set(t.id, prior);
+          continue;
+        }
         const number = next++;
         const deps = (t.dependsOn ?? [])
           .map((d) => idToNumber.get(d))
@@ -198,10 +208,11 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
           worktree: null,
           latestRun: null,
         });
+        createdByMarker.set(markers.tickets[index], number);
         if (t.id) idToNumber.set(t.id, number);
-        created.push({ id: t.id, number, title: t.title });
+        result.created.push({ id: t.id, number, title: t.title });
       }
-      return created;
+      return result;
     },
     snapshot: async (): Promise<Snapshot> => ({
       generatedAt: new Date().toISOString(),

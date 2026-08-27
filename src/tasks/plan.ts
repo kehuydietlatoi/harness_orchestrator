@@ -1,6 +1,5 @@
-import { readFileSync } from "node:fs";
-import { createIssue, listIssues, editIssue } from "../github/github.js";
-import { STATUS, agentLabel } from "../github/labels.js";
+import { listIssues, editIssue } from "../github/github.js";
+import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 
@@ -10,25 +9,6 @@ export interface Ticket {
   body?: string;
   dependsOn?: string[]; // local ids of earlier tickets
   files?: string[]; // file-ownership hints (to minimise overlap)
-}
-
-/** Pure: render the GitHub issue body from a ticket + resolved dependency numbers. */
-export function renderTicketBody(ticket: Ticket, depNumbers: number[]): string {
-  const parts: string[] = [];
-  if (ticket.body) parts.push(ticket.body.trim());
-  if (ticket.files?.length) {
-    parts.push(`**Files (ownership hint):** ${ticket.files.map((f) => `\`${f}\``).join(", ")}`);
-  }
-  if (depNumbers.length) {
-    parts.push(`Depends-on: ${depNumbers.map((n) => `#${n}`).join(", ")}`);
-  }
-  return parts.join("\n\n") || "_(no description)_";
-}
-
-export interface Created {
-  id?: string;
-  number: number;
-  title: string;
 }
 
 /** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
@@ -136,31 +116,6 @@ export function resolvePlan(tickets: readonly Ticket[]): ResolvedPlan {
   }
 
   return { tickets: resolved, errors, warnings };
-}
-
-/** Create GitHub issues from parsed tickets, wiring `dependsOn` to real #numbers.
- * Refuses (throws) if `resolvePlan` reports blocking errors. */
-export async function createFromPlan(tickets: readonly Ticket[], cwd: string): Promise<Created[]> {
-  const { errors } = resolvePlan(tickets);
-  if (errors.length) throw new Error(`invalid tickets: ${errors.join("; ")}`);
-
-  const created: Created[] = [];
-  const idToNumber = new Map<string, number>();
-  for (const t of tickets) {
-    const depNumbers = (t.dependsOn ?? [])
-      .map((d) => idToNumber.get(d))
-      .filter((n): n is number => n !== undefined);
-    const body = renderTicketBody(t, depNumbers);
-    const number = await createIssue(t.title, body, [STATUS.todo], { cwd });
-    if (t.id) idToNumber.set(t.id, number);
-    created.push({ id: t.id, number, title: t.title });
-  }
-  return created;
-}
-
-/** Read a JSON tickets file and create the issues. */
-export function planFromFile(file: string, cwd: string): Promise<Created[]> {
-  return createFromPlan(parseTickets(readFileSync(file, "utf8")), cwd);
 }
 
 export interface Assignment {
