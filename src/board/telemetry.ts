@@ -8,6 +8,8 @@ export interface RunRecord {
   project: string;
   issue: number;
   agent: string;
+  /** Resolved model/effort tier the run used (e.g. "opus", "high"); null when unknown. */
+  model: string | null;
   outcome: string;
   durationMs: number;
   tokensIn: number | null;
@@ -20,6 +22,8 @@ export interface RunUsage {
   tokensIn: number | null;
   tokensOut: number | null;
   tokensTotal: number | null;
+  /** Portion of tokensIn served from the prompt cache (cheaper); null when unknown. */
+  cachedInputTokens: number | null;
   costUsd: number | null;
 }
 
@@ -36,9 +40,10 @@ const OUTPUT_KEYS = [
 ];
 const TOTAL_KEYS = ["total_tokens", "totalTokens", "tokens_total", "tokensTotal"];
 const COST_KEYS = ["total_cost_usd", "totalCostUsd", "cost_usd", "costUsd"];
+const CACHED_KEYS = ["cached_input_tokens", "cachedInputTokens", "cache_read_input_tokens", "cacheReadInputTokens"];
 
 function emptyUsage(): RunUsage {
-  return { tokensIn: null, tokensOut: null, tokensTotal: null, costUsd: null };
+  return { tokensIn: null, tokensOut: null, tokensTotal: null, cachedInputTokens: null, costUsd: null };
 }
 
 function objectValue(value: unknown): JsonObject | null {
@@ -61,6 +66,7 @@ function usageFromObject(obj: JsonObject): RunUsage {
     tokensIn,
     tokensOut,
     tokensTotal: explicitTotal ?? (tokensIn !== null && tokensOut !== null ? tokensIn + tokensOut : null),
+    cachedInputTokens: numericField(obj, CACHED_KEYS),
     costUsd: numericField(obj, COST_KEYS),
   };
 }
@@ -200,6 +206,8 @@ function parseRunRecord(value: unknown): RunRecord | null {
     project: obj.project,
     issue: obj.issue as number,
     agent: obj.agent,
+    // Older records predate the model field — treat as unknown rather than dropping the row.
+    model: typeof obj.model === "string" ? obj.model : null,
     outcome: obj.outcome,
     durationMs: obj.durationMs as number,
     tokensIn: nullableNumber(obj.tokensIn),

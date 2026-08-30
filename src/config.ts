@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
 
 export interface AdapterConfig {
   cmd: string;
@@ -22,6 +23,10 @@ export interface OrchConfig {
   taskTimeoutMs: number;
   defaultEffort?: "easy" | "hard";
   adapters: Record<string, AdapterConfig>;
+  /** Per-million-token USD rates keyed by resolved model string, for computing a
+   * cost fallback when a harness log reports none. Subscription-billed agents
+   * (e.g. Codex) simply have no entry, so their cost stays null. */
+  pricing: Record<string, ModelPricing>;
 }
 
 export const CONFIG_FILE = "orch.config.json";
@@ -39,6 +44,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
     claude: { cmd: "claude", models: { easy: "sonnet", hard: "opus" } },
     codex: { cmd: "codex", models: { easy: "low", hard: "high" } },
   },
+  pricing: DEFAULT_PRICING,
 };
 
 export function configPath(cwd: string = process.cwd()): string {
@@ -71,9 +77,13 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     }
     adapters[agent] = merged;
   }
+  // Merge pricing so a config that sets only some models keeps the built-in
+  // defaults for the rest (self-heals like the label set does).
+  const pricing = { ...DEFAULT_CONFIG.pricing, ...raw.pricing };
   return {
     ...DEFAULT_CONFIG,
     ...raw,
     adapters,
+    pricing,
   };
 }
