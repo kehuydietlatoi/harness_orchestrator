@@ -1,5 +1,6 @@
 import { type Issue, type Pr, listIssues, listOpenPrs } from "../github/github.js";
 import { issueAgent, issueStatus, parseDeps } from "./board.js";
+import { buildGraph } from "./graph.js";
 import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "../github/labels.js";
 import { listLocks } from "../git/lock.js";
 import { prIssueNumber } from "./review.js";
@@ -29,6 +30,8 @@ export interface Snapshot {
   tasks: TaskView[];
   /** Open PR numbers currently carrying the review-needed label. */
   reviewQueue: number[];
+  /** Deadlocked dependency groups; each `[a, b, c]` means a→b→c→a. Empty when acyclic. */
+  cycles: number[][];
 }
 
 export type SnapshotRun = Pick<RunRecord, "issue" | "tokensTotal" | "costUsd" | "ts">;
@@ -106,7 +109,9 @@ export function assemble(
     .map((pr) => pr.number)
     .sort((a, b) => a - b);
 
-  return { generatedAt, tasks, reviewQueue };
+  const { cycles } = buildGraph(issues);
+
+  return { generatedAt, tasks, reviewQueue, cycles };
 }
 
 function parseWorktrees(text: string): Worktree[] {

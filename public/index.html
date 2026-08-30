@@ -375,6 +375,21 @@
         background: transparent;
       }
 
+      .cycle-banner {
+        margin: 0 0 18px;
+        padding: 12px 16px;
+        border: 1px solid var(--danger);
+        border-radius: 10px;
+        background: color-mix(in srgb, var(--danger) 12%, transparent);
+        color: var(--danger);
+        font-size: 0.85rem;
+        line-height: 1.5;
+      }
+
+      .cycle-banner strong {
+        font-weight: 600;
+      }
+
       .routing-status {
         padding: 12px 18px;
         color: var(--muted);
@@ -554,6 +569,8 @@
         </div>
       </header>
 
+      <div class="cycle-banner" id="cycle-banner" role="alert" aria-live="assertive" hidden></div>
+
       <section class="metrics" aria-label="Board summary">
         <article class="metric">
           <span class="metric-label">Open tasks</span>
@@ -685,6 +702,7 @@
           reviewCount: document.querySelector("#review-count"),
           reviewList: document.querySelector("#reviews-list"),
           lastUpdated: document.querySelector("#last-updated"),
+          cycleBanner: document.querySelector("#cycle-banner"),
         };
 
         let latestSnapshot = null; // most recent /status payload, for the manual issue picker
@@ -879,11 +897,37 @@
           }
         };
 
+        const renderCycles = (cycles) => {
+          const groups = Array.isArray(cycles) ? cycles.filter((c) => Array.isArray(c) && c.length) : [];
+          if (groups.length === 0) {
+            refs.cycleBanner.hidden = true;
+            refs.cycleBanner.replaceChildren();
+            return;
+          }
+          refs.cycleBanner.hidden = false;
+          refs.cycleBanner.replaceChildren();
+          const lead = make(
+            "strong",
+            "",
+            groups.length === 1 ? "⚠ Dependency cycle detected" : `⚠ ${groups.length} dependency cycles detected`,
+          );
+          refs.cycleBanner.append(lead, document.createElement("br"));
+          for (const cycle of groups) {
+            const path = [...cycle, cycle[0]].map((n) => `#${n}`).join(" → ");
+            refs.cycleBanner.append(
+              document.createTextNode(`${path} — nothing in this group can run until the cycle is broken.`),
+              document.createElement("br"),
+            );
+          }
+        };
+
         const render = (snapshot) => {
           latestSnapshot = snapshot;
           const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
           const reviewQueue = Array.isArray(snapshot.reviewQueue) ? snapshot.reviewQueue : [];
           const agents = new Set(tasks.map((task) => task.agent).filter(Boolean));
+
+          renderCycles(snapshot.cycles);
 
           refs.taskTotal.textContent = String(tasks.length);
           refs.agentTotal.textContent = String(agents.size);

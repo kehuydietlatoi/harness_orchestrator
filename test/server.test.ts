@@ -11,6 +11,7 @@ vi.mock("../src/board/snapshot.js", () => ({
     generatedAt: "2026-08-23T12:00:00.000Z",
     tasks: [],
     reviewQueue: [],
+    cycles: [],
   })),
 }));
 
@@ -112,7 +113,7 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
         failed: [],
       };
     },
-    snapshot: async () => ({ generatedAt: "2026-08-23T12:00:00.000Z", tasks: [], reviewQueue: [] }),
+    snapshot: async () => ({ generatedAt: "2026-08-23T12:00:00.000Z", tasks: [], reviewQueue: [], cycles: [] }),
     dispatchIssue: async (n) => {
       dispatches.push(n);
     },

@@ -1,10 +1,36 @@
 import pc from "picocolors";
 import { commandExists } from "../util/exec.js";
 import { isGitRepo, gitVersion, supportsWorktree, remoteUrl } from "../git/git.js";
-import { ghInstalled, ghAuthenticated, listLabels } from "../github/github.js";
+import { ghInstalled, ghAuthenticated, listLabels, listIssues, getIssue } from "../github/github.js";
 import { configExists, loadConfig } from "../config.js";
 import type { OrchConfig } from "../config.js";
 import { LABELS } from "../github/labels.js";
+import { buildGraph, formatCycle, type UnresolvedDep } from "../board/graph.js";
+
+/**
+ * Classify each unresolved dependency as pointing at a closed issue vs a
+ * nonexistent one. `getIssue` is used per unique dep — a single-target path, not
+ * a hot loop — so `doctor` can report the two invariants distinctly.
+ */
+async function classifyUnresolved(
+  deps: readonly UnresolvedDep[],
+  cwd: string,
+): Promise<{ closed: UnresolvedDep[]; missing: UnresolvedDep[] }> {
+  const state = new Map<number, "closed" | "missing">();
+  for (const dep of deps) {
+    if (state.has(dep.dep)) continue;
+    try {
+      const issue = await getIssue(dep.dep, { cwd });
+      state.set(dep.dep, issue.state.toUpperCase() === "CLOSED" ? "closed" : "missing");
+    } catch {
+      state.set(dep.dep, "missing");
+    }
+  }
+  return {
+    closed: deps.filter((d) => state.get(d.dep) === "closed"),
+    missing: deps.filter((d) => state.get(d.dep) === "missing"),
+  };
+}
 
 interface Check {
   name: string;
@@ -61,6 +87,30 @@ export async function doctorCommand(): Promise<void> {
       ok: missing.length === 0,
       note: missing.length ? `missing: ${missing.join(", ")} — run \`orch init\`` : "",
     });
+
+    // Dependency-graph invariants (Q11 rows 1–3): a cycle deadlocks its group;
+    // a dep on a closed issue is advisory; a dep on a nonexistent issue is a typo.
+    if (await isGitRepo(cwd)) {
+      const graph = buildGraph(await listIssues({ cwd, state: "open" }));
+      checks.push({
+        name: "no dependency cycles",
+        ok: graph.cycles.length === 0,
+        note: graph.cycles.length ? graph.cycles.map(formatCycle).join("  |  ") : "",
+      });
+      const { closed, missing: gone } = await classifyUnresolved(graph.unresolvedDeps, cwd);
+      checks.push({
+        name: "dependencies point at existing issues",
+        ok: gone.length === 0,
+        note: gone.length ? gone.map((d) => `#${d.issue}→#${d.dep} (no such issue)`).join(", ") : "",
+      });
+      if (closed.length > 0) {
+        checks.push({
+          name: "dependencies on closed issues",
+          ok: true, // advisory only — closed deps are non-blocking by design
+          note: closed.map((d) => `#${d.issue}→#${d.dep}`).join(", ") + " (closed; non-blocking)",
+        });
+      }
+    }
   }
 
   console.log(pc.bold("orch doctor\n"));
