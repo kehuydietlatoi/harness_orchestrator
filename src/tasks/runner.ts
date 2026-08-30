@@ -12,6 +12,7 @@ import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
+import { estimateCost } from "../board/pricing.js";
 
 export interface RunSummary {
   issue: number;
@@ -58,10 +59,12 @@ export function resolveDispatchAgent(
 function recordRun(
   issue: number,
   agent: string,
+  model: string | undefined,
   outcome: string,
   durationMs: number,
   logFile: string,
   cwd: string,
+  cfg: OrchConfig,
 ): void {
   try {
     let logText = "";
@@ -72,14 +75,21 @@ function recordRun(
     }
 
     const usage = parseUsage(logText, agent);
+    // Prefer the harness-reported cost; fall back to a per-token estimate only
+    // when pricing exists for this model (subscription agents have none → null).
+    const costUsd = usage.costUsd ?? estimateCost(usage, model ?? null, cfg.pricing);
     const rec: RunRecord = {
       ts: new Date().toISOString(),
       project: projectId(cwd),
       issue,
       agent,
+      model: model ?? null,
       outcome,
       durationMs,
-      ...usage,
+      tokensIn: usage.tokensIn,
+      tokensOut: usage.tokensOut,
+      tokensTotal: usage.tokensTotal,
+      costUsd,
     };
     appendRun(rec, cwd);
   } catch (error) {
@@ -132,6 +142,7 @@ async function processClaimed(
   cwd: string,
 ): Promise<RunSummary> {
   const n = task.issue.number;
+  const model = resolveTaskModel(agent, task.issue, cfg);
   const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");
   const logFile = resolve(logDir, `issue-${n}.jsonl`);
@@ -147,7 +158,6 @@ async function processClaimed(
 
     const adapter = makeAdapter(agent, cfg);
     const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
-    const model = resolveTaskModel(agent, task.issue, cfg);
     const result = await adapter.runTask({
       issue: n,
       agent,
@@ -195,7 +205,7 @@ async function processClaimed(
     telemetryOutcome = "failed";
   }
 
-  recordRun(n, agent, telemetryOutcome, summary.durationMs, logFile, cwd);
+  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg);
   return summary;
 }
 

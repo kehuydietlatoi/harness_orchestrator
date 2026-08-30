@@ -568,6 +568,7 @@ async function executeRepair(
           project: projectId(cwd),
           issue: action.issue,
           agent: "repair",
+          model: null,
           outcome: "repaired",
           durationMs: 0,
           tokensIn: null,

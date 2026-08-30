@@ -21,6 +21,7 @@ describe("parseUsage", () => {
       tokensIn: 150,
       tokensOut: 25,
       tokensTotal: 175,
+      cachedInputTokens: 40,
       costUsd: 0.0123,
     });
   });
@@ -38,6 +39,7 @@ describe("parseUsage", () => {
       tokensIn: 120,
       tokensOut: 30,
       tokensTotal: 150,
+      cachedInputTokens: 80,
       costUsd: null,
     });
   });
@@ -58,6 +60,7 @@ describe("parseUsage", () => {
       tokensIn: 200,
       tokensOut: 50,
       tokensTotal: 250,
+      cachedInputTokens: null,
       costUsd: null,
     });
   });
@@ -67,6 +70,7 @@ describe("parseUsage", () => {
       tokensIn: null,
       tokensOut: null,
       tokensTotal: null,
+      cachedInputTokens: null,
       costUsd: null,
     });
   });
@@ -85,6 +89,7 @@ describe("parseUsage", () => {
       tokensIn: 7,
       tokensOut: null,
       tokensTotal: null,
+      cachedInputTokens: null,
       costUsd: null,
     });
   });
