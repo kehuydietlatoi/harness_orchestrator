@@ -93,6 +93,7 @@ describe("assemble", () => {
         },
       ],
       reviewQueue: [101],
+      cycles: [],
     });
   });
 });

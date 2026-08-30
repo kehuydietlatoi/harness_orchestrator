@@ -212,6 +212,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
         latestRun: task.latestRun ? { ...task.latestRun } : null,
       })),
       reviewQueue: reviewQueue(),
+      cycles: [],
     }),
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);

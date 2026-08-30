@@ -2,6 +2,7 @@ import pc from "picocolors";
 import { loadConfig } from "../config.js";
 import { resolveAgent } from "../tasks/service.js";
 import { runLoop } from "../tasks/runner.js";
+import { reportCycles } from "./cycle-report.js";
 
 export async function runCommand(opts: {
   agent?: string;
@@ -22,7 +23,10 @@ export async function runCommand(opts: {
 
   console.log("");
   if (!summaries.length) {
-    console.log(pc.yellow("No eligible tasks to run."));
+    // Name a dependency cycle as the cause when nothing ran, rather than implying
+    // the board is simply empty.
+    const cycles = await reportCycles(cwd);
+    if (cycles === 0) console.log(pc.yellow("No eligible tasks to run."));
     return;
   }
   console.log(pc.bold(`Processed ${summaries.length} task(s):`));
