@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import pc from "picocolors";
+import { log, setLogLevel } from "./util/log.js";
 import { initCommand } from "./commands/init.js";
 import { doctorCommand } from "./commands/doctor.js";
 import { nextCommand } from "./commands/next.js";
@@ -34,7 +34,7 @@ function wrap(fn: (...args: any[]) => Promise<void>) {
     try {
       await fn(...args);
     } catch (e) {
-      console.error(pc.red("error: ") + (e instanceof Error ? e.message : String(e)));
+      log.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
     }
   };
@@ -47,7 +47,16 @@ program
   .description(
     "Run Claude Code + Codex as parallel coding agents with atomic task-claim, git-worktree isolation, and mandatory cross-harness review before merge.",
   )
-  .version("0.1.0");
+  .version("0.1.0")
+  .option("-v, --verbose", "verbose diagnostics on stderr (debug level)")
+  .option("-q, --quiet", "quiet: only errors on stderr")
+  // Apply the verbosity flags before any command action runs. Without a flag the
+  // level stays at its ORCH_LOG_LEVEL / default value.
+  .hook("preAction", () => {
+    const opts = program.opts<{ verbose?: boolean; quiet?: boolean }>();
+    if (opts.verbose) setLogLevel("debug");
+    else if (opts.quiet) setLogLevel("error");
+  });
 
 const agentOpt = "-a, --agent <id>";
 const agentDesc = "agent identity (defaults to $ORCH_AGENT or config.lead)";
@@ -200,4 +209,14 @@ program
   .option("--round-robin", "use the legacy eligible-issue round-robin assignment")
   .action(wrap(assignCommand));
 
-program.parseAsync(process.argv);
+// Last-resort net for a rejection that escapes a wrapped action (e.g. a parse
+// failure or an unwrapped hook); wrap() still handles ordinary command errors.
+process.on("unhandledRejection", (reason) => {
+  log.error(reason instanceof Error ? reason.message : String(reason));
+  process.exit(1);
+});
+
+program.parseAsync(process.argv).catch((e: unknown) => {
+  log.error(e instanceof Error ? e.message : String(e));
+  process.exit(1);
+});

@@ -10,6 +10,7 @@ import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from 
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
+import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 import { estimateCost } from "../board/pricing.js";
@@ -94,7 +95,7 @@ function recordRun(
     appendRun(rec, cwd);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`warning: could not record run telemetry: ${message}`);
+    log.warn(`could not record run telemetry: ${message}`);
   }
 }
 
@@ -200,7 +201,7 @@ async function processClaimed(
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
     await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree });
-    console.error(pc.red(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`));
+    log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
     summary = { issue: n, outcome: "failed", durationMs };
     telemetryOutcome = "failed";
   }
@@ -251,7 +252,7 @@ async function recoverClaim(
 
 function warnRecovery(n: number, action: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
-  console.warn(`warning: #${n} recovery ${action}: ${message}`);
+  log.warn(`#${n} recovery ${action}: ${message}`);
 }
 
 /**

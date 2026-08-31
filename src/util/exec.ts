@@ -33,8 +33,10 @@ export function exec(
 /** True if `cmd` is resolvable on PATH. */
 export async function commandExists(cmd: string): Promise<boolean> {
   const isWin = process.platform === "win32";
+  // Pass cmd as a positional arg ($1), never interpolated into the script, so a
+  // command name can never break out of the `command -v` invocation.
   const res = isWin
     ? await exec("where", [cmd])
-    : await exec("sh", ["-c", `command -v ${cmd}`]);
+    : await exec("sh", ["-c", 'command -v "$1"', "sh", cmd]);
   return res.code === 0;
 }

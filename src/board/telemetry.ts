@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { log } from "../util/log.js";
 
 export interface RunRecord {
   ts: string;
@@ -234,7 +235,7 @@ export function readRuns(cwd: string): RunRecord[] {
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return [];
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`warning: could not read run telemetry: ${message}`);
+    log.warn(`could not read run telemetry: ${message}`);
     return [];
   }
 }
@@ -247,6 +248,6 @@ export function appendRun(rec: RunRecord, cwd: string): void {
     appendFileSync(path, `${JSON.stringify(rec)}\n`, "utf8");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`warning: could not append run telemetry: ${message}`);
+    log.warn(`could not append run telemetry: ${message}`);
   }
 }
