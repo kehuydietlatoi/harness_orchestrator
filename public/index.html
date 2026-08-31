@@ -133,7 +133,7 @@
 
       .metrics {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         gap: 12px;
         margin-bottom: 20px;
       }
@@ -243,6 +243,25 @@
 
       .task-title {
         font-weight: 650;
+      }
+
+      a.task-heading {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      a.task-heading:hover .task-title {
+        text-decoration: underline;
+      }
+
+      a.review-pr:hover {
+        text-decoration: underline;
+      }
+
+      .ext-arrow {
+        margin-left: 3px;
+        font-size: 0.78em;
+        opacity: 0.7;
       }
 
       .badge,
@@ -476,6 +495,204 @@
         font-size: 0.74rem;
       }
 
+      /* --- Focus visibility (keyboard nav on dark panels) --- */
+      .btn:focus-visible,
+      a:focus-visible,
+      select:focus-visible,
+      .row-remove:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+        border-radius: 6px;
+      }
+
+      /* --- Metrics: spend tile sub-line --- */
+      .metric-sub {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.72rem;
+      }
+
+      /* --- Per-agent summary chips --- */
+      .agent-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      .agent-chip {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 13px;
+        border: 1px solid var(--line-soft);
+        border-radius: 11px;
+        background: var(--panel-raised);
+        font-size: 0.8rem;
+      }
+
+      .agent-chip .agent {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .agent-chip .chip-stat {
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      .agent-chip .chip-cost {
+        color: var(--accent);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      /* --- Tasks toolbar (search + filters + refresh) --- */
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .toolbar input[type="search"],
+      .toolbar select {
+        padding: 6px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 0.8rem;
+      }
+
+      .toolbar input[type="search"] {
+        min-width: 150px;
+      }
+
+      /* --- Task title truncation on wide viewports --- */
+      .task-title {
+        display: inline-block;
+        max-width: min(44ch, 38vw);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        vertical-align: bottom;
+      }
+
+      /* --- Blocked-by badge --- */
+      .badge.is-blocked {
+        border-color: rgba(255, 133, 133, 0.32);
+        color: var(--danger);
+        background: rgba(255, 133, 133, 0.08);
+      }
+
+      /* --- CI checks badge --- */
+      .checks {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 7px;
+        padding: 2px 7px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.68rem;
+        font-weight: 700;
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+
+      .checks[data-state="pass"] {
+        border-color: rgba(105, 226, 177, 0.3);
+        color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .checks[data-state="fail"] {
+        border-color: rgba(255, 133, 133, 0.32);
+        color: var(--danger);
+        background: rgba(255, 133, 133, 0.08);
+      }
+
+      .checks[data-state="pending"] {
+        border-color: rgba(243, 189, 103, 0.32);
+        color: var(--warning);
+        background: rgba(243, 189, 103, 0.09);
+      }
+
+      /* --- Run cell extras --- */
+      .run-model {
+        color: var(--muted);
+      }
+
+      .run-ago {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 0.7rem;
+      }
+
+      /* --- Toasts --- */
+      .toasts {
+        position: fixed;
+        right: 18px;
+        bottom: 18px;
+        z-index: 50;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: min(360px, calc(100vw - 36px));
+      }
+
+      .toast {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 11px;
+        background: var(--panel-raised);
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.4);
+        font-size: 0.83rem;
+        animation: toast-in 0.16s ease-out;
+      }
+
+      @keyframes toast-in {
+        from {
+          transform: translateY(8px);
+          opacity: 0;
+        }
+      }
+
+      .toast.is-error {
+        border-color: rgba(255, 133, 133, 0.4);
+      }
+
+      .toast.is-ok {
+        border-color: rgba(105, 226, 177, 0.4);
+      }
+
+      .toast-msg {
+        flex: 1;
+        line-height: 1.4;
+      }
+
+      .toast-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .toast-close {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        font-size: 1rem;
+        line-height: 1;
+        cursor: pointer;
+      }
+
       @media (max-width: 760px) {
         .shell {
           width: min(100% - 24px, 680px);
@@ -548,6 +765,18 @@
           display: none;
         }
 
+        .task-title {
+          max-width: 100%;
+          white-space: normal;
+        }
+
+        .toasts {
+          right: 12px;
+          left: 12px;
+          bottom: 12px;
+          width: auto;
+        }
+
         .signals,
         .run {
           min-width: 0;
@@ -584,7 +813,14 @@
           <span class="metric-label">Awaiting review</span>
           <span class="metric-value" id="review-total">—</span>
         </article>
+        <article class="metric">
+          <span class="metric-label">Board spend</span>
+          <span class="metric-value" id="spend-total">—</span>
+          <span class="metric-sub" id="spend-tokens">— tokens</span>
+        </article>
       </section>
+
+      <section class="agent-summary" id="agent-summary" aria-label="Per-agent summary"></section>
 
       <section class="panel" id="routing" aria-labelledby="routing-heading">
         <div class="panel-header">
@@ -650,7 +886,22 @@
       <section class="panel" aria-labelledby="tasks-heading">
         <div class="panel-header">
           <h2 id="tasks-heading">Tasks</h2>
-          <span class="count" id="task-count">0</span>
+          <div class="toolbar">
+            <input type="search" id="task-search" placeholder="Search tasks…" aria-label="Search tasks by number or title" />
+            <select id="task-status-filter" aria-label="Filter by status">
+              <option value="">All statuses</option>
+              <option value="todo">todo</option>
+              <option value="claimed">claimed</option>
+              <option value="in-progress">in-progress</option>
+              <option value="in-review">in-review</option>
+              <option value="done">done</option>
+            </select>
+            <select id="task-agent-filter" aria-label="Filter by agent">
+              <option value="">All agents</option>
+            </select>
+            <button type="button" class="btn btn-ghost" id="task-refresh">Refresh</button>
+            <span class="count" id="task-count">0</span>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -686,6 +937,8 @@
       <p class="timestamp" id="last-updated">Last updated: waiting for data</p>
     </main>
 
+    <div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
     <script>
       (() => {
         "use strict";
@@ -703,10 +956,23 @@
           reviewList: document.querySelector("#reviews-list"),
           lastUpdated: document.querySelector("#last-updated"),
           cycleBanner: document.querySelector("#cycle-banner"),
+          spendTotal: document.querySelector("#spend-total"),
+          spendTokens: document.querySelector("#spend-tokens"),
+          agentSummary: document.querySelector("#agent-summary"),
+          taskSearch: document.querySelector("#task-search"),
+          statusFilter: document.querySelector("#task-status-filter"),
+          agentFilter: document.querySelector("#task-agent-filter"),
+          taskRefresh: document.querySelector("#task-refresh"),
+          toasts: document.querySelector("#toasts"),
         };
 
         let latestSnapshot = null; // most recent /status payload, for the manual issue picker
+        let repoUrl = null; // GitHub repo web URL, for building issue/PR links (null until known)
+        let pollTimer = null; // active poll timeout, or null while paused (tab hidden)
+        let lastBoardKey = null; // signature of the last heavy render, to skip no-op rebuilds
+        const filters = { text: "", status: "", agent: "" };
         const dispatchingIssues = new Map(); // issue -> accepted timestamp, cleared when status advances
+        const dispatchWarned = new Set(); // issues we've already warned may have failed to start
 
         const make = (tag, className, text) => {
           const node = document.createElement(tag);
@@ -732,6 +998,63 @@
           }).format(value);
         };
 
+        const formatRelative = (ts) => {
+          const t = Date.parse(ts);
+          if (Number.isNaN(t)) return "";
+          const secs = Math.round((Date.now() - t) / 1000);
+          if (secs < 45) return "just now";
+          const mins = Math.round(secs / 60);
+          if (mins < 60) return `${mins}m ago`;
+          const hrs = Math.round(mins / 60);
+          if (hrs < 24) return `${hrs}h ago`;
+          return `${Math.round(hrs / 24)}d ago`;
+        };
+
+        // ---- Toasts (non-blocking replacements for alert/confirm) ----
+        const toast = (message, kind) => {
+          const el = make("div", `toast${kind ? ` is-${kind}` : ""}`);
+          el.append(make("span", "toast-msg", message));
+          const close = make("button", "toast-close", "✕");
+          close.type = "button";
+          close.title = "Dismiss";
+          close.addEventListener("click", () => el.remove());
+          el.append(close);
+          refs.toasts.append(el);
+          window.setTimeout(() => el.remove(), 6000);
+          return el;
+        };
+
+        // A confirm that never blocks the event loop; resolves true/false.
+        const confirmToast = (message, confirmLabel = "Confirm") =>
+          new Promise((resolve) => {
+            const el = make("div", "toast");
+            el.append(make("div", "toast-msg", message));
+            const actions = make("div", "toast-actions");
+            const no = make("button", "btn btn-ghost", "Cancel");
+            const yes = make("button", "btn btn-accent", confirmLabel);
+            no.type = "button";
+            yes.type = "button";
+            actions.append(no, yes);
+            el.append(actions);
+            refs.toasts.append(el);
+            const done = (value) => {
+              el.remove();
+              resolve(value);
+            };
+            no.addEventListener("click", () => done(false));
+            yes.addEventListener("click", () => done(true));
+            yes.focus();
+          });
+
+        const CHECK_LABEL = { pass: "✓ CI", fail: "✗ CI", pending: "● CI" };
+        const checksBadge = (state) => {
+          if (!state || state === "none" || !CHECK_LABEL[state]) return null;
+          const node = make("span", "checks", CHECK_LABEL[state]);
+          node.dataset.state = state;
+          node.title = `CI checks: ${state}`;
+          return node;
+        };
+
         const cell = (label) => {
           const node = document.createElement("td");
           node.dataset.label = label;
@@ -745,26 +1068,53 @@
           return node;
         };
 
+        // Open in a new tab, but only when we actually have a URL — otherwise a plain span.
+        const externalLink = (href, className, text, title) => {
+          if (!href) return make("span", className, text);
+          const link = make("a", className, text);
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          if (title) link.title = title;
+          link.append(make("span", "ext-arrow", "↗"));
+          return link;
+        };
+
         const prReference = (task) => {
           if (task.prNumber === null || task.prNumber === undefined) return make("span", "muted", "—");
           const label = `#${task.prNumber}`;
-          if (task.prUrl) {
-            const link = make("a", "review-pr", label);
-            link.href = task.prUrl;
-            link.target = "_blank";
-            link.rel = "noreferrer";
-            link.title = `Open PR ${label}`;
-            return link;
+          const href = task.prUrl || (repoUrl ? `${repoUrl}/pull/${task.prNumber}` : null);
+          return externalLink(href, "review-pr", label, `Open PR ${label} on GitHub`);
+        };
+
+        // The issue number + title as a single click target that opens the
+        // GitHub issue in a new tab (plain text when the repo URL is unknown).
+        const issueHeading = (number, title) => {
+          const numberSpan = make("span", "task-number", `#${number}`);
+          const titleSpan = make("span", "task-title", title || "Untitled task");
+          const href = repoUrl ? `${repoUrl}/issues/${number}` : null;
+          if (!href) {
+            const wrap = make("span", "task-heading");
+            wrap.append(numberSpan, titleSpan);
+            return wrap;
           }
-          const link = make("a", "review-pr", label);
-          link.href = "#review-queue";
-          link.title = `PR ${label}`;
+          const link = make("a", "task-heading");
+          link.href = href;
+          link.target = "_blank";
+          link.rel = "noreferrer";
+          link.title = `Open issue #${number} on GitHub`;
+          link.append(numberSpan, titleSpan, make("span", "ext-arrow", "↗"));
           return link;
         };
 
         const dispatchTask = async (task, button) => {
-          if (!window.confirm(`Dispatch #${task.number} to ${task.agent}? This starts a real agent run.`)) return;
+          const ok = await confirmToast(
+            `Dispatch #${task.number} to ${task.agent}? This starts a real agent run.`,
+            "Dispatch",
+          );
+          if (!ok) return;
           dispatchingIssues.set(task.number, Date.now());
+          dispatchWarned.delete(task.number);
           button.disabled = true;
           button.textContent = "Starting…";
           try {
@@ -775,43 +1125,48 @@
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `dispatch failed (${response.status})`);
+            rerender();
             void refresh();
           } catch (error) {
             dispatchingIssues.delete(task.number);
             button.disabled = false;
             button.textContent = "Dispatch";
-            window.alert(error instanceof Error ? error.message : String(error));
+            toast(error instanceof Error ? error.message : String(error), "error");
           }
         };
 
-        const renderTasks = (tasks) => {
+        const renderTasks = (visibleTasks, allTasks) => {
           refs.taskBody.replaceChildren();
-          if (tasks.length === 0) {
+          if (visibleTasks.length === 0) {
             const row = document.createElement("tr");
-            const empty = make("td", "empty", "No open tasks.");
+            const message = allTasks.length === 0 ? "No open tasks." : "No tasks match the current filter.";
+            const empty = make("td", "empty", message);
             empty.colSpan = 8;
             row.append(empty);
             refs.taskBody.append(row);
             return;
           }
 
-          const openNumbers = new Set(tasks.map((candidate) => candidate.number));
+          const openNumbers = new Set(allTasks.map((candidate) => candidate.number));
 
-          for (const task of tasks) {
+          for (const task of visibleTasks) {
             const row = document.createElement("tr");
+            const normalizedStatus = statusName(task.status);
+            const blockers = (Array.isArray(task.deps) ? task.deps : []).filter((dep) => openNumbers.has(dep));
 
             const taskNode = cell("Task");
             taskNode.className = "task-cell";
-            taskNode.append(
-              make("span", "task-number", `#${task.number}`),
-              make("span", "task-title", task.title || "Untitled task"),
-            );
+            taskNode.append(issueHeading(task.number, task.title));
 
             const statusNode = cell("Status");
-            const normalizedStatus = statusName(task.status);
             const badge = make("span", "badge", normalizedStatus);
             badge.dataset.status = normalizedStatus;
             statusNode.append(badge);
+            if (blockers.length) {
+              const blocked = make("span", "badge is-blocked", `blocked by ${blockers.map((dep) => `#${dep}`).join(", ")}`);
+              blocked.title = "Waiting on open dependencies before it can be dispatched.";
+              statusNode.append(document.createTextNode(" "), blocked);
+            }
 
             const agentNode = cell("Agent");
             agentNode.append(
@@ -820,6 +1175,8 @@
 
             const prNode = cell("PR");
             prNode.append(prReference(task));
+            const badgeCi = checksBadge(task.prChecks);
+            if (badgeCi) prNode.append(badgeCi);
 
             const reviewNode = cell("Reviewed by");
             const reviewers = Array.isArray(task.reviewedBy) ? task.reviewedBy : [];
@@ -842,6 +1199,11 @@
                 document.createElement("br"),
                 make("span", "run-cost", formatCost(task.latestRun.costUsd)),
               );
+              if (task.latestRun.model) {
+                runNode.append(document.createTextNode(" · "), make("span", "run-model", task.latestRun.model));
+              }
+              const ago = task.latestRun.ts ? formatRelative(task.latestRun.ts) : "";
+              if (ago) runNode.append(make("span", "run-ago", ago));
               runNode.title = task.latestRun.ts ? `Run completed ${task.latestRun.ts}` : "";
             } else {
               runNode.append(make("span", "muted", "No run yet"));
@@ -851,10 +1213,17 @@
             actionNode.className = "task-action";
             const button = make("button", "btn btn-accent", "Dispatch");
             button.type = "button";
-            const blockers = (Array.isArray(task.deps) ? task.deps : []).filter((dep) => openNumbers.has(dep));
             const acceptedAt = dispatchingIssues.get(task.number);
-            if (normalizedStatus !== "todo") dispatchingIssues.delete(task.number);
-            else if (acceptedAt && Date.now() - acceptedAt > 10_000) dispatchingIssues.delete(task.number);
+            if (normalizedStatus !== "todo") {
+              dispatchingIssues.delete(task.number);
+              dispatchWarned.delete(task.number); // it advanced — the dispatch took
+            } else if (acceptedAt && Date.now() - acceptedAt > 10_000) {
+              dispatchingIssues.delete(task.number);
+              if (!dispatchWarned.has(task.number)) {
+                dispatchWarned.add(task.number);
+                toast(`Dispatch of #${task.number} didn't start — it's still todo. Check the orch logs.`, "error");
+              }
+            }
             const isStarting = dispatchingIssues.has(task.number);
             const canDispatch = Boolean(task.agent) && normalizedStatus === "todo" && !task.locked && blockers.length === 0;
             button.disabled = !canDispatch || isStarting;
@@ -884,14 +1253,29 @@
             const card = make("article", "review-card");
             card.id = `review-${prNumber}`;
             const context = make("div");
-            context.append(prReference(task || { prNumber }));
-            context.append(
-              make(
-                "div",
-                "review-context",
-                task ? `Task #${task.number} · ${task.title}` : "Awaiting cross-review",
-              ),
-            );
+            const prLine = make("div");
+            prLine.append(prReference(task || { prNumber }));
+            const badgeCi = checksBadge(task?.prChecks);
+            if (badgeCi) prLine.append(badgeCi);
+            context.append(prLine);
+            const contextLine = make("div", "review-context");
+            if (task) {
+              const href = repoUrl ? `${repoUrl}/issues/${task.number}` : null;
+              const label = `Task #${task.number} · ${task.title}`;
+              if (href) {
+                const link = make("a", null, label);
+                link.href = href;
+                link.target = "_blank";
+                link.rel = "noreferrer";
+                link.title = `Open issue #${task.number} on GitHub`;
+                contextLine.append(link);
+              } else {
+                contextLine.textContent = label;
+              }
+            } else {
+              contextLine.textContent = "Awaiting cross-review";
+            }
+            context.append(contextLine);
             card.append(context, make("span", "badge", task?.agent ? `by ${task.agent}` : "pending"));
             refs.reviewList.append(card);
           }
@@ -921,34 +1305,151 @@
           }
         };
 
+        // Lifecycle-first ordering so the rows that need attention float to the top.
+        const STATUS_RANK = { "in-review": 0, "in-progress": 1, claimed: 2, todo: 3, done: 4 };
+
+        const applyFilters = (tasks) => {
+          const q = filters.text.trim().toLowerCase();
+          const visible = tasks.filter((task) => {
+            if (filters.status && statusName(task.status) !== filters.status) return false;
+            if (filters.agent && (task.agent || "") !== filters.agent) return false;
+            if (q && !`#${task.number} ${task.title || ""}`.toLowerCase().includes(q)) return false;
+            return true;
+          });
+          return visible.sort((a, b) => {
+            const ra = STATUS_RANK[statusName(a.status)] ?? 9;
+            const rb = STATUS_RANK[statusName(b.status)] ?? 9;
+            return ra - rb || a.number - b.number;
+          });
+        };
+
+        const renderSpend = (tasks) => {
+          let cost = 0;
+          let tokens = 0;
+          for (const task of tasks) {
+            const run = task.latestRun;
+            if (!run) continue;
+            if (typeof run.costUsd === "number") cost += run.costUsd;
+            if (typeof run.tokensTotal === "number") tokens += run.tokensTotal;
+          }
+          refs.spendTotal.textContent = formatCost(cost);
+          refs.spendTokens.textContent = `${new Intl.NumberFormat().format(tokens)} tokens`;
+        };
+
+        const renderAgentSummary = (tasks) => {
+          const byAgent = new Map();
+          for (const task of tasks) {
+            if (!task.agent) continue;
+            const entry = byAgent.get(task.agent) || { total: 0, review: 0, active: 0, cost: 0 };
+            entry.total += 1;
+            const s = statusName(task.status);
+            if (s === "in-review") entry.review += 1;
+            if (s === "in-progress" || s === "claimed") entry.active += 1;
+            if (task.latestRun && typeof task.latestRun.costUsd === "number") entry.cost += task.latestRun.costUsd;
+            byAgent.set(task.agent, entry);
+          }
+          refs.agentSummary.replaceChildren();
+          const names = [...byAgent.keys()].sort();
+          refs.agentSummary.hidden = names.length === 0;
+          for (const name of names) {
+            const e = byAgent.get(name);
+            const chip = make("div", "agent-chip");
+            chip.append(make("span", "agent", name));
+            chip.append(make("span", "chip-stat", `${e.total} task${e.total === 1 ? "" : "s"}`));
+            if (e.active) chip.append(make("span", "chip-stat", `${e.active} active`));
+            if (e.review) chip.append(make("span", "chip-stat", `${e.review} in review`));
+            chip.append(make("span", "chip-cost", formatCost(e.cost)));
+            refs.agentSummary.append(chip);
+          }
+        };
+
+        // Rebuild the agent filter only when the set of agents changes, so it
+        // doesn't reset the user's selection on every poll.
+        const populateAgentFilter = (agentNames) => {
+          const wanted = ["", ...agentNames];
+          const existing = [...refs.agentFilter.options].map((o) => o.value);
+          if (existing.length === wanted.length && wanted.every((v, i) => existing[i] === v)) return;
+          const current = refs.agentFilter.value;
+          refs.agentFilter.replaceChildren();
+          refs.agentFilter.append(new Option("All agents", ""));
+          for (const name of agentNames) refs.agentFilter.append(new Option(name, name));
+          refs.agentFilter.value = agentNames.includes(current) ? current : "";
+          filters.agent = refs.agentFilter.value;
+        };
+
+        const rerender = () => {
+          if (latestSnapshot) render(latestSnapshot);
+        };
+
         const render = (snapshot) => {
           latestSnapshot = snapshot;
+          repoUrl = typeof snapshot.repoUrl === "string" && snapshot.repoUrl ? snapshot.repoUrl : null;
           const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
           const reviewQueue = Array.isArray(snapshot.reviewQueue) ? snapshot.reviewQueue : [];
-          const agents = new Set(tasks.map((task) => task.agent).filter(Boolean));
+          const agents = [...new Set(tasks.map((task) => task.agent).filter(Boolean))];
 
-          renderCycles(snapshot.cycles);
-
-          refs.taskTotal.textContent = String(tasks.length);
-          refs.agentTotal.textContent = String(agents.size);
-          refs.reviewTotal.textContent = String(reviewQueue.length);
-          refs.taskCount.textContent = String(tasks.length);
-          refs.reviewCount.textContent = String(reviewQueue.length);
-          renderTasks(tasks);
-          renderReviews(reviewQueue, tasks);
-
+          // Cheap, flicker-free updates run on every poll.
           const generated = new Date(snapshot.generatedAt || Date.now());
           refs.lastUpdated.textContent = `Last updated: ${generated.toLocaleString()}`;
           refs.connection.classList.remove("is-reconnecting");
           refs.connectionText.textContent = "Live · refreshes every 2s";
           refs.connection.title = "";
+
+          // Skip the table rebuild when nothing that affects it changed. The
+          // minute bucket lets idle "x ago" labels tick over without churn.
+          const key = JSON.stringify({
+            tasks,
+            reviewQueue,
+            cycles: snapshot.cycles,
+            repoUrl,
+            filters,
+            dispatch: [...dispatchingIssues.keys()],
+            minute: Math.floor(Date.now() / 60_000),
+          });
+          if (key === lastBoardKey) return;
+          lastBoardKey = key;
+
+          renderCycles(snapshot.cycles);
+          populateAgentFilter(agents);
+          const visible = applyFilters(tasks);
+
+          refs.taskTotal.textContent = String(tasks.length);
+          refs.agentTotal.textContent = String(agents.length);
+          refs.reviewTotal.textContent = String(reviewQueue.length);
+          refs.taskCount.textContent =
+            visible.length === tasks.length ? String(tasks.length) : `${visible.length}/${tasks.length}`;
+          refs.reviewCount.textContent = String(reviewQueue.length);
+          renderSpend(tasks);
+          renderAgentSummary(tasks);
+          renderTasks(visible, tasks);
+          renderReviews(reviewQueue, tasks);
+        };
+
+        // Only schedule the next poll while the tab is visible — a backgrounded
+        // dashboard should not keep shelling out to gh/git every 2s.
+        const scheduleNext = () => {
+          if (pollTimer !== null || document.hidden) return;
+          pollTimer = window.setTimeout(() => {
+            pollTimer = null;
+            void refresh();
+          }, pollDelayMs);
+        };
+
+        const refreshNow = () => {
+          if (pollTimer !== null) {
+            window.clearTimeout(pollTimer);
+            pollTimer = null;
+          }
+          void refresh();
         };
 
         const refresh = async () => {
           try {
             const response = await fetch("/status", { cache: "no-store" });
-            if (!response.ok) throw new Error(`Status request failed (${response.status})`);
-            const snapshot = await response.json();
+            const snapshot = await response.json().catch(() => null);
+            if (!response.ok) {
+              throw new Error((snapshot && snapshot.error) || `Status request failed (${response.status})`);
+            }
             if (!snapshot || !Array.isArray(snapshot.tasks)) throw new Error("Invalid status response");
             render(snapshot);
           } catch (error) {
@@ -956,9 +1457,29 @@
             refs.connectionText.textContent = "Reconnecting…";
             refs.connection.title = error instanceof Error ? error.message : String(error);
           } finally {
-            window.setTimeout(refresh, pollDelayMs);
+            scheduleNext();
           }
         };
+
+        // Toolbar: search / status / agent filters + manual refresh.
+        refs.taskSearch.addEventListener("input", () => {
+          filters.text = refs.taskSearch.value;
+          rerender();
+        });
+        refs.statusFilter.addEventListener("change", () => {
+          filters.status = refs.statusFilter.value;
+          rerender();
+        });
+        refs.agentFilter.addEventListener("change", () => {
+          filters.agent = refs.agentFilter.value;
+          rerender();
+        });
+        refs.taskRefresh.addEventListener("click", refreshNow);
+
+        // Resume immediately when the tab becomes visible again.
+        document.addEventListener("visibilitychange", () => {
+          if (!document.hidden) refreshNow();
+        });
 
         // ---- Routing panel (judge suggestions + manual assignment) ----
         const AGENTS = ["claude", "codex"];

@@ -18,6 +18,9 @@ import type { Snapshot, TaskView } from "../board/snapshot.js";
  */
 
 const AGENTS = ["claude", "codex"];
+const DEMO_REPO_URL = "https://github.com/acme/orch";
+const demoPrUrl = (prNumber: number | null): string | null =>
+  prNumber === null ? null : `${DEMO_REPO_URL}/pull/${prNumber}`;
 
 interface Suggestion {
   agent: string;
@@ -51,7 +54,7 @@ const minutesAgo = (m: number): string => new Date(Date.now() - m * 60_000).toIS
 
 /** A fresh, realistic dual-agent board: work in flight, PRs awaiting cross-review, and unrouted todos. */
 function seedTasks(): TaskView[] {
-  return [
+  const seeded: Omit<TaskView, "prUrl" | "prChecks">[] = [
     {
       number: 103,
       title: "Board snapshot projection",
@@ -62,7 +65,7 @@ function seedTasks(): TaskView[] {
       reviewedBy: [],
       locked: true,
       worktree: "../wt/issue-103",
-      latestRun: { tokensTotal: 71_540, costUsd: 0.95, ts: minutesAgo(6) },
+      latestRun: { tokensTotal: 71_540, costUsd: 0.95, ts: minutesAgo(6), model: "opus" },
     },
     {
       number: 104,
@@ -74,7 +77,7 @@ function seedTasks(): TaskView[] {
       reviewedBy: [],
       locked: true,
       worktree: "../wt/issue-104",
-      latestRun: { tokensTotal: 52_110, costUsd: 0.31, ts: minutesAgo(11) },
+      latestRun: { tokensTotal: 52_110, costUsd: 0.31, ts: minutesAgo(11), model: "gpt-5-codex" },
     },
     {
       number: 105,
@@ -86,7 +89,7 @@ function seedTasks(): TaskView[] {
       reviewedBy: [],
       locked: true,
       worktree: "../wt/issue-105",
-      latestRun: { tokensTotal: 63_120, costUsd: 0.84, ts: minutesAgo(2) },
+      latestRun: { tokensTotal: 63_120, costUsd: 0.84, ts: minutesAgo(2), model: "opus" },
     },
     {
       number: 106,
@@ -98,7 +101,7 @@ function seedTasks(): TaskView[] {
       reviewedBy: [],
       locked: true,
       worktree: "../wt/issue-106",
-      latestRun: { tokensTotal: 41_230, costUsd: 0.25, ts: minutesAgo(4) },
+      latestRun: { tokensTotal: 41_230, costUsd: 0.25, ts: minutesAgo(4), model: "gpt-5-codex" },
     },
     {
       number: 107,
@@ -137,6 +140,12 @@ function seedTasks(): TaskView[] {
       latestRun: null,
     },
   ];
+  // Give the two in-review PRs distinct CI states so the demo shows both badges.
+  const demoChecks = (task: Omit<TaskView, "prUrl" | "prChecks">): TaskView["prChecks"] => {
+    if (task.status !== "status:in-review" || task.prNumber === null) return null;
+    return task.number === 104 ? "pending" : "pass";
+  };
+  return seeded.map((task) => ({ ...task, prUrl: demoPrUrl(task.prNumber), prChecks: demoChecks(task) }));
 }
 
 /** Project one in-memory task to the `Issue` shape the routing logic reads. */
@@ -203,6 +212,8 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
           agent: null,
           deps,
           prNumber: null,
+          prUrl: null,
+          prChecks: null,
           reviewedBy: [],
           locked: false,
           worktree: null,
@@ -224,6 +235,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
       })),
       reviewQueue: reviewQueue(),
       cycles: [],
+      repoUrl: DEMO_REPO_URL,
     }),
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);
@@ -248,10 +260,13 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
         if (task.status !== "status:in-progress") return;
         task.status = "status:in-review";
         task.prNumber = Math.max(200, ...tasks.map((candidate) => candidate.prNumber ?? 0)) + 1;
+        task.prUrl = demoPrUrl(task.prNumber);
+        task.prChecks = "pending";
         task.latestRun = {
           tokensTotal: task.agent === "claude" ? 58_400 : 43_700,
           costUsd: task.agent === "claude" ? 0.78 : 0.29,
           ts: new Date().toISOString(),
+          model: task.agent === "claude" ? "opus" : "gpt-5-codex",
         };
       }, lifecycleStepMs * 2);
       submitted.unref();

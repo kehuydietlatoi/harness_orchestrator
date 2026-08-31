@@ -1,4 +1,12 @@
-import { type Issue, type Pr, listIssues, listOpenPrs } from "../github/github.js";
+import {
+  type ChecksState,
+  type Issue,
+  type Pr,
+  getRepoUrl,
+  listIssues,
+  listOpenPrs,
+  prChecksState,
+} from "../github/github.js";
 import { issueAgent, issueStatus, parseDeps } from "./board.js";
 import { buildGraph } from "./graph.js";
 import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "../github/labels.js";
@@ -15,6 +23,10 @@ export interface TaskView {
   agent: string | null;
   deps: number[];
   prNumber: number | null;
+  /** Canonical GitHub web URL for the PR, or null when there is no PR / no URL. */
+  prUrl: string | null;
+  /** CI roll-up for the PR (review-queue PRs only; null otherwise or when unknown). */
+  prChecks: ChecksState | null;
   reviewedBy: string[];
   locked: boolean;
   worktree: string | null;
@@ -22,6 +34,8 @@ export interface TaskView {
     tokensTotal: number | null;
     costUsd: number | null;
     ts: string;
+    /** Resolved model/effort tier the run used, or null when unknown. */
+    model: string | null;
   } | null;
 }
 
@@ -32,9 +46,12 @@ export interface Snapshot {
   reviewQueue: number[];
   /** Deadlocked dependency groups; each `[a, b, c]` means a→b→c→a. Empty when acyclic. */
   cycles: number[][];
+  /** Repository web URL (e.g. `https://github.com/owner/repo`) for building
+   * issue/PR links, or null when it can't be resolved. */
+  repoUrl: string | null;
 }
 
-export type SnapshotRun = Pick<RunRecord, "issue" | "tokensTotal" | "costUsd" | "ts">;
+export type SnapshotRun = Pick<RunRecord, "issue" | "tokensTotal" | "costUsd" | "ts" | "model">;
 
 function worktreeIssueNumber(worktree: Worktree): number | null {
   const branch = worktree.branch.replace(/^refs\/heads\//, "");
@@ -56,6 +73,8 @@ export function assemble(
   worktrees: readonly Worktree[],
   runs: readonly SnapshotRun[],
   generatedAt = new Date().toISOString(),
+  repoUrl: string | null = null,
+  checks: ReadonlyMap<number, ChecksState> = new Map(),
 ): Snapshot {
   const locked = new Set(locks);
 
@@ -85,6 +104,8 @@ export function assemble(
       agent: issueAgent(issue),
       deps: parseDeps(issue.body),
       prNumber: pr?.number ?? null,
+      prUrl: pr?.htmlUrl || null,
+      prChecks: pr ? (checks.get(pr.number) ?? null) : null,
       reviewedBy: issue.labels
         .filter((label) => label.startsWith(REVIEWED_BY_PREFIX))
         .map((label) => label.slice(REVIEWED_BY_PREFIX.length)),
@@ -95,6 +116,7 @@ export function assemble(
             tokensTotal: run.tokensTotal,
             costUsd: run.costUsd,
             ts: run.ts,
+            model: run.model ?? null,
           }
         : null,
     };
@@ -111,7 +133,7 @@ export function assemble(
 
   const { cycles } = buildGraph(issues);
 
-  return { generatedAt, tasks, reviewQueue, cycles };
+  return { generatedAt, tasks, reviewQueue, cycles, repoUrl };
 }
 
 function parseWorktrees(text: string): Worktree[] {
@@ -143,13 +165,46 @@ async function listWorktrees(cwd: string): Promise<Worktree[]> {
   return result.code === 0 ? parseWorktrees(result.stdout) : [];
 }
 
+/** Cache of CI state keyed by `<pr>:<headSha>` so steady-state polls reuse a
+ * result until a new commit lands, rather than shelling out to `gh` every 2s. */
+const checksCache = new Map<string, ChecksState>();
+
+/** CI roll-up for the PRs whose issue is awaiting review — the only ones the
+ * dashboard renders a checks badge for. Cached by head SHA; unknown SHAs are
+ * fetched once and reused until the branch advances. */
+async function reviewChecks(prs: readonly Pr[], issues: readonly Issue[], cwd: string): Promise<Map<number, ChecksState>> {
+  const needsReview = new Set(
+    issues.filter((issue) => issue.labels.includes(REVIEW_NEEDED)).map((issue) => issue.number),
+  );
+  const targets = prs.filter((pr) => {
+    const issueNumber = prIssueNumber(pr);
+    return issueNumber !== null && needsReview.has(issueNumber);
+  });
+
+  const result = new Map<number, ChecksState>();
+  await Promise.all(
+    targets.map(async (pr) => {
+      const key = `${pr.number}:${pr.headSha}`;
+      let state = checksCache.get(key);
+      if (state === undefined) {
+        state = await prChecksState(pr.number, { cwd });
+        checksCache.set(key, state);
+      }
+      result.set(pr.number, state);
+    }),
+  );
+  return result;
+}
+
 export async function buildSnapshot(cwd: string): Promise<Snapshot> {
-  const [issues, prs, locks, worktrees, runs] = await Promise.all([
+  const [issues, prs, locks, worktrees, runs, repoUrl] = await Promise.all([
     listIssues({ cwd, state: "open" }),
     listOpenPrs({ cwd }),
     listLocks({ cwd }),
     listWorktrees(cwd),
     Promise.resolve(readRuns(cwd)),
+    getRepoUrl({ cwd }),
   ]);
-  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString());
+  const checks = await reviewChecks(prs, issues, cwd);
+  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString(), repoUrl, checks);
 }

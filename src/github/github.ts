@@ -211,9 +211,13 @@ export interface Pr {
   body: string;
   headRefName: string;
   state: string;
+  /** Canonical GitHub web URL for the PR (empty when unknown). */
+  htmlUrl: string;
+  /** Head commit SHA (empty when unknown); used to cache check state per commit. */
+  headSha: string;
 }
 
-const PR_FIELDS = "number,title,body,headRefName,state";
+const PR_FIELDS = "number,title,body,headRefName,state,url,headRefOid";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function parsePr(o: any): Pr {
@@ -223,6 +227,8 @@ function parsePr(o: any): Pr {
     body: o.body ?? "",
     headRefName: o.headRefName ?? "",
     state: String(o.state ?? "OPEN").toUpperCase(),
+    htmlUrl: o.url ?? "",
+    headSha: o.headRefOid ?? "",
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
@@ -241,12 +247,28 @@ function parseRestPr(o: any): Pr {
     body: o.body ?? "",
     headRefName: o.head?.ref ?? "",
     state: o.merged_at ? "MERGED" : String(o.state ?? "open").toUpperCase(),
+    htmlUrl: o.html_url ?? "",
+    headSha: o.head?.sha ?? "",
   };
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
 export async function listOpenPrs(opts: { cwd?: string } = {}): Promise<Pr[]> {
   return listPrs({ ...opts, state: "open" });
+}
+
+/** The repository's GitHub web URL (e.g. `https://github.com/owner/repo`), or
+ * null when it can't be resolved. Best-effort: dashboard links degrade to plain
+ * text on failure rather than breaking the snapshot. */
+export async function getRepoUrl(opts: { cwd?: string } = {}): Promise<string | null> {
+  const r = await exec("gh", ["repo", "view", "--json", "url"], { cwd: opts.cwd });
+  if (r.code !== 0) return null;
+  try {
+    const url = (JSON.parse(r.stdout) as { url?: string }).url;
+    return typeof url === "string" && url ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 /** List PRs with complete REST pagination. Repair needs closed and merged PRs
@@ -290,6 +312,36 @@ export async function prChecksPass(
   return notPassing.length === 0
     ? { pass: true, detail: `${arr.length} check(s) passed` }
     : { pass: false, detail: `${notPassing.length} check(s) not passing` };
+}
+
+/** CI roll-up for a PR: `none` when no checks are configured, otherwise the
+ * worst outstanding bucket. Distinguishes `pending` from `fail` (unlike
+ * {@link prChecksPass}, whose boolean the merge gate needs) so the dashboard
+ * can show an in-progress state. */
+export type ChecksState = "pass" | "fail" | "pending" | "none";
+
+export async function prChecksState(
+  number: number,
+  opts: { cwd?: string } = {},
+): Promise<ChecksState> {
+  const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,state"], {
+    cwd: opts.cwd,
+  });
+  const combined = r.stdout + r.stderr;
+  if (/no checks reported/i.test(combined)) return "none";
+
+  let arr: { bucket?: string }[] = [];
+  try {
+    arr = JSON.parse(r.stdout);
+  } catch {
+    // gh exits non-zero while checks are failing/pending; treat unparseable as fail.
+    if (r.code !== 0) return "fail";
+  }
+  if (!arr.length) return "none";
+  const buckets = arr.map((c) => c.bucket);
+  if (buckets.some((b) => b === "fail" || b === "cancel")) return "fail";
+  if (buckets.some((b) => b === "pending")) return "pending";
+  return "pass";
 }
 
 export async function reviewPr(
