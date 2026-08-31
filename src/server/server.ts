@@ -10,6 +10,7 @@ import { readRuns } from "../board/telemetry.js";
 import { parseTickets, resolvePlan, type Ticket } from "../tasks/plan.js";
 import { createFromPlan, type PlanCreateResult } from "../tasks/plan-create.js";
 import { dispatchSpecific } from "../tasks/runner.js";
+import { log } from "../util/log.js";
 
 // Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
 // (build); "../../public" resolves to <repo>/public in both, since src and dist
@@ -283,7 +284,7 @@ async function handleDispatch(
   sendJson(response, 202, { accepted: true, issue });
   setImmediate(() => {
     void deps.dispatchIssue(issue, cwd).catch((error: unknown) => {
-      console.error(`dispatch #${issue} failed: ${error instanceof Error ? error.message : String(error)}`);
+      log.error(`dispatch #${issue} failed: ${error instanceof Error ? error.message : String(error)}`);
     });
   });
 }

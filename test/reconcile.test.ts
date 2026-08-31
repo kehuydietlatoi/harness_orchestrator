@@ -29,6 +29,8 @@ function pr(state: Pr["state"] = "OPEN"): Pr {
     body: "Closes #36",
     headRefName: "task/36-preview-first-repair",
     state,
+    htmlUrl: "https://github.com/acme/orch/pull/136",
+    headSha: "sha-136",
   };
 }
 

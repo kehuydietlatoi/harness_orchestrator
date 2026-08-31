@@ -24,6 +24,8 @@ function pr(number: number, over: Partial<Pr> = {}): Pr {
     body: "",
     headRefName: "",
     state: "OPEN",
+    htmlUrl: `https://github.com/acme/orch/pull/${number}`,
+    headSha: `sha-${number}`,
     ...over,
   };
 }
@@ -51,13 +53,25 @@ describe("assemble", () => {
       { path: "C:\\repo\\wt\\issue-13", branch: "" },
     ];
     const runs: SnapshotRun[] = [
-      { issue: 12, tokensTotal: 100, costUsd: 0.01, ts: "2026-08-20T10:00:00.000Z" },
-      { issue: 13, tokensTotal: null, costUsd: null, ts: "2026-08-21T10:00:00.000Z" },
-      { issue: 12, tokensTotal: 250, costUsd: 0.02, ts: "2026-08-22T10:00:00.000Z" },
+      { issue: 12, tokensTotal: 100, costUsd: 0.01, ts: "2026-08-20T10:00:00.000Z", model: "opus" },
+      { issue: 13, tokensTotal: null, costUsd: null, ts: "2026-08-21T10:00:00.000Z", model: null },
+      { issue: 12, tokensTotal: 250, costUsd: 0.02, ts: "2026-08-22T10:00:00.000Z", model: "sonnet" },
     ];
 
-    expect(assemble(issues, prs, [12, 42], worktrees, runs, "2026-08-23T12:00:00.000Z")).toEqual({
+    expect(
+      assemble(
+        issues,
+        prs,
+        [12, 42],
+        worktrees,
+        runs,
+        "2026-08-23T12:00:00.000Z",
+        "https://github.com/acme/orch",
+        new Map([[101, "pass"]]),
+      ),
+    ).toEqual({
       generatedAt: "2026-08-23T12:00:00.000Z",
+      repoUrl: "https://github.com/acme/orch",
       tasks: [
         {
           number: 12,
@@ -66,6 +80,8 @@ describe("assemble", () => {
           agent: "codex",
           deps: [10, 11],
           prNumber: 101,
+          prUrl: "https://github.com/acme/orch/pull/101",
+          prChecks: "pass",
           reviewedBy: ["claude"],
           locked: true,
           worktree: "C:\\repo\\wt\\issue-12",
@@ -73,6 +89,7 @@ describe("assemble", () => {
             tokensTotal: 250,
             costUsd: 0.02,
             ts: "2026-08-22T10:00:00.000Z",
+            model: "sonnet",
           },
         },
         {
@@ -82,6 +99,8 @@ describe("assemble", () => {
           agent: null,
           deps: [10],
           prNumber: 102,
+          prUrl: "https://github.com/acme/orch/pull/102",
+          prChecks: null,
           reviewedBy: [],
           locked: false,
           worktree: "C:\\repo\\wt\\issue-13",
@@ -89,6 +108,7 @@ describe("assemble", () => {
             tokensTotal: null,
             costUsd: null,
             ts: "2026-08-21T10:00:00.000Z",
+            model: null,
           },
         },
       ],

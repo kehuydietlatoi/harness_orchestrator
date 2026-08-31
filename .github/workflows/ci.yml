@@ -13,15 +13,20 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
+        # Test the declared engines floor (20) and current LTS (22).
+        node-version: [20, 22]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
-      - run: npm ci
+      # --ignore-scripts: the `prepare` build runs explicitly below, after the
+      # lint/typecheck gates, so a compile error surfaces there first.
+      - run: npm ci --ignore-scripts
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm test
+      - run: npm run test:coverage
       - run: npm run build
+      - run: npm run test:e2e
