@@ -4,6 +4,27 @@ const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
 const { listIssues, listOpenPrs, listPrs, listLabels } = await import("../src/github/github.js");
+const { mergePr, recordPrReview, listPrReviews } = await import("../src/github/github.js");
+
+describe("commit-bound review transport", () => {
+  it("sends an expected-head merge and checks GitHub actually merged", async () => {
+    execMock.mockResolvedValueOnce(ok({ merged: true }));
+    await mergePr(62, { expectedHead: "a".repeat(40), cwd: "/repo" });
+    expect(execMock.mock.calls[0][1]).toEqual(["api", "repos/{owner}/{repo}/pulls/62/merge", "--method", "PUT", "--input", "-"]);
+    expect(JSON.parse(execMock.mock.calls[0][2].input)).toEqual({ sha: "a".repeat(40), merge_method: "squash" });
+    execMock.mockResolvedValueOnce(ok({ merged: false }));
+    await expect(mergePr(62, { expectedHead: "a".repeat(40) })).rejects.toThrow("did not merge");
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "HTTP 409 head changed" });
+    await expect(mergePr(62, { expectedHead: "a".repeat(40) })).rejects.toThrow("409");
+  });
+  it("records a COMMENT review with an explicit commit and paginates reads", async () => {
+    execMock.mockResolvedValueOnce(ok({}));
+    await recordPrReview(62, "a".repeat(40), "body", { cwd: "/repo" });
+    expect(JSON.parse(execMock.mock.calls[0][2].input)).toEqual({ event: "COMMENT", commit_id: "a".repeat(40), body: "body" });
+    execMock.mockResolvedValueOnce(ok(Array.from({ length: 100 }, (_, id) => ({ id })))).mockResolvedValueOnce(ok([{ id: 100 }]));
+    expect(await listPrReviews(62)).toHaveLength(101);
+  });
+});
 
 function restIssue(n: number, over: Record<string, unknown> = {}) {
   return {

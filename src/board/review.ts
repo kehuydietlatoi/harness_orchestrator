@@ -6,7 +6,8 @@ import {
   listOpenPrs,
   getIssue,
   editIssue,
-  reviewPr,
+  listPrReviews,
+  recordPrReview,
   prChecksPass,
   mergePr,
 } from "../github/github.js";
@@ -15,6 +16,7 @@ import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
 import type { OrchConfig } from "../config.js";
+import { currentReviewers, formatReview } from "./approval.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
 export function prIssueNumber(pr: Pick<Pr, "headRefName" | "body">): number | null {
@@ -41,9 +43,11 @@ export async function reviewQueue(agent: string, cwd: string): Promise<ReviewIte
     const n = prIssueNumber(pr);
     if (n === null) continue;
     const issue = open.get(n);
-    if (!issue || !issue.labels.includes(REVIEW_NEEDED)) continue;
+    if (!issue) continue;
     const author = issueAgent(issue);
     if (author === agent) continue; // never review your own work
+    const reviewers = currentReviewers(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
+    if (!issue.labels.includes(REVIEW_NEEDED) && reviewers.some((r) => r !== author)) continue;
     items.push({ pr, issue, author });
   }
   return items;
@@ -53,7 +57,7 @@ async function resolvePrIssue(
   prNum: number,
   agent: string,
   cwd: string,
-): Promise<{ issue: Issue; author: string | null }> {
+): Promise<{ issue: Issue; author: string | null; pr: Pr }> {
   const pr = await getPr(prNum, { cwd });
   const n = prIssueNumber(pr);
   if (n === null) throw new Error(`cannot map PR #${prNum} to an issue`);
@@ -62,7 +66,8 @@ async function resolvePrIssue(
   if (author === agent) {
     throw new Error(`agent '${agent}' cannot review its own PR (authored by '${author}').`);
   }
-  return { issue, author };
+  if (pr.state !== "OPEN" || !pr.headSha) throw new Error("review requires an open PR with a known head");
+  return { issue, author, pr };
 }
 
 /** Record a cross-review approval by `agent`. */
@@ -71,14 +76,20 @@ export async function approve(
   agent: string,
   cwd: string,
   note = "",
+  reviewedHead?: string,
 ): Promise<{ issue: number; author: string | null }> {
-  const { issue, author } = await resolvePrIssue(prNum, agent, cwd);
+  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd);
+  if (!reviewedHead || reviewedHead !== pr.headSha) {
+    throw new Error("pass --head with the full commit reviewed; the PR head must still match");
+  }
+  await recordPrReview(prNum, reviewedHead, formatReview({
+    reviewer: agent, pr: prNum, head: reviewedHead, timestamp: new Date().toISOString(), decision: "approve",
+  }, note || `Approved by ${agent} via orch.`), { cwd });
   await editIssue(issue.number, {
     cwd,
     addLabels: [reviewedByLabel(agent)],
     removeLabels: [REVIEW_NEEDED],
   });
-  await reviewPr(prNum, "approve", note || `Approved by \`${agent}\` via orch.`, { cwd });
   return { issue: issue.number, author };
 }
 
@@ -89,17 +100,20 @@ export async function requestChanges(
   cwd: string,
   note: string,
 ): Promise<{ issue: number; author: string | null }> {
-  const { issue, author } = await resolvePrIssue(prNum, agent, cwd);
+  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd);
+  await recordPrReview(prNum, pr.headSha, formatReview({
+    reviewer: agent, pr: prNum, head: pr.headSha, timestamp: new Date().toISOString(), decision: "request-changes",
+  }, note), { cwd });
   await editIssue(issue.number, {
     cwd,
     addLabels: [STATUS.inProgress],
-    removeLabels: [REVIEW_NEEDED, STATUS.inReview],
+    removeLabels: [REVIEW_NEEDED, STATUS.inReview, ...issue.labels.filter((l) => l.startsWith(REVIEWED_BY_PREFIX))],
   });
-  await reviewPr(prNum, "request-changes", note, { cwd });
   return { issue: issue.number, author };
 }
 
 export interface GateResult {
+  head: string;
   ok: boolean;
   reasons: string[];
   issue: number | null;
@@ -147,13 +161,14 @@ export async function checkMergeGate(
   const pr = await getPr(prNum, { cwd });
   const n = prIssueNumber(pr);
   if (n === null) {
-    return { ok: false, reasons: ["cannot map PR to an issue"], issue: null, author: null };
+    return { ok: false, reasons: ["cannot map PR to an issue"], issue: null, author: null, head: pr.headSha };
   }
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
-  const reviewers = issue.labels
-    .filter((l) => l.startsWith(REVIEWED_BY_PREFIX))
-    .map((l) => l.slice(REVIEWED_BY_PREFIX.length));
+  const reviewers = cfg.requireCrossReview
+    ? currentReviewers(await listPrReviews(prNum, { cwd }), prNum, pr.headSha) : [];
+  if (pr.state !== "OPEN" || !pr.headSha) reasons.push("PR must be open with a known head");
+  if (cfg.requireCrossReview && (!author || !cfg.agents.includes(author))) reasons.push("PR author must be a configured harness");
   const checks = await prChecksPass(prNum, { cwd });
 
   reasons.push(
@@ -169,7 +184,7 @@ export async function checkMergeGate(
     }),
   );
 
-  return { ok: reasons.length === 0, reasons, issue: n, author };
+  return { ok: reasons.length === 0, reasons, issue: n, author, head: pr.headSha };
 }
 
 /** Merge a PR through the gate, then prune the worktree and release the lock. */
@@ -183,7 +198,7 @@ export async function merge(
   if (!gate.ok) {
     throw new Error(`merge blocked for PR #${prNum}:\n  - ${gate.reasons.join("\n  - ")}`);
   }
-  await mergePr(prNum, { cwd, method: "squash", deleteBranch: true });
+  await mergePr(prNum, { cwd, method: "squash", expectedHead: gate.head });
 
   if (gate.issue !== null) {
     await removeWorktree(worktreePath(cfg.worktreeRoot, gate.issue, cwd), { cwd });

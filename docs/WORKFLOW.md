@@ -31,7 +31,7 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign` | — (**sticky**; no path removes it) |
 | `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign` | — (**sticky**) |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open unreviewed task PR | `approve`; `requestChanges`; `repair` when no task PR is open |
-| `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Cross-review approval recorded | `approve` | — (terminal) |
+| `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve` | `requestChanges` |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
 | `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
@@ -71,8 +71,8 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Run fails / times out | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Run exception / submit uncertainty | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
 | Run, no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
-| Approve | `approve` | `reviewed-by:X` | `review:needed` | `gh pr review --approve` |
-| Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | `gh pr review --request-changes` |
+| Approve | `approve` | `reviewed-by:X` | `review:needed` | structured COMMENT review bound to the reviewed head |
+| Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | structured revocation; clears `reviewed-by:*` |
 | Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, safely prune worktree, release lock |
 | Repair preview | `repair [issue]` | — | — | re-observe issue/PR, lock, branch, worktree, and telemetry; print safe idempotent actions only |
 | Repair apply | `repair [issue] --apply` | derived lifecycle label; sometimes `review:needed` | stale lifecycle labels; stale `review:needed` | run one action, re-observe, and re-plan; may restore locks/branches/worktrees, safely prune terminal worktrees, release stale locks, close a merged PR's issue, or supersede resolved failure telemetry |
@@ -121,4 +121,5 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 - `effort:` → `resolveTaskModel(agent, issue, cfg)` at spawn → `RunContext.model` →
   adapter appends the model flag. No label ⇒ `cfg.defaultEffort` (`hard`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
-- `review:needed` + `reviewed-by:` → the merge `gate` (`evaluateGate`).
+- Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`.
+
