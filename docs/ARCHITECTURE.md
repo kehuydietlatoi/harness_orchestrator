@@ -90,3 +90,7 @@ plan ──> issue(status:todo) ──assign──> agent hint
                  │
         issue closed · lock released · worktree pruned · dependents unblock
 ```
+
+## Operator lifecycle health
+
+buildSnapshot reads complete issue/PR collections, claim locks, registered worktrees, task branch comparisons, and run outcomes. Its pure assemble helper derives TaskState for open issues plus closed or missing issues with retained resources. Shared prFact and telemetryFact interpretations also feed repair. Board, status, snapshot JSON/table, doctor, and the dashboard consume the same health and safe repair-preview command. Labels remain routing/projection metadata. Global observation failures surface as errors; per-task comparison and registration failures surface as inconsistent. CI badges expire after 10 seconds, including on unchanged heads, and cache keys include the repository.

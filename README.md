@@ -248,3 +248,5 @@ with Node.js 20 and 22.
 ## License
 
 MIT
+
+Operator views derive task health from GitHub, Git, and run facts. They display needs-attention and inconsistent tasks with an orch repair <issue> preview command, including retained resources belonging to closed or missing issues. CI badges refresh within 10 seconds even when the PR head has not changed.

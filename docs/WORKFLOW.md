@@ -122,3 +122,7 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
   adapter appends the model flag. No label ⇒ `cfg.defaultEffort` (`hard`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - `review:needed` + `reviewed-by:` → the merge `gate` (`evaluateGate`).
+
+## Observed health in operator views
+
+Board, status, snapshot, doctor, and dashboard now show the same derived lifecycle health. ready is represented as status:todo for existing routing clients; inconsistent remains distinct from needs-attention in the view even though both project to the needs-attention issue label. Every attention state offers orch repair <issue>, which is preview-only. Closed-issue residue and missing-issue claim resources remain visible until reconciled. These read paths do not repair or mutate labels.

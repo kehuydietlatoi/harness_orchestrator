@@ -6,6 +6,7 @@ import { configExists, loadConfig } from "../config.js";
 import type { OrchConfig } from "../config.js";
 import { LABELS } from "../github/labels.js";
 import { buildGraph, formatCycle, type UnresolvedDep } from "../board/graph.js";
+import { buildSnapshot, healthDetail, type Snapshot } from "../board/snapshot.js";
 
 /**
  * Classify each unresolved dependency as pointing at a closed issue vs a
@@ -36,6 +37,11 @@ interface Check {
   name: string;
   ok: boolean;
   note?: string;
+}
+
+export function lifecycleChecks(snapshot: Snapshot): Check[] {
+  return snapshot.tasks.map((task) => ({ name: `#${task.number} lifecycle: ${task.health.kind}`,
+    ok: task.recoveryCommand === null, note: healthDetail(task) }));
 }
 
 /** Commands doctor must validate, including a lead omitted from `agents`. Pure. */
@@ -113,6 +119,10 @@ export async function doctorCommand(): Promise<void> {
     }
   }
 
+  if (cfg && gh && url) {
+    try { checks.push(...lifecycleChecks(await buildSnapshot(cwd))); }
+    catch (error) { checks.push({ name: "lifecycle observations available", ok: false, note: String(error) }); }
+  }
   console.log(pc.bold("orch doctor\n"));
   let allOk = true;
   for (const c of checks) {

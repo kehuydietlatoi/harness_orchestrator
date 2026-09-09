@@ -5,6 +5,8 @@ import { DEFAULT_CONFIG, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
 import type { ServerDeps } from "./server.js";
 import type { Snapshot, TaskView } from "../board/snapshot.js";
+import { assemble } from "../board/snapshot.js";
+type DemoTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "blockers">;
 
 /**
  * Self-contained demo backend for `orch serve --demo`.
@@ -53,8 +55,8 @@ const JUDGE: Record<number, Suggestion> = {
 const minutesAgo = (m: number): string => new Date(Date.now() - m * 60_000).toISOString();
 
 /** A fresh, realistic dual-agent board: work in flight, PRs awaiting cross-review, and unrouted todos. */
-function seedTasks(): TaskView[] {
-  const seeded: Omit<TaskView, "prUrl" | "prChecks">[] = [
+function seedTasks(): DemoTask[] {
+  const seeded: Omit<DemoTask, "prUrl" | "prChecks">[] = [
     {
       number: 103,
       title: "Board snapshot projection",
@@ -141,7 +143,7 @@ function seedTasks(): TaskView[] {
     },
   ];
   // Give the two in-review PRs distinct CI states so the demo shows both badges.
-  const demoChecks = (task: Omit<TaskView, "prUrl" | "prChecks">): TaskView["prChecks"] => {
+  const demoChecks = (task: Omit<DemoTask, "prUrl" | "prChecks">): TaskView["prChecks"] => {
     if (task.status !== "status:in-review" || task.prNumber === null) return null;
     return task.number === 104 ? "pending" : "pass";
   };
@@ -149,7 +151,7 @@ function seedTasks(): TaskView[] {
 }
 
 /** Project one in-memory task to the `Issue` shape the routing logic reads. */
-function toIssue(task: TaskView): Issue {
+function toIssue(task: DemoTask): Issue {
   const labels: string[] = [task.status];
   if (task.agent) labels.push(`agent:${task.agent}`);
   for (const reviewer of task.reviewedBy) labels.push(`reviewed-by:${reviewer}`);
@@ -165,12 +167,6 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
   const config: OrchConfig = { ...DEFAULT_CONFIG, agents: [...AGENTS] };
   // Longer than the dashboard's 2s poll so each simulated state is visible.
   const lifecycleStepMs = opts.lifecycleStepMs ?? 2_500;
-
-  const reviewQueue = (): number[] =>
-    tasks
-      .filter((task) => task.status === "status:in-review" && task.prNumber !== null)
-      .map((task) => task.prNumber as number)
-      .sort((a, b) => a - b);
 
   return {
     loadConfig: () => config,
@@ -225,18 +221,19 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
       }
       return result;
     },
-    snapshot: async (): Promise<Snapshot> => ({
-      generatedAt: new Date().toISOString(),
-      tasks: tasks.map((task) => ({
-        ...task,
-        deps: [...task.deps],
-        reviewedBy: [...task.reviewedBy],
-        latestRun: task.latestRun ? { ...task.latestRun } : null,
-      })),
-      reviewQueue: reviewQueue(),
-      cycles: [],
-      repoUrl: DEMO_REPO_URL,
-    }),
+    snapshot: async (): Promise<Snapshot> => assemble(
+      tasks.map(toIssue),
+      tasks.filter((t) => t.prNumber !== null).map((t) => ({ number: t.prNumber!, title: t.title,
+        body: `Closes #${t.number}`, state: "OPEN", headRefName: `task/${t.number}-demo`,
+        headSha: `demo-${t.number}`, htmlUrl: t.prUrl ?? "" })),
+      tasks.filter((t) => t.locked).map((t) => t.number),
+      tasks.filter((t) => t.worktree).map((t) => ({ path: t.worktree!, branch: `task/${t.number}-demo` })),
+      tasks.filter((t) => t.latestRun).map((t) => ({ issue: t.number, ...t.latestRun! })),
+      new Date().toISOString(), DEMO_REPO_URL,
+      new Map(tasks.filter((t) => t.prChecks && t.prNumber).map((t) => [t.prNumber!, t.prChecks!])),
+      new Map(tasks.filter((t) => t.worktree).map((t) => [t.number,
+        { state: t.status === "status:claimed" ? "unchanged" : "ahead" }])),
+    ),
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);
       if (!task) throw new Error(`#${number} is not an open issue.`);

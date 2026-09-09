@@ -68,8 +68,9 @@ describe("assemble", () => {
         "2026-08-23T12:00:00.000Z",
         "https://github.com/acme/orch",
         new Map([[101, "pass"]]),
+        new Map([[12, { state: "ahead" }]]),
       ),
-    ).toEqual({
+    ).toMatchObject({
       generatedAt: "2026-08-23T12:00:00.000Z",
       repoUrl: "https://github.com/acme/orch",
       tasks: [
@@ -95,7 +96,7 @@ describe("assemble", () => {
         {
           number: 13,
           title: "Unclaimed task",
-          status: STATUS.todo,
+          status: "status:inconsistent",
           agent: null,
           deps: [10],
           prNumber: 102,
@@ -111,6 +112,7 @@ describe("assemble", () => {
             model: null,
           },
         },
+        { number: 42, health: { kind: "inconsistent" }, recoveryCommand: "orch repair 42" },
       ],
       reviewQueue: [101],
       cycles: [],

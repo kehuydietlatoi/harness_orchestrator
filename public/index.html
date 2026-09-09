@@ -890,7 +890,9 @@
             <input type="search" id="task-search" placeholder="Search tasks…" aria-label="Search tasks by number or title" />
             <select id="task-status-filter" aria-label="Filter by status">
               <option value="">All statuses</option>
-              <option value="todo">todo</option>
+              <option value="todo">ready</option>
+              <option value="needs-attention">needs-attention</option>
+              <option value="inconsistent">inconsistent</option>
               <option value="claimed">claimed</option>
               <option value="in-progress">in-progress</option>
               <option value="in-review">in-review</option>
@@ -1152,16 +1154,22 @@
           for (const task of visibleTasks) {
             const row = document.createElement("tr");
             const normalizedStatus = statusName(task.status);
-            const blockers = (Array.isArray(task.deps) ? task.deps : []).filter((dep) => openNumbers.has(dep));
+            const blockers = Array.isArray(task.blockers) ? task.blockers : (Array.isArray(task.deps) ? task.deps : []).filter((dep) => openNumbers.has(dep));
 
             const taskNode = cell("Task");
             taskNode.className = "task-cell";
             taskNode.append(issueHeading(task.number, task.title));
 
             const statusNode = cell("Status");
-            const badge = make("span", "badge", normalizedStatus);
+            const badge = make("span", "badge", task.health?.kind || normalizedStatus);
             badge.dataset.status = normalizedStatus;
             statusNode.append(badge);
+            if (task.recoveryCommand) {
+              const detail = task.health?.kind === "inconsistent"
+                ? task.health.violations.map((v) => v.detail).join("; ") : task.health?.reason;
+              const recovery = make("div", "muted", [detail, task.recoveryCommand].filter(Boolean).join(" — "));
+              statusNode.append(recovery);
+            }
             if (blockers.length) {
               const blocked = make("span", "badge is-blocked", `blocked by ${blockers.map((dep) => `#${dep}`).join(", ")}`);
               blocked.title = "Waiting on open dependencies before it can be dispatched.";
@@ -1306,7 +1314,7 @@
         };
 
         // Lifecycle-first ordering so the rows that need attention float to the top.
-        const STATUS_RANK = { "in-review": 0, "in-progress": 1, claimed: 2, todo: 3, done: 4 };
+        const STATUS_RANK = { inconsistent: -2, "needs-attention": -1, "in-review": 0, "in-progress": 1, claimed: 2, todo: 3, done: 4 };
 
         const applyFilters = (tasks) => {
           const q = filters.text.trim().toLowerCase();
