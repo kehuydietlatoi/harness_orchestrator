@@ -47,3 +47,5 @@ Single-context: `CONTEXT.md` (glossary) + `docs/adr/` at the repo root. See `doc
 **Labels & issue lifecycle**: `docs/WORKFLOW.md` is the single reference for every label
 orch relies on and exactly when each is set/cleared (traced from source). Update it in the
 same change that adds or moves a label — code wins if they disagree.
+
+- **Operator health projection (#41)**: snapshot now carries health, recoveryCommand, issueState, and open blockers; it includes closed/missing issue residue. board/status/doctor/demo/dashboard use this shared projection. Shared pure task facts feed snapshot and repair. Strict lock/worktree inventory reads fail explicitly; per-task branch/registration failures are inconsistent. CI results expire after 10 seconds with repository-scoped keys, superseding the previous indefinite head cache convention.

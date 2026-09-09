@@ -46,8 +46,8 @@ The pieces of the routing pipeline:
 - **brief** — the deterministic text a judge reads: every unrouted open issue (body,
   deps, files-hint) plus a per-agent **telemetry rollup** (`formatBrief`, `src/routing/assign.ts`).
 - **judge** — the reasoning step that turns a brief into a plan. **External and
-  swappable**: the interactive lead in-session today, a headless `claude -p` later
-  (`src/routing/judge.ts`, planned). Both emit the *same* plan shape. The judge only *proposes*.
+  swappable**: the interactive lead in-session today, a configured headless lead adapter
+  (`src/routing/judge.ts`). Both emit the *same* plan shape. The judge only *proposes*.
 - **plan** — the machine-readable routing decision:
   `[{ issue, agent, effort, rationale }]`. The contract between judge and writer.
 - **writer** — the deterministic step that applies a plan to labels
@@ -58,7 +58,7 @@ The pieces of the routing pipeline:
   `{agent, effort, rationale}` for an issue, pre-filled and editable before it is written.
 - **override** — a human changing a suggestion's agent/effort (or filling a blank row)
   in the dashboard before applying. An override is a *human pin*.
-- **assigned-by:brain** (planned) — provenance label added by the writer only when the
+- **assigned-by:brain** — provenance label added by the writer only when the
   applied decision came from the judge, not a human. Lets a future re-routing pass
   revise *its own* past picks while never touching a human pin.
 
@@ -69,7 +69,7 @@ The pieces of the routing pipeline:
 - **dashboard** — the localhost web UI (`src/server/server.ts`, `127.0.0.1` only). **Read-only
   today** (`GET /` + `GET /status`). The routing UI (planned) adds an authenticated-by-
   locality **mutation surface** (`POST /actions/*`) behind a single `assertLocal`
-  chokepoint — the first writes the dashboard is allowed to make.
+  chokepoint for routing, planning, and dispatch.
 
 ## The work loop
 
@@ -106,3 +106,4 @@ The pieces of the routing pipeline:
 New batches are built by **codex as sole implementer**; **claude cross-reviews and
 merges**. Tickets are dependency-chained, each independently test-green. This is orch
 running on its own repo.
+
