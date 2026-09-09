@@ -56,6 +56,26 @@ cannot use the other's identity.
 
 ## Review backlog
 
+## Commit binding (issue #38)
+
+Approval now lives in a submitted GitHub COMMENT review ending with an
+`orch-review:v1` JSON marker: reviewer, PR number, full reviewed head OID,
+timestamp, and decision. COMMENT reviews work with the shared GitHub account;
+native APPROVE reviews reject the account's own PRs. The native review commit
+must match the record. Dismissed, malformed, legacy label-only, and stale-head
+approvals do not satisfy the gate. A later changes-requested record revokes
+earlier approvals; GitHub review ids define order, not client timestamps.
+
+`orch review` checks the head before and after fetching the diff and prints the
+full SHA. `review-approve --head <sha>` requires that reviewed head to still be
+current. Metadata is written before label projections. Merge sends the validated
+SHA to GitHub's REST merge endpoint; a concurrent push fails server-side before
+cleanup. Remote branches are retained for explicit later cleanup. Review queue
+reads detect stale approvals even if the review-needed label has not caught up.
+
+This binds the process decision to code, but does not authenticate harness
+identity. The existing trusted-authorship boundary remains unchanged.
+
 | Finding | Status | Follow-up |
 |---|---|---|
 | Claim lock leaked after a failed or no-commit harness run | Resolved | Failure paths now release the lock and prune the task worktree; preserve this lifecycle for every new terminal state. |

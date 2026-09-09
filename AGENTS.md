@@ -47,3 +47,6 @@ Single-context: `CONTEXT.md` (glossary) + `docs/adr/` at the repo root. See `doc
 **Labels & issue lifecycle**: `docs/WORKFLOW.md` is the single reference for every label
 orch relies on and exactly when each is set/cleared (traced from source). Update it in the
 same change that adds or moves a label — code wins if they disagree.
+
+- **Review binding**: approval metadata lives in submitted COMMENT PR reviews (`src/board/approval.ts`), bound to PR/head and native review commit. Labels are projections. `review-approve --head` requires the inspected SHA; request-changes revokes earlier approvals. Merge uses the REST SHA guard and retains remote branches. Legacy labels cannot authorize a merge.
+
