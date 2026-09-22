@@ -211,6 +211,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 
 ## Design
 
+- [Convergent design note](docs/convergent-design.md) — how `orch`'s delegate → parallelize → review → assemble workflow (first committed Aug 2026) maps to Anthropic's "Projects, redesigned" announcement (Sep 2026), and where it deliberately differs
 - [Architecture](docs/ARCHITECTURE.md) — modules and core mechanisms
 - [Workflow](docs/WORKFLOW.md) — labels and issue lifecycle
 - [Routing judge](docs/judge.md) — prompt contract, parsing, and evaluation
