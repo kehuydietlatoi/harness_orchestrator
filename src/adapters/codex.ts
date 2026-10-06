@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { commandExists } from "../util/exec.js";
 import { spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig, ModelSpec } from "../config.js";
@@ -12,11 +13,31 @@ import type {
 
 const WIN = process.platform === "win32";
 
-export function buildCodexTaskArgs(spec?: ModelSpec): string[] {
+/**
+ * Codex argv for a task run. With `resumeSession`, the exec options stay in front of the
+ * `resume` subcommand (verified against codex-cli 0.160) and the prompt is read from stdin (`-`).
+ */
+export function buildCodexTaskArgs(spec?: ModelSpec, resumeSession?: string): string[] {
   const args = ["exec", "--approve-for-me", "--json"];
   if (spec?.model !== undefined) args.push("-m", spec.model);
   if (spec?.effort !== undefined) args.push("-c", `model_reasoning_effort=${spec.effort}`);
+  if (resumeSession) args.push("resume", resumeSession, "-");
   return args;
+}
+
+/** The newest conversation id announced in a Codex `exec --json` log (`thread.started`). Pure. */
+export function sessionIdFromCodexJson(logText: string): string | undefined {
+  let id: string | undefined;
+  for (const line of logText.split(/\r?\n/)) {
+    if (!line.includes("thread.started")) continue;
+    try {
+      const event = JSON.parse(line.trim()) as Record<string, unknown>;
+      if (event.type === "thread.started" && typeof event.thread_id === "string") id = event.thread_id;
+    } catch {
+      // not a JSON line
+    }
+  }
+  return id;
 }
 
 /** Codex argv for a read-only reviewer session: the read-only sandbox, no auto-approval. Pure. */
@@ -58,7 +79,7 @@ export class CodexAdapter implements HarnessAdapter {
     // cwd carries the worktree (no -C path in argv); prompt on stdin.
     // `--approve-for-me` = non-interactive, workspace-write sandbox (the modern
     // replacement for the removed `--full-auto`, codex-cli >= 0.14x).
-    const args = buildCodexTaskArgs(ctx.model);
+    const args = buildCodexTaskArgs(ctx.model, ctx.resumeSession);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -66,7 +87,23 @@ export class CodexAdapter implements HarnessAdapter {
       timeoutMs: ctx.timeoutMs,
       shell: WIN,
     });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
+    // Codex picks its own thread id, so read it back from the run's log.
+    let sessionId: string | undefined = ctx.resumeSession;
+    if (ctx.logFile) {
+      try {
+        sessionId = sessionIdFromCodexJson(readFileSync(ctx.logFile, "utf8")) ?? sessionId;
+      } catch {
+        // no readable log -> no session to remember
+      }
+    }
+    return {
+      ok: r.code === 0,
+      code: r.code,
+      durationMs: r.durationMs,
+      timedOut: r.timedOut,
+      logFile: ctx.logFile,
+      sessionId,
+    };
   }
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {

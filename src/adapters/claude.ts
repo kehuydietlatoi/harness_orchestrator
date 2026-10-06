@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { commandExists } from "../util/exec.js";
 import { spawnInteractive, spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig, ModelSpec } from "../config.js";
@@ -22,7 +23,13 @@ function claudeModelArgs(spec?: ModelSpec): string[] {
   return args;
 }
 
-export function buildClaudeTaskArgs(model?: ModelSpec): string[] {
+/** A Claude conversation to start under a chosen id, or to resume. */
+export interface ClaudeSession {
+  id: string;
+  resume: boolean;
+}
+
+export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession): string[] {
   const args = [
     "-p",
     "--output-format",
@@ -33,6 +40,7 @@ export function buildClaudeTaskArgs(model?: ModelSpec): string[] {
     "--allowedTools",
     "Read,Edit,Write,Bash",
   ];
+  if (session) args.push(session.resume ? "--resume" : "--session-id", session.id);
   return [...args, ...claudeModelArgs(model)];
 }
 
@@ -87,7 +95,11 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async runTask(ctx: RunContext): Promise<RunResult> {
     // Prompt on stdin; worktree as cwd. allowedTools kept metachar-free for the shell.
-    const args = buildClaudeTaskArgs(ctx.model);
+    // Claude lets us choose the conversation id up front, so no log parsing is needed.
+    const session: ClaudeSession = ctx.resumeSession
+      ? { id: ctx.resumeSession, resume: true }
+      : { id: randomUUID(), resume: false };
+    const args = buildClaudeTaskArgs(ctx.model, session);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -95,7 +107,14 @@ export class ClaudeAdapter implements HarnessAdapter {
       timeoutMs: ctx.timeoutMs,
       shell: WIN,
     });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
+    return {
+      ok: r.code === 0,
+      code: r.code,
+      durationMs: r.durationMs,
+      timedOut: r.timedOut,
+      logFile: ctx.logFile,
+      sessionId: session.id,
+    };
   }
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {

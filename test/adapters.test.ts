@@ -5,7 +5,12 @@ import {
   buildClaudeTaskArgs,
   resultTextFromClaudeStreamJson,
 } from "../src/adapters/claude.js";
-import { buildCodexReviewArgs, buildCodexTaskArgs, resultTextFromCodexJson } from "../src/adapters/codex.js";
+import {
+  buildCodexReviewArgs,
+  buildCodexTaskArgs,
+  resultTextFromCodexJson,
+  sessionIdFromCodexJson,
+} from "../src/adapters/codex.js";
 import { makeAdapter } from "../src/adapters/index.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { configuredAdapterCommands } from "../src/commands/doctor.js";
@@ -76,6 +81,47 @@ describe("task adapter arguments", () => {
       "-c",
       "model_reasoning_effort=medium",
     ]);
+  });
+});
+
+describe("session continuity arguments", () => {
+  const id = "e72ad3d7-549f-484d-8cf0-9d11145508fb";
+
+  it("starts a Claude conversation under a chosen id so it can be resumed later", () => {
+    const args = buildClaudeTaskArgs({ model: "m" }, { id, resume: false });
+    expect(args[args.indexOf("--session-id") + 1]).toBe(id);
+    expect(args).not.toContain("--resume");
+  });
+
+  it("resumes a Claude conversation by id", () => {
+    const args = buildClaudeTaskArgs({ model: "m", effort: "medium" }, { id, resume: true });
+    expect(args[args.indexOf("--resume") + 1]).toBe(id);
+    expect(args).not.toContain("--session-id");
+    expect(args.slice(-4)).toEqual(["--model", "m", "--effort", "medium"]);
+  });
+
+  it("leaves Claude arguments untouched without a session", () => {
+    expect(buildClaudeTaskArgs()).not.toContain("--session-id");
+    expect(buildClaudeTaskArgs()).not.toContain("--resume");
+  });
+
+  it("resumes Codex with exec options before the subcommand and the prompt on stdin", () => {
+    expect(buildCodexTaskArgs({ model: "gpt-6.1-sol", effort: "medium" }, id)).toEqual([
+      "exec", "--approve-for-me", "--json", "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=medium",
+      "resume", id, "-",
+    ]);
+    expect(buildCodexTaskArgs({ effort: "high" })).not.toContain("resume");
+  });
+
+  it("reads the newest Codex thread id from a log", () => {
+    const log =
+      '{"type":"thread.started","thread_id":"old-1"}\n' +
+      '{"type":"turn.started"}\n' +
+      "not json thread.started\n" +
+      '{"type":"thread.started","thread_id":"new-2"}\n';
+    expect(sessionIdFromCodexJson(log)).toBe("new-2");
+    expect(sessionIdFromCodexJson('{"type":"turn.started"}')).toBeUndefined();
+    expect(sessionIdFromCodexJson("")).toBeUndefined();
   });
 });
 

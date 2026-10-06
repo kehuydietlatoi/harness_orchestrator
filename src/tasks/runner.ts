@@ -15,6 +15,7 @@ import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 import { estimateCost } from "../board/pricing.js";
 import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { writeSession } from "./sessions.js";
 
 export interface RunSummary {
   issue: number;
@@ -189,6 +190,7 @@ async function processClaimed(
       timeoutMs: cfg.taskTimeoutMs,
     });
     harnessDurationMs = result.durationMs;
+    if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
     if (!result.ok) {
       noteUsageLimit(agent, logFile, cwd);
