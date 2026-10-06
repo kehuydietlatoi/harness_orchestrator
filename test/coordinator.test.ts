@@ -37,6 +37,7 @@ class World {
   prs = new Map<number, SimPr>();
   todo: Array<{ issue: number; agent: string; pr: Partial<SimPr> }> = [];
   calls: string[] = [];
+  requeueOnce = false;
   events: Array<Omit<OrchEvent, "ts">> = [];
   said: string[] = [];
   active = 0;
@@ -118,6 +119,13 @@ class World {
     const [t] = this.todo.splice(i, 1);
     this.calls.push(`implement:${agent}:${t.issue}`);
     onClaimed(t.issue);
+    if (this.requeueOnce) {
+      // The harness ran out of usage mid-run: the task is back in the queue and the harness is paused.
+      this.requeueOnce = false;
+      this.paused.add(agent);
+      this.todo.unshift(t);
+      return { issue: t.issue, outcome: "requeued", durationMs: 1 };
+    }
     this.add(pr(t.issue, { author: agent, ...t.pr })); // the agent ran `orch submit` itself
     if (this.implementGate) await this.implementGate; // ...but its process has not finished yet
     return { issue: t.issue, outcome: "submitted", durationMs: 1, prUrl: `https://example/pull/${1000 + t.issue}` };
@@ -398,6 +406,21 @@ describe("runAutopilot", () => {
 
       expect(summary.merged).toEqual([7]);
       expect(w.calls[0]).toBe("implement:codex:7");
+    });
+
+    it("a run that died on a usage limit is requeued, not counted as a failure, and runs again after the pause", async () => {
+      const w = new World();
+      w.requeueOnce = true;
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+      w.onSleep = (n) => { if (n >= 4) w.paused.delete("claude"); };
+
+      const summary = await drive(w);
+
+      expect(w.calls).toEqual(["implement:claude:7", "implement:claude:7", "merge:7"]);
+      expect(summary).toMatchObject({ merged: [7], submitted: [7], failures: 0, escalated: [], stopped: "drained" });
+      expect(w.events.find((e) => e.type === "step.finished" && e.step === "implement")).toMatchObject({
+        signal: "agent.unavailable", detail: "requeued",
+      });
     });
 
     it("gives up after --max-idle when the owner never resumes, leaving the task queued", async () => {

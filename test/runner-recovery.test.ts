@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
   getIssue: vi.fn(),
   editIssue: vi.fn(),
+  listOpenPrs: vi.fn(),
   lockRelease: vi.fn(),
   removeWorktree: vi.fn(),
   discardWorktree: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("../src/adapters/index.js", () => ({
 vi.mock("../src/github/github.js", () => ({
   getIssue: mocks.getIssue,
   editIssue: mocks.editIssue,
+  listOpenPrs: mocks.listOpenPrs,
 }));
 vi.mock("../src/git/lock.js", () => ({ release: mocks.lockRelease }));
 vi.mock("../src/git/worktree.js", () => ({
@@ -86,6 +88,7 @@ describe("processNext recovery", () => {
     mocks.appendRun.mockReturnValue(undefined);
     mocks.resolveBaseBranch.mockResolvedValue({ name: "main", ref: "refs/heads/main" });
     mocks.countCommitsAhead.mockResolvedValue(0);
+    mocks.listOpenPrs.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -130,6 +133,116 @@ describe("processNext recovery", () => {
       await processNext("codex", DEFAULT_CONFIG, cwd);
 
       expect(unavailableUntil("codex", cwd)).not.toBeNull();
+    });
+  });
+
+  describe("a run that dies on a usage limit goes back to the queue instead of needing a human", () => {
+    const LIMIT =
+      '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}\n';
+    const dies = async (ctx: { logFile: string }) => {
+      appendFileSync(ctx.logFile, LIMIT, "utf8");
+      return { ok: false, code: 1, durationMs: 1, timedOut: false };
+    };
+
+    it("requeues to status:todo (no needs-attention), releasing worktree and lock first", async () => {
+      mocks.runTask.mockImplementation(dies);
+      const order: string[] = [];
+      mocks.removeWorktree.mockImplementation(async () => (order.push("worktree"), true));
+      mocks.lockRelease.mockImplementation(async () => (order.push("lock"), true));
+      mocks.editIssue.mockImplementation(async (_n: number, o: { addLabels?: string[] }) => {
+        order.push(`labels:${o.addLabels?.join(",")}`);
+      });
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "requeued" });
+      expect(order.slice(-3)).toEqual(["worktree", "lock", "labels:status:todo"]);
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, {
+        cwd,
+        addLabels: ["status:todo"],
+        removeLabels: ["status:claimed", "status:in-progress"],
+      });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      // "usage-limited" must not read as a failed run, or the lifecycle would park the requeued task.
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ issue: 35, outcome: "usage-limited" });
+      expect(unavailableUntil("codex", cwd)).not.toBeNull(); // and the harness is still paused
+    });
+
+    // Safe cleanup also lets a CLEAN worktree go when its commits live elsewhere (pushed branch, open PR),
+    // so removeWorktree() succeeding proves nothing: the requeue must look for that work itself.
+    it("does not requeue over commits the run pushed or submitted before dying, even though cleanup would succeed", async () => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.removeWorktree.mockResolvedValue(true); // clean worktree, commits preserved on the remote branch
+      mocks.countCommitsAhead.mockResolvedValue(2);
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
+    });
+
+    it.each([
+      ["its task branch", { number: 90, headRefName: "task/35-recover-runner-failures", body: "" }],
+      ["a Closes #35 line", { number: 91, headRefName: "feature/x", body: "Closes #35" }],
+    ])("does not requeue a task that already has an open PR (matched by %s)", async (_how, pr) => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.listOpenPrs.mockResolvedValue([pr]);
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+    });
+
+    it("requeues when other tasks have open PRs but this one does not", async () => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.listOpenPrs.mockResolvedValue([{ number: 92, headRefName: "task/36-other", body: "Closes #36" }]);
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "requeued" });
+    });
+
+    it.each([
+      ["the commit comparison", () => mocks.countCommitsAhead.mockRejectedValue(new Error("merge-base failed"))],
+      ["the open-PR lookup", () => mocks.listOpenPrs.mockRejectedValue(new Error("gh unreachable"))],
+    ])("fails closed (no requeue, nothing removed) when %s cannot be read", async (_name, arrange) => {
+      mocks.runTask.mockImplementation(dies);
+      arrange();
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+    });
+
+    it("keeps the claim and flags needs-attention when work was left behind", async () => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.removeWorktree.mockResolvedValue(false); // dirty / committed: safe cleanup retains it
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(mocks.lockRelease).not.toHaveBeenCalled();
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
+    });
+
+    // git.release() signals failure by RETURNING false (update-ref failed), not by throwing.
+    it.each([
+      ["returns false", () => mocks.lockRelease.mockResolvedValue(false)],
+      ["throws", () => mocks.lockRelease.mockRejectedValue(new Error("lock busy"))],
+    ])("falls back to needs-attention, never todo, when releasing the lock %s", async (_name, arrange) => {
+      mocks.runTask.mockImplementation(dies);
+      arrange();
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
+    });
+
+    it("does not requeue a plain failure (no usage-limit event in this run's own output)", async () => {
+      mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1, timedOut: false });
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
     });
   });
 

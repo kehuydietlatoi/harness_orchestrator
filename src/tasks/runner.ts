@@ -5,7 +5,8 @@ import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
-import { getIssue, editIssue, listIssues, type Issue } from "../github/github.js";
+import { getIssue, editIssue, listIssues, listOpenPrs, type Issue } from "../github/github.js";
+import { prIssueNumber } from "../board/review.js";
 import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
@@ -21,7 +22,7 @@ import { writeSession } from "./sessions.js";
 
 export interface RunSummary {
   issue: number;
-  outcome: "submitted" | "needs-attention" | "failed";
+  outcome: "submitted" | "needs-attention" | "failed" | "requeued";
   prUrl?: string;
   durationMs: number;
 }
@@ -45,12 +46,14 @@ async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Pro
  * run appended counts (`since` is the log size before it started): the log is shared by every retry,
  * and an old attempt's usage-limit event must not pause the harness again for a different failure.
  */
-function noteUsageLimit(agent: string, logFile: string, cwd: string, since: number): void {
+function noteUsageLimit(agent: string, logFile: string, cwd: string, since: number): Date | null {
   try {
     const until = noteUsageLimitFromLog(agent, readLogSince(logFile, since), cwd);
     if (until) console.log(pc.yellow(`⏸ '${agent}' hit its usage limit — paused until ${until.toLocaleString()}`));
+    return until;
   } catch {
     // An unreadable log just means no availability signal; the failure is handled as usual.
+    return null;
   }
 }
 
@@ -215,11 +218,19 @@ async function processClaimed(
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
     if (!result.ok) {
-      noteUsageLimit(agent, logFile, cwd, logMark);
-      await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
-      console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
-      summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
-      telemetryOutcome = "failed";
+      const limitedUntil = noteUsageLimit(agent, logFile, cwd, logMark);
+      // Running out of usage says nothing about the task: put it back in the queue for when the harness
+      // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
+      if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd))) {
+        console.log(pc.yellow(`↺ #${n} requeued — '${agent}' is out of usage until ${limitedUntil.toLocaleString()}`));
+        summary = { issue: n, outcome: "requeued", durationMs: result.durationMs };
+        telemetryOutcome = "usage-limited";
+      } else {
+        await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+        console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
+        summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
+        telemetryOutcome = "failed";
+      }
     } else {
       // From this point a transient inspection/submit error may hide committed
       // work or an already-open PR, so unexpected recovery must retain ownership.
@@ -292,6 +303,32 @@ async function recoverClaim(
     await lockRelease(n, { cwd });
   } catch (error) {
     warnRecovery(n, "claim lock release failed", error);
+  }
+}
+
+/**
+ * Return a task whose implement run died on a usage limit to `status:todo`, but only when the run
+ * demonstrably left nothing behind. A removable worktree is not that proof: safe cleanup also allows a
+ * clean worktree whose commits are preserved elsewhere (a pushed branch, an open PR), and requeueing that
+ * would run the task again over its own work. So, before touching anything, require no commits ahead of
+ * the base and no open PR for the issue, failing closed when either cannot be observed. Then cleanup must
+ * actually remove the worktree (retained work belongs to a human or `orch repair`), and the lock is
+ * released before the labels change so a `todo` task never still looks claimed. Returns false, having
+ * changed no labels, when any of that does not hold.
+ */
+async function requeueClaim(n: number, worktree: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+  try {
+    if ((await commitsAhead(worktree, cfg, cwd)) > 0) return false;
+    if ((await listOpenPrs({ cwd })).some((pr) => prIssueNumber(pr) === n)) return false;
+    if (!(await removeWorktree(worktree, { cwd, disposableIgnored: cfg.disposableIgnored }))) return false;
+    // release() reports failure by returning false, not by throwing: a lock that is still held must never
+    // be relabelled todo (it would read as claimed and the task could not run after the cooldown).
+    if (!(await lockRelease(n, { cwd }))) return false;
+    await editIssue(n, { cwd, addLabels: [STATUS.todo], removeLabels: [STATUS.claimed, STATUS.inProgress] });
+    return true;
+  } catch (error) {
+    warnRecovery(n, "requeue failed", error);
+    return false;
   }
 }
 
