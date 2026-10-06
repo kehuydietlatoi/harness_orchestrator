@@ -1115,3 +1115,82 @@ describe("runAutopilot", () => {
     expect(summary.merged.sort()).toEqual([1, 2]);
   });
 });
+
+describe("runAutopilot scoped to one plan", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** Scope the fake world the way `defaultDeps(cfg, cwd, scope)` scopes the real one. */
+  function scoped(w: World, scope: Set<number>, remaining?: () => Promise<number[]>): CoordinatorDeps {
+    const base = w.deps();
+    return {
+      ...base,
+      implement: async (agent, onClaimed) => {
+        const before = w.todo;
+        w.todo = before.filter((t) => scope.has(t.issue));
+        try {
+          return await w.implement(agent, onClaimed);
+        } finally {
+          w.todo = [...w.todo, ...before.filter((t) => !scope.has(t.issue))];
+        }
+      },
+      remaining: remaining ?? (async () => [
+        ...[...w.prs.values()].filter((p) => scope.has(p.issue) && !p.merged && !p.attention).map((p) => p.issue),
+        ...w.todo.filter((t) => scope.has(t.issue)).map((t) => t.issue),
+      ]),
+    };
+  }
+
+  async function driveScoped(w: World, scope: Set<number>, remaining?: () => Promise<number[]>) {
+    let done = false;
+    const run = runAutopilot({ ...OPTS, issues: scope }, scoped(w, scope, remaining)).finally(() => { done = true; });
+    for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+    expect(done, "the loop must terminate").toBe(true);
+    return run;
+  }
+
+  it("drives and claims only the plan's issues and reports the plan complete", async () => {
+    const w = new World();
+    w.add(pr(5));
+    w.add(pr(99, { mergeable: "conflicting" })); // someone else's PR: never touched
+    w.todo.push({ issue: 6, agent: "claude", pr: { author: "claude" } });
+    w.todo.push({ issue: 98, agent: "codex", pr: {} }); // routed backlog outside the plan: never claimed
+
+    const summary = await driveScoped(w, new Set([5, 6]));
+
+    expect(w.calls.filter((c) => c.endsWith(":99") || c.endsWith(":98"))).toEqual([]);
+    expect(summary.merged.sort()).toEqual([5, 6]);
+    expect(summary).toMatchObject({ stopped: "plan-complete", remaining: [] });
+    expect(w.todo.map((t) => t.issue)).toEqual([98]);
+  });
+
+  it("counts an escalated issue as handed off, so the plan still completes", async () => {
+    const w = new World();
+    w.maxRounds = 1;
+    w.add(pr(5, { verdicts: ["changes", "changes"] }));
+    w.add(pr(6));
+
+    const summary = await driveScoped(w, new Set([5, 6]));
+
+    expect(summary).toMatchObject({ merged: [6], escalated: [5], stopped: "plan-complete", remaining: [] });
+  });
+
+  it("reports drained with the issues still open when the plan cannot finish", async () => {
+    const w = new World();
+    w.add(pr(5));
+
+    const summary = await driveScoped(w, new Set([5, 7]), async () => [7]);
+
+    expect(summary).toMatchObject({ merged: [5], stopped: "drained", remaining: [7] });
+    expect(w.said.some((line) => line.includes("#7 still open"))).toBe(true);
+  });
+
+  it("never claims completion it could not check", async () => {
+    const w = new World();
+    w.add(pr(5));
+
+    const summary = await driveScoped(w, new Set([5]), async () => { throw new Error("gh down"); });
+
+    expect(summary).toMatchObject({ merged: [5], stopped: "drained", remaining: null });
+  });
+});

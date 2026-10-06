@@ -7,7 +7,7 @@ import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
 import { getIssue, editIssue, listIssues, listOpenPrs, type Issue } from "../github/github.js";
 import { prIssueNumber } from "../board/review.js";
-import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from "../board/board.js";
+import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap, type ClaimFilter } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
@@ -133,8 +133,7 @@ export async function processNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
-  opts: {
-    requireRouted?: boolean;
+  opts: ClaimFilter & {
     /**
      * Called as soon as a task is claimed, before the harness starts. The agent may open its PR
      * (`orch submit`) while this call is still running, so a caller that also acts on open PRs needs
@@ -148,7 +147,7 @@ export async function processNext(
     log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
     return null;
   }
-  const task = await claimNext(agent, cfg, cwd, { requireRouted: opts.requireRouted });
+  const task = await claimNext(agent, cfg, cwd, { requireRouted: opts.requireRouted, only: opts.only });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
 

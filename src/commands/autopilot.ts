@@ -12,6 +12,22 @@ function positive(name: string, value: string | undefined, fallback: number): nu
   return n;
 }
 
+/** Parse `--issues 12,13,#14` into a scope. Throws on anything that is not a positive issue number. */
+export function parseIssueList(value: string): Set<number> {
+  const out = new Set<number>();
+  for (const part of value.split(/[\s,]+/).filter(Boolean)) {
+    const n = Number(part.replace(/^#/, ""));
+    if (!Number.isInteger(n) || n <= 0) throw new Error(`--issues must be a list of issue numbers (got '${part}')`);
+    out.add(n);
+  }
+  if (out.size === 0) throw new Error("--issues needs at least one issue number");
+  return out;
+}
+
+function formatIssues(numbers: Iterable<number>): string {
+  return [...numbers].map((n) => `#${n}`).join(", ");
+}
+
 function describeStep(step: Step): string {
   switch (step.kind) {
     case "fix": return `fix (${step.reason})`;
@@ -27,12 +43,16 @@ export async function autopilotCommand(opts: {
   dryRun?: boolean;
   /** Commander sets this to false for `--no-claim`. */
   claim?: boolean;
+  /** Scope the run to these issues (`12,13,14`), e.g. the tickets of one plan. */
+  issues?: string;
 }): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
+  const scope = opts.issues === undefined ? undefined : parseIssueList(opts.issues);
 
   if (opts.dryRun) {
-    const { tasks, unobserved, ambiguous } = await observeTasks(cfg, cwd);
+    const { tasks, unobserved, ambiguous } = await observeTasks(cfg, cwd, { issues: scope });
+    if (scope) console.log(pc.dim(`scoped to ${formatIssues(scope)}`));
     console.log(pc.bold(`orch autopilot --dry-run — ${tasks.length} open task PR(s)\n`));
     if (!tasks.length) console.log(pc.dim("  (no open task PRs; autopilot would claim new work instead)"));
     for (const t of tasks) {
@@ -46,7 +66,7 @@ export async function autopilotCommand(opts: {
       console.log(pc.yellow(`  could not observe PR(s): ${unobserved.map((n) => `#${n}`).join(", ")} (autopilot would keep retrying)`));
     }
     // Say what it would start, and what it would leave alone, so nothing is claimed by surprise.
-    const eligible = await eligibleIssues(cwd);
+    const eligible = (await eligibleIssues(cwd)).filter((i) => !scope || scope.has(i.number));
     const routed = eligible.filter((i) => cfg.agents.includes(issueAgent(i) ?? ""));
     const unrouted = eligible.filter((i) => !issueAgent(i));
     console.log("");
@@ -70,7 +90,8 @@ export async function autopilotCommand(opts: {
       pc.dim(
         ` — up to ${max} concurrent, polling every ${pollMs / 1000}s, ${cfg.maxReviewRounds} fix round(s) per task` +
           (cfg.requireHumanMerge ? ", human merges" : ", auto-merge") +
-          (opts.claim === false ? ", no new tasks" : ", claims only issues with an agent: label"),
+          (opts.claim === false ? ", no new tasks" : ", claims only issues with an agent: label") +
+          (scope ? `, scoped to ${formatIssues(scope)}` : ""),
       ),
   );
 
@@ -84,12 +105,12 @@ export async function autopilotCommand(opts: {
   });
 
   const summary = await runAutopilot(
-    { max, pollMs, maxIdleMs, signal: controller.signal, claim: opts.claim === false ? "none" : "routed" },
-    defaultDeps(cfg, cwd),
+    { max, pollMs, maxIdleMs, signal: controller.signal, claim: opts.claim === false ? "none" : "routed", issues: scope },
+    defaultDeps(cfg, cwd, scope),
   );
 
   console.log("");
-  console.log(pc.bold(`Autopilot stopped (${summary.stopped}).`));
+  console.log(pc.bold(summary.stopped === "plan-complete" ? "Autopilot stopped: plan complete." : `Autopilot stopped (${summary.stopped}).`));
   console.log(`  merged:    ${summary.merged.map((n) => `#${n}`).join(", ") || "none"}`);
   console.log(`  submitted: ${summary.submitted.map((n) => `#${n}`).join(", ") || "none"}`);
   if (summary.awaitingHuman.length) {
@@ -103,6 +124,11 @@ export async function autopilotCommand(opts: {
   }
   if (summary.escalated.length) {
     console.log(pc.red(`  escalated to you:    ${summary.escalated.map((n) => `#${n}`).join(", ")}  (needs-attention)`));
+  }
+  if (summary.remaining?.length) {
+    console.log(pc.yellow(`  still open:  ${formatIssues(summary.remaining)}  (blocked, unrouted, or awaiting a merge; see orch board)`));
+  } else if (summary.remaining === null) {
+    console.log(pc.yellow("  could not check which of the scoped issues are still open (see orch board)"));
   }
   if (summary.failures) console.log(pc.dim(`  ${summary.failures} step failure(s) along the way`));
 }

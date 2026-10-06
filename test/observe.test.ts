@@ -145,6 +145,15 @@ describe("observeTasks", () => {
     expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [], ambiguous: [] });
   });
 
+  it("skips PRs outside the run's scope before looking them up", async () => {
+    const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo", { issues: new Set([issue.number]) });
+    expect(task.pr.number).toBe(62);
+    vi.mocked(gh.listPrReviews).mockClear();
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo", { issues: new Set([issue.number + 1]) }))
+      .toEqual({ tasks: [], unobserved: [], ambiguous: [] });
+    expect(gh.listPrReviews).not.toHaveBeenCalled();
+  });
+
   it("skips just the PR it cannot observe and keeps the rest", async () => {
     const other = { ...pr, number: 63, headRefName: "task/39-y", body: "Closes #39" };
     vi.mocked(gh.listIssues).mockResolvedValue([issue, { ...issue, number: 39 }]);

@@ -9,7 +9,7 @@ import {
   type PlanEntry,
   type PlanSkip,
 } from "../routing/assign.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, type OrchConfig } from "../config.js";
 import { editIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
 import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github/labels.js";
 import { runJudge } from "../routing/judge.js";
@@ -103,6 +103,40 @@ function warnJudgeGaps(report: EvalReport): void {
   for (const gap of gaps) console.error(pc.dim(`  #${gap.issue} ${gap.kind} (${gap.detail})`));
 }
 
+/** Run the judge over the unrouted issues in `issues` and warn about the gaps the writer cannot see. Fail-closed. */
+async function judgePlan(issues: Issue[], cfg: OrchConfig, cwd: string): Promise<PlanEntry[]> {
+  const plan = await runJudge(briefFor(issues, cwd, cfg), cfg, cwd); // fail-closed: throws => no writes
+  warnJudgeGaps(evaluatePlan(plan, issues, cfg)); // completeness check the writer can't do
+  return plan;
+}
+
+export interface AutoRouteResult {
+  /** Issues that needed routing (no `agent:` and no `effort:` label). */
+  unrouted: number;
+  /** Issues the judge's plan routed. */
+  written: number;
+}
+
+/**
+ * Route unrouted open issues with the judge and apply its plan (fill-blanks-only, adds
+ * `assigned-by:brain`). With `only`, the judge sees and may route just those issues, so
+ * approving one plan never routes unrelated backlog. Throws, writing nothing, when the
+ * judge fails. Shared by `orch assign --auto` and the `orch plan` pipeline.
+ */
+export async function autoRoute(
+  cfg: OrchConfig,
+  cwd: string,
+  opts: { only?: ReadonlySet<number>; dryRun?: boolean } = {},
+): Promise<AutoRouteResult> {
+  const open = await listIssues({ cwd, state: "open" });
+  const issues = opts.only ? open.filter((i) => opts.only?.has(i.number)) : open;
+  const unrouted = selectUnassigned(issues).length;
+  if (unrouted === 0) return { unrouted, written: 0 };
+  const result = applyPlan(await judgePlan(issues, cfg, cwd), issues, cfg);
+  await writeAssignments(result, cwd, { brain: true, dryRun: Boolean(opts.dryRun) });
+  return { unrouted, written: result.writes.length };
+}
+
 export async function assignCommand(opts: AssignOptions): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
@@ -127,21 +161,22 @@ export async function assignCommand(opts: AssignOptions): Promise<void> {
     return;
   }
 
-  const issues = await listIssues({ cwd, state: "open" });
+  const nothingToRoute = "Nothing to route — every open issue already has agent:/effort: labels.";
 
-  // The judge turns the brief into a plan. --judge emits it; --auto applies it.
+  // The judge turns the brief into a plan. --auto applies it; --judge emits it.
+  if (opts.auto) {
+    const { unrouted } = await autoRoute(cfg, cwd, { dryRun: opts.dryRun });
+    if (unrouted === 0) console.log(pc.yellow(nothingToRoute));
+    return;
+  }
+
+  const issues = await listIssues({ cwd, state: "open" });
   if (judging) {
     if (selectUnassigned(issues).length === 0) {
-      console.log(pc.yellow("Nothing to route — every open issue already has agent:/effort: labels."));
+      console.log(pc.yellow(nothingToRoute));
       return;
     }
-    const plan = await runJudge(briefFor(issues, cwd, cfg), cfg, cwd); // fail-closed: throws => no writes
-    warnJudgeGaps(evaluatePlan(plan, issues, cfg)); // completeness check the writer can't do
-    if (!opts.auto) {
-      console.log(JSON.stringify(plan, null, 2));
-      return;
-    }
-    await writeAssignments(applyPlan(plan, issues, cfg), cwd, { brain: true, dryRun: Boolean(opts.dryRun) });
+    console.log(JSON.stringify(await judgePlan(issues, cfg, cwd), null, 2));
     return;
   }
 

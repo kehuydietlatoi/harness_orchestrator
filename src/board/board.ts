@@ -113,12 +113,22 @@ export function orderByAfter(eligible: readonly Issue[]): Issue[] {
   return ordered;
 }
 
+/** Claim filters shared by `claimNext`, `processNext`, and the autopilot. */
+export interface ClaimFilter {
+  /** Only issues carrying an `agent:` label (a loop that merges on its own must not take untriaged work). */
+  requireRouted?: boolean;
+  /** Only these issue numbers (an autopilot run scoped to one plan). */
+  only?: ReadonlySet<number>;
+}
+
 /**
- * May `agent` claim this issue? Never when it is pinned to another agent. An issue with no
- * `agent:` label is claimable only when routing is not required: `orch run` has always taken
- * unrouted work, but a loop that merges on its own must only run what someone routed on purpose.
+ * May `agent` claim this issue? Never when it is pinned to another agent, or outside the
+ * `only` scope. An issue with no `agent:` label is claimable only when routing is not
+ * required: `orch run` has always taken unrouted work, but a loop that merges on its own
+ * must only run what someone routed on purpose.
  */
-export function claimableBy(issue: Issue, agent: string, opts: { requireRouted?: boolean } = {}): boolean {
+export function claimableBy(issue: Issue, agent: string, opts: ClaimFilter = {}): boolean {
+  if (opts.only && !opts.only.has(issue.number)) return false;
   const owner = issueAgent(issue);
   if (owner) return owner === agent;
   return !opts.requireRouted;
