@@ -143,6 +143,49 @@ export async function addWorktree(
 }
 
 /**
+ * Attach a worktree to an existing remote task branch (a PR under rework):
+ * fetch it, reuse or create the local branch, and fast-forward only — never
+ * reset or force. Returns the worktree and its HEAD before any rework.
+ */
+export async function addReworkWorktree(
+  issue: number,
+  title: string,
+  root: string,
+  opts: { branch: string; cwd?: string },
+): Promise<Worktree & { head: string }> {
+  const cwd = opts.cwd ?? process.cwd();
+  const branch = opts.branch;
+  if (branch !== branchName(issue, slugify(title))) {
+    throw new Error(`PR branch '${branch}' is not the task branch for #${issue}`);
+  }
+  const path = worktreePath(root, issue, cwd);
+  const remote = `refs/remotes/origin/${branch}`;
+
+  const fetch = await exec("git", ["fetch", "origin", `+refs/heads/${branch}:${remote}`], { cwd });
+  if (fetch.code !== 0) throw new Error(`git fetch ${branch} failed: ${fetch.stderr.trim()}`);
+
+  const observed = await observeWorktree(issue, title, root, { cwd });
+  if (observed.outcome === "conflict" || observed.outcome === "error") throw new Error(observed.detail);
+  if (observed.outcome === "absent") {
+    const local = await exec("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], { cwd });
+    const args =
+      local.code === 0
+        ? ["worktree", "add", path, branch]
+        : ["worktree", "add", "-b", branch, path, remote];
+    const added = await exec("git", args, { cwd });
+    if (added.code !== 0) throw new Error(`worktree add failed: ${added.stderr.trim()}`);
+  }
+
+  const ff = await exec("git", ["merge", "--ff-only", remote], { cwd: path });
+  if (ff.code !== 0) {
+    throw new Error(`cannot fast-forward '${branch}' to origin; reconcile the worktree: ${ff.stderr.trim()}`);
+  }
+  const head = await exec("git", ["rev-parse", "HEAD"], { cwd: path });
+  if (head.code !== 0) throw new Error(`git rev-parse HEAD failed: ${head.stderr.trim()}`);
+  return { path, branch, head: head.stdout.trim() };
+}
+
+/**
  * Remove a worktree only when doing so cannot hide recoverable work. HEAD must
  * be attached, clean, and reachable from a ref other than the checked-out branch.
  */

@@ -53,3 +53,21 @@ export function reviewState(reviews: readonly PrReview[], pr: number, head: stri
     staleApproval: [...approved.values()].some((sha) => sha !== head),
   };
 }
+
+/**
+ * Notes from the latest review when it is a request-changes bound to `head`;
+ * null otherwise (approved, superseded by new commits, or no records).
+ */
+export function latestChangesRequestedNote(
+  reviews: readonly PrReview[],
+  pr: number,
+  head: string,
+): string | null {
+  let latest: { record: ReviewRecord; review: PrReview } | null = null;
+  for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
+    const record = parseReview(review);
+    if (record && record.pr === pr) latest = { record, review };
+  }
+  if (!latest || latest.record.decision !== "request-changes" || latest.record.head !== head) return null;
+  return latest.review.body.replace(/\n<!-- orch-review:v1 .+ -->\s*$/, "").trim();
+}

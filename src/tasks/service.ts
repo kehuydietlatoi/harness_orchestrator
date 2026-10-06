@@ -13,11 +13,17 @@ import {
   editIssue,
   createPr,
   currentLogin,
+  getBranchPrs,
+  listPrReviews,
+  type Pr,
 } from "../github/github.js";
 import { STATUS, agentLabel, REVIEW_NEEDED } from "../github/labels.js";
 import {
+  addReworkWorktree,
   addWorktree,
+  branchName,
   observeWorktree,
+  slugify,
   worktreePath,
   type Worktree,
   type WorktreeObservation,
@@ -26,13 +32,64 @@ import {
   resolveBaseBranch,
   type RepositoryBase,
 } from "../git/git.js";
-import { eligibleIssues, issueAgent } from "../board/board.js";
+import { eligibleIssues, issueAgent, issueStatus } from "../board/board.js";
+import { latestChangesRequestedNote } from "../board/approval.js";
 import type { OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
 
 export interface ClaimedTask {
   issue: Issue;
   worktree: Worktree;
+  /** Set when the task is an existing PR sent back for changes. */
+  rework?: { pr: number; notes: string; baseRef: string; startHead: string };
+}
+
+/** An in-progress task whose open PR's latest decision is request-changes. */
+export interface ReworkTarget {
+  pr: Pr;
+  notes: string;
+}
+
+/**
+ * Observe whether an issue is a bounced PR awaiting rework: in-progress, with an
+ * open PR on its task branch whose current head has a request-changes record.
+ * Returns null for anything else (labels alone never qualify).
+ */
+export async function observeRework(issue: Issue, cwd: string): Promise<ReworkTarget | null> {
+  if (issueStatus(issue) !== STATUS.inProgress) return null;
+  const branch = branchName(issue.number, slugify(issue.title));
+  const open = (await getBranchPrs(branch, { cwd })).filter((pr) => pr.state === "OPEN" && pr.headSha);
+  if (open.length === 0) return null;
+  if (open.length > 1) throw new Error(`#${issue.number} has multiple open PRs on ${branch}`);
+  const pr = open[0]!;
+  const notes = latestChangesRequestedNote(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
+  return notes === null ? null : { pr, notes };
+}
+
+/**
+ * Claim a rework: the claim lock from the original run is reused (it is held
+ * until merge), and the worktree is attached to the existing PR branch.
+ */
+export async function claimRework(
+  issue: Issue,
+  target: ReworkTarget,
+  cfg: OrchConfig,
+  cwd: string,
+): Promise<ClaimedTask> {
+  const n = issue.number;
+  if ((await lockOwner(n, { cwd })) === null) {
+    throw new Error(`#${n} has no claim lock; run 'orch repair ${n}' before rework.`);
+  }
+  const base = await resolveBaseBranch(cfg.baseBranch, cwd);
+  const wt = await addReworkWorktree(n, issue.title, cfg.worktreeRoot, {
+    branch: target.pr.headRefName,
+    cwd,
+  });
+  return {
+    issue,
+    worktree: { path: wt.path, branch: wt.branch },
+    rework: { pr: target.pr.number, notes: target.notes, baseRef: base.ref, startHead: wt.head },
+  };
 }
 
 interface IssueEdit {
@@ -388,6 +445,17 @@ export async function submit(
   if (push.code !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
 
   const issue = await getIssue(number, { cwd });
+  // A reworked task already has its PR: the push above updated it, so only the
+  // projection changes. Never create a second PR for the same branch.
+  const existing = await openBranchPr(wt);
+  if (existing) {
+    await editIssue(number, {
+      cwd,
+      addLabels: [STATUS.inReview, REVIEW_NEEDED],
+      removeLabels: [STATUS.claimed, STATUS.inProgress],
+    });
+    return existing.htmlUrl;
+  }
   const reviewer = cfg.agents.find((a) => a !== agent) ?? "(the other harness)";
   const body =
     `Closes #${number}\n\n` +
@@ -400,6 +468,14 @@ export async function submit(
     removeLabels: [STATUS.claimed, STATUS.inProgress],
   });
   return url;
+}
+
+async function openBranchPr(wt: string): Promise<Pr | null> {
+  const head = await exec("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: wt });
+  const branch = head.stdout.trim();
+  if (head.code !== 0 || !branch || branch === "HEAD") return null;
+  const prs = await getBranchPrs(branch, { cwd: wt });
+  return prs.find((pr) => pr.state === "OPEN") ?? null;
 }
 
 /** Resolve which agent identity a command is acting as. */

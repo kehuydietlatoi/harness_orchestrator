@@ -2,7 +2,14 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
 import type { OrchConfig } from "../config.js";
-import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
+import {
+  claimNext,
+  claimRework,
+  claimSpecific,
+  observeRework,
+  submit,
+  type ClaimedTask,
+} from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
 import { getIssue, editIssue, listIssues, type Issue } from "../github/github.js";
@@ -12,6 +19,7 @@ import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
 import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
+import { exec } from "../util/exec.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 import { estimateCost } from "../board/pricing.js";
 
@@ -36,13 +44,24 @@ async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Pro
   return countCommitsAhead(base.ref, "HEAD", worktree);
 }
 
-/** Validate that a specific open issue is a routed todo ready for dispatch. */
+/** True once the worktree HEAD differs from where a rework started. */
+async function headMoved(worktree: string, startHead: string): Promise<boolean> {
+  const r = await exec("git", ["rev-parse", "HEAD"], { cwd: worktree });
+  if (r.code !== 0) throw new Error(`git rev-parse HEAD failed: ${r.stderr.trim()}`);
+  return r.stdout.trim() !== startHead;
+}
+
+/**
+ * Validate that a specific open issue is a routed todo ready for dispatch, or —
+ * with `rework` — an in-progress task whose open PR was sent back for changes.
+ */
 export function resolveDispatchAgent(
   issue: Issue,
   open: ReadonlyMap<number, Issue>,
   cfg: OrchConfig,
+  opts: { rework?: boolean } = {},
 ): string {
-  if (issueStatus(issue) !== STATUS.todo) {
+  if (!opts.rework && issueStatus(issue) !== STATUS.todo) {
     throw new Error(`#${issue.number} is ${issueStatus(issue)}, not a todo.`);
   }
   const agent = issueAgent(issue);
@@ -130,8 +149,13 @@ export async function dispatchSpecific(
   const issue = open.get(number);
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
-  const agent = resolveDispatchAgent(issue, open, cfg);
-  const task = await claimSpecific(number, agent, cfg, cwd);
+  // A bounced PR goes back to its author on the existing branch; anything else
+  // must be a plain todo.
+  const rework = await observeRework(issue, cwd);
+  const agent = resolveDispatchAgent(issue, open, cfg, { rework: rework !== null });
+  const task = rework
+    ? await claimRework(issue, rework, cfg, cwd)
+    : await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
 }
 
@@ -151,6 +175,8 @@ async function processClaimed(
   let telemetryOutcome: string;
   let harnessDurationMs: number | undefined;
   let preserveWorktree = false;
+  // A rework's lock and branch protect an open PR; never release them on failure.
+  const rework = task.rework !== undefined;
 
   try {
     mkdirSync(logDir, { recursive: true });
@@ -158,7 +184,7 @@ async function processClaimed(
     console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
     const adapter = makeAdapter(agent, cfg);
-    const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
+    const prompt = buildBrief(task.issue, task.worktree, agent, cwd, task.rework);
     const result = await adapter.runTask({
       issue: n,
       agent,
@@ -171,7 +197,7 @@ async function processClaimed(
     harnessDurationMs = result.durationMs;
 
     if (!result.ok) {
-      await recoverClaim(n, task.worktree.path, cwd);
+      await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree: rework });
       console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
       summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
       telemetryOutcome = "failed";
@@ -185,14 +211,18 @@ async function processClaimed(
         console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
         summary = { issue: n, outcome: "submitted", durationMs: result.durationMs };
         telemetryOutcome = "submitted";
-      } else if ((await commitsAhead(task.worktree.path, cfg, cwd)) > 0) {
+      } else if (
+        task.rework
+          ? await headMoved(task.worktree.path, task.rework.startHead)
+          : (await commitsAhead(task.worktree.path, cfg, cwd)) > 0
+      ) {
         // Agent finished but didn't submit — auto-submit if it produced work.
         const url = await submit(n, agent, cfg, cwd);
         console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
         summary = { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
         telemetryOutcome = "auto-submitted";
       } else {
-        await recoverClaim(n, task.worktree.path, cwd);
+        await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree: rework });
         console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
         summary = { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
         telemetryOutcome = "needs-attention";
@@ -200,7 +230,7 @@ async function processClaimed(
     }
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
-    await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree });
+    await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree: preserveWorktree || rework });
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
     summary = { issue: n, outcome: "failed", durationMs };
     telemetryOutcome = "failed";

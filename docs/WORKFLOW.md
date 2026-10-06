@@ -67,7 +67,8 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Route (judge) | `assign --auto` / `/actions/assign` | `agent:X`, `effort:Y`, `assigned-by:brain` | — | judge-authored; same fill-blanks-only writer |
 | Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | owner-token lock, assign `@me`, cut worktree; compensate on incomplete setup |
 | Run start | `processClaimed` via `run` / `dispatch` / `/actions/dispatch` | `status:in-progress` | `status:claimed` | spawn harness at resolved model |
-| Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |
+| Rework dispatch | `dispatchSpecific` → `claimRework` | (stays `status:in-progress`) | — | only for an open task-branch PR whose current head has a request-changes record; reuses the claim lock, attaches the PR branch (ff-only), brief carries the review note; failures preserve lock/worktree |
+| Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`); if an open PR already exists for the branch, push only and re-project |
 | Run fails / times out | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Run exception / submit uncertainty | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
 | Run, no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
