@@ -43,25 +43,28 @@ export async function reviewCommand(prArg: string, opts: { agent?: string }): Pr
   const issue = prIssueNumber(pr);
   console.log(pc.bold(`PR #${pr.number}: ${pr.title}`) + pc.dim(` (issue #${issue ?? "?"})\n`));
   console.log(await prDiff(prNum, { cwd }));
+  const after = await getPr(prNum, { cwd });
+  if (after.headSha !== pr.headSha) throw new Error("PR changed while reading the diff; run review again");
+  console.log(`Reviewed head: ${pr.headSha}`);
   console.log(pc.bold("\nReview checklist:"));
   console.log("  - Does it satisfy the issue's acceptance criteria?");
   console.log("  - Correctness, tests, and edge cases?");
   console.log("  - No unrelated/out-of-scope changes?");
   console.log(
     pc.dim(
-      `\nThen: orch review-approve ${prNum} --agent ${agent}` +
+      `\nThen: orch review-approve ${prNum} --agent ${agent} --head ${pr.headSha}` +
         `   |   orch review-changes ${prNum} --agent ${agent} --notes "…"`,
     ),
   );
 }
 
-export async function reviewApproveCommand(prArg: string, opts: { agent?: string; notes?: string }): Promise<void> {
+export async function reviewApproveCommand(prArg: string, opts: { agent?: string; notes?: string; head?: string }): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
   const agent = resolveAgent(opts.agent, cfg);
   const prNum = parsePr(prArg);
 
-  const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "");
+  const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "", opts.head);
   console.log(pc.green(`PR #${prNum} approved by '${agent}' (issue #${issue}, authored by '${author}').`));
   console.log(pc.dim("Cross-review satisfied — `orch merge` will now accept this PR (if CI is green)."));
 }

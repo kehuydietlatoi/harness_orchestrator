@@ -87,7 +87,8 @@ orch assign --apply assignments.json                # apply routing
 orch review-queue --agent codex                     # PRs awaiting Codex
 orch review <pr> --agent codex                      # print diff + review checklist
 # Have Codex review the changes and tests before recording its decision:
-orch review-approve <pr> --agent codex               # for a Claude-authored PR
+# For a Claude-authored PR:
+orch review-approve <pr> --agent codex --head <reviewed-sha>
 orch merge <pr>                                     # merge if the configured gate passes
 ```
 
@@ -128,8 +129,8 @@ See the [recoverable lifecycle design](docs/adr/0006-recoverable-task-lifecycle.
 
 ## Review and trust boundaries
 
-With `requireCrossReview: true`, the merge gate requires a `reviewed-by:<agent>`
-label naming a configured harness different from the issue's author label.
+With `requireCrossReview: true`, the merge gate requires a commit-bound structured review
+naming a configured harness different from the issue's author label. Legacy approval labels alone do not pass; pushing a new head requires a fresh review.
 Harness identities and `--human` are process signals, not authenticated identities;
 the gate applies to merges through `orch`, not direct GitHub merges.
 

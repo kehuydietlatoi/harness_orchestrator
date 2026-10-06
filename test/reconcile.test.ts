@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { formatReview } from "../src/board/approval.js";
 import type { Issue, Pr } from "../src/github/github.js";
 import { NEEDS_ATTENTION, REVIEW_NEEDED, STATUS } from "../src/github/labels.js";
 import {
@@ -30,8 +31,13 @@ function pr(state: Pr["state"] = "OPEN"): Pr {
     headRefName: "task/36-preview-first-repair",
     state,
     htmlUrl: "https://github.com/acme/orch/pull/136",
-    headSha: "sha-136",
+    headSha: "a".repeat(40),
   };
+}
+
+function review(decision: "approve" | "request-changes", head = "a".repeat(40)) {
+  return { id: 1, state: "COMMENTED", commit_id: head,
+    body: formatReview({ reviewer: "codex", pr: 136, head, decision, timestamp: "2026-09-09T12:00:00Z" }, "review") };
 }
 
 function observation(over: Partial<RepairObservation> = {}): RepairObservation {
@@ -43,6 +49,7 @@ function observation(over: Partial<RepairObservation> = {}): RepairObservation {
     worktree: { kind: "absent" },
     branch: "absent",
     prs: [],
+    reviews: [],
     telemetry: "none",
     ...over,
   };
@@ -193,7 +200,7 @@ describe("planRepairs", () => {
     expect(plan.actions.map((action) => action.kind)).not.toContain("supersede-telemetry");
   });
 
-  it("removes stale review-needed after an approval projection is present", () => {
+  it("removes stale review-needed after a current approval record is present", () => {
     const plan = planRepairs(
       observation({
         issue: issue({ labels: [STATUS.inReview, REVIEW_NEEDED, "reviewed-by:codex"] }),
@@ -206,6 +213,7 @@ describe("planRepairs", () => {
         },
         branch: "ahead",
         prs: [pr()],
+        reviews: [review("approve")],
         telemetry: "submitted",
       }),
     );
@@ -213,6 +221,35 @@ describe("planRepairs", () => {
     expect(plan.actions).toEqual([
       { kind: "sync-labels", issue: 36, add: [], remove: [REVIEW_NEEDED] },
     ]);
+  });
+
+  it.each([{ labels: [] }, { labels: [REVIEW_NEEDED] }])("requeues a stale approval and drops its label ($labels)", ({ labels }) => {
+    const plan = planRepairs(observation({
+      issue: issue({ labels: [STATUS.inReview, "reviewed-by:codex", ...labels] }),
+      prs: [pr()], reviews: [review("approve", "b".repeat(40))],
+    }));
+    const sync = plan.actions.find((a) => a.kind === "sync-labels");
+    expect(sync).toMatchObject({ add: labels.length ? [] : [REVIEW_NEEDED], remove: ["reviewed-by:codex"] });
+  });
+
+  it("preserves the current-head request-changes bounce and converges after apply", async () => {
+    const harness = fakeDeps(observation({
+      issue: issue({ labels: [STATUS.inProgress] }),
+      prs: [pr()], reviews: [review("request-changes")],
+    }));
+    const result = await reconcileIssue(36, DEFAULT_CONFIG, "/repo", { apply: true }, harness.deps);
+    expect(result.projectedState.kind).toBe("in-progress");
+    expect(harness.current().issue?.labels).toEqual([STATUS.inProgress]);
+    expect(result.actions).toEqual([]);
+  });
+
+  it("queues review after the author pushes past a request-changes decision", () => {
+    const plan = planRepairs(observation({
+      issue: issue({ labels: [STATUS.inProgress] }),
+      prs: [pr()], reviews: [review("request-changes", "b".repeat(40))],
+    }));
+    expect(plan.projectedState.kind).toBe("in-review");
+    expect(plan.actions.at(-1)).toMatchObject({ add: [REVIEW_NEEDED, STATUS.inReview], remove: [STATUS.inProgress] });
   });
 
   it.each([

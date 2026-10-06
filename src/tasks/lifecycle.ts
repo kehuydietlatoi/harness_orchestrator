@@ -7,6 +7,8 @@ export interface TaskFacts {
   worktree: boolean;
   branch: "absent" | "unchanged" | "ahead";
   pr: "none" | "open" | "closed" | "merged";
+  /** Latest structured decision requests changes on the open PR's current head. */
+  changesRequested?: boolean;
   /** The latest run that has not been superseded by an explicit reset/recovery. */
   telemetry: "none" | "submitted" | "failed" | "no-commits";
 }
@@ -147,7 +149,7 @@ export function deriveTaskState(facts: TaskFacts): TaskState {
   if (facts.telemetry === "no-commits") {
     return { kind: "needs-attention", reason: "no-commits", recovery: "reset-for-retry" };
   }
-  if (facts.pr === "open") return { kind: "in-review" };
+  if (facts.pr === "open") return { kind: facts.changesRequested ? "in-progress" : "in-review" };
 
   if (facts.lock) {
     if (facts.worktree && facts.branch === "ahead") return { kind: "in-progress" };
