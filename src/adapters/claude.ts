@@ -1,6 +1,6 @@
 import { commandExists } from "../util/exec.js";
 import { spawnInteractive, spawnLogged } from "../util/spawn.js";
-import type { AdapterConfig } from "../config.js";
+import type { AdapterConfig, ModelSpec } from "../config.js";
 import { runStructuredHeadless } from "./headless.js";
 import type {
   HarnessAdapter,
@@ -15,7 +15,15 @@ import type {
 
 const WIN = process.platform === "win32";
 
-export function buildClaudeTaskArgs(model?: string): string[] {
+/** Append the harness-native model/effort flags for a resolved spec. Pure. */
+function claudeModelArgs(spec?: ModelSpec): string[] {
+  const args: string[] = [];
+  if (spec?.model !== undefined) args.push("--model", spec.model);
+  if (spec?.effort !== undefined) args.push("--effort", spec.effort);
+  return args;
+}
+
+export function buildClaudeTaskArgs(model?: ModelSpec): string[] {
   const args = [
     "-p",
     "--output-format",
@@ -26,8 +34,7 @@ export function buildClaudeTaskArgs(model?: string): string[] {
     "--allowedTools",
     "Read,Edit,Write,Bash",
   ];
-  if (model !== undefined) args.push("--model", model);
-  return args;
+  return [...args, ...claudeModelArgs(model)];
 }
 
 /** Reduce Claude stream-json output to the final result text. Pure. */
@@ -47,10 +54,9 @@ export function resultTextFromClaudeStreamJson(logText: string): string {
 }
 
 /** Build Claude argv for an interactive planning session. Pure. */
-export function buildClaudeInteractivePlanArgs(model: string | undefined, seed: string): string[] {
+export function buildClaudeInteractivePlanArgs(model: ModelSpec | undefined, seed: string): string[] {
   const args = ["--append-system-prompt", seed, "--allowedTools", "Read", "Grep", "Glob", "Write"];
-  if (model !== undefined) args.push("--model", model);
-  return args;
+  return [...args, ...claudeModelArgs(model)];
 }
 
 /** Drives Claude Code in headless (`-p`) mode. */

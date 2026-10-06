@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import type { OrchConfig } from "../config.js";
+import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
@@ -26,7 +26,7 @@ export function resolveTaskModel(
   agent: string,
   issue: Issue,
   cfg: OrchConfig,
-): string | undefined {
+): ModelSpec | undefined {
   const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
   return cfg.adapters[agent]?.models?.[tier];
 }
@@ -60,7 +60,7 @@ export function resolveDispatchAgent(
 function recordRun(
   issue: number,
   agent: string,
-  model: string | undefined,
+  model: ModelSpec | undefined,
   outcome: string,
   durationMs: number,
   logFile: string,
@@ -78,13 +78,13 @@ function recordRun(
     const usage = parseUsage(logText, agent);
     // Prefer the harness-reported cost; fall back to a per-token estimate only
     // when pricing exists for this model (subscription agents have none → null).
-    const costUsd = usage.costUsd ?? estimateCost(usage, model ?? null, cfg.pricing);
+    const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
     const rec: RunRecord = {
       ts: new Date().toISOString(),
       project: projectId(cwd),
       issue,
       agent,
-      model: model ?? null,
+      model: formatModelSpec(model) ?? null,
       outcome,
       durationMs,
       tokensIn: usage.tokensIn,

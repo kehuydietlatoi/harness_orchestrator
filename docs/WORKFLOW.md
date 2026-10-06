@@ -118,8 +118,8 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 
 ## Where routing labels get honored
 
-- `effort:` → `resolveTaskModel(agent, issue, cfg)` at spawn → `RunContext.model` →
-  adapter appends the model flag. No label ⇒ `cfg.defaultEffort` (`hard`).
+- `effort:` → `resolveTaskModel(agent, issue, cfg)` (a `ModelSpec`) at spawn → `RunContext.model` →
+  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`hard`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`. Repair preserves `status:in-progress` and clears `review:needed` while the latest structured decision requests changes on the current head. A new head returns the task to review; stale approval labels are removed. The review queue includes explicit `review:needed` PRs without reading reviews, and otherwise recovers stale approvals or orphaned approval labels while excluding current-head changes requested.
 

@@ -2,12 +2,44 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
 
+/** What an adapter is told to run for one effort tier. Either field may be omitted
+ * to defer to the harness's own configured default (e.g. `~/.codex/config.toml`). */
+export interface ModelSpec {
+  /** Harness-specific model id or alias (`claude-sonnet-5-5`, a Codex model id). */
+  model?: string;
+  /** Reasoning/thinking effort handed to the harness (`low|medium|high|xhigh|max`). */
+  effort?: string;
+}
+
+export type EffortTier = "easy" | "hard";
+
 export interface AdapterConfig {
   cmd: string;
-  models?: {
-    easy: string;
-    hard: string;
-  };
+  models?: Record<EffortTier, ModelSpec>;
+}
+
+/** Render a spec for telemetry/logs as `model@effort` (either half may be absent). */
+export function formatModelSpec(spec: ModelSpec | undefined): string | undefined {
+  if (!spec || (!spec.model && !spec.effort)) return undefined;
+  return [spec.model ?? "default", spec.effort].filter(Boolean).join("@");
+}
+
+/**
+ * Accept a configured tier value. Before `ModelSpec` the tier was a bare string whose
+ * meaning was adapter-specific: Codex's string was a reasoning effort, every other
+ * adapter's was a model. Keep reading those configs rather than breaking them.
+ */
+function normalizeModelSpec(agent: string, value: unknown): ModelSpec | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return agent === "codex" ? { effort: value } : { model: value };
+  if (typeof value === "object") {
+    const { model, effort } = value as ModelSpec;
+    return {
+      ...(typeof model === "string" ? { model } : {}),
+      ...(typeof effort === "string" ? { effort } : {}),
+    };
+  }
+  throw new Error(`adapters.${agent}.models entries must be a string or { model, effort }`);
 }
 
 export interface OrchConfig {
@@ -40,9 +72,24 @@ export const DEFAULT_CONFIG: OrchConfig = {
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
   defaultEffort: "hard",
+  // Both tiers default to the same capable model at medium effort; set `models.hard`
+  // (and `effort:` labels) to opt individual tasks into something stronger. Codex pins
+  // its model explicitly so a user's ~/.codex/config.toml default never changes cost.
   adapters: {
-    claude: { cmd: "claude", models: { easy: "sonnet", hard: "opus" } },
-    codex: { cmd: "codex", models: { easy: "low", hard: "high" } },
+    claude: {
+      cmd: "claude",
+      models: {
+        easy: { model: "claude-sonnet-5-5", effort: "medium" },
+        hard: { model: "claude-sonnet-5-5", effort: "medium" },
+      },
+    },
+    codex: {
+      cmd: "codex",
+      models: {
+        easy: { model: "gpt-6.1-sol", effort: "medium" },
+        hard: { model: "gpt-6.1-sol", effort: "medium" },
+      },
+    },
   },
   pricing: DEFAULT_PRICING,
 };
@@ -73,7 +120,16 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     const defaults = DEFAULT_CONFIG.adapters[agent];
     const merged = { ...defaults, ...override };
     if (defaults?.models || override.models) {
-      merged.models = { ...defaults?.models, ...override.models } as NonNullable<AdapterConfig["models"]>;
+      // Merge per tier so `{ hard: { effort: "high" } }` keeps the default model.
+      const models: Partial<Record<EffortTier, ModelSpec>> = {};
+      for (const tier of ["easy", "hard"] as const) {
+        const spec = {
+          ...defaults?.models?.[tier],
+          ...normalizeModelSpec(agent, (override.models as Record<string, unknown> | undefined)?.[tier]),
+        };
+        if (Object.keys(spec).length > 0) models[tier] = spec;
+      }
+      merged.models = models as Record<EffortTier, ModelSpec>;
     }
     adapters[agent] = merged;
   }

@@ -1,9 +1,11 @@
+import type { ModelSpec } from "../config.js";
+
 export interface RunContext {
   issue: number;
   agent: string;
   worktree: string; // becomes the child process cwd
   prompt: string; // delivered on stdin
-  model?: string; // resolved agent-specific model value
+  model?: ModelSpec; // resolved agent-specific model + effort
   logFile?: string;
   timeoutMs?: number;
 }
@@ -29,7 +31,7 @@ export interface RunResult {
 export interface HeadlessContext {
   cwd: string;
   prompt: string;
-  model?: string;
+  model?: ModelSpec;
   logFile: string;
   timeoutMs?: number;
 }
@@ -46,7 +48,7 @@ export interface HeadlessResult {
 export interface InteractivePlanContext {
   cwd: string;
   seed: string;
-  model?: string;
+  model?: ModelSpec;
 }
 
 export interface InteractivePlanResult {

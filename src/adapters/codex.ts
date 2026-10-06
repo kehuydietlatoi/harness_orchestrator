@@ -1,6 +1,6 @@
 import { commandExists } from "../util/exec.js";
 import { spawnLogged } from "../util/spawn.js";
-import type { AdapterConfig } from "../config.js";
+import type { AdapterConfig, ModelSpec } from "../config.js";
 import { runStructuredHeadless } from "./headless.js";
 import type {
   HarnessAdapter,
@@ -13,9 +13,10 @@ import type {
 
 const WIN = process.platform === "win32";
 
-export function buildCodexTaskArgs(model?: string): string[] {
+export function buildCodexTaskArgs(spec?: ModelSpec): string[] {
   const args = ["exec", "--approve-for-me", "--json"];
-  if (model !== undefined) args.push("-c", `model_reasoning_effort=${model}`);
+  if (spec?.model !== undefined) args.push("-m", spec.model);
+  if (spec?.effort !== undefined) args.push("-c", `model_reasoning_effort=${spec.effort}`);
   return args;
 }
 

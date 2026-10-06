@@ -20,6 +20,8 @@ export interface ModelPricing {
 export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   opus: { input: 5, cachedInput: 0.5, output: 25 },
   sonnet: { input: 3, cachedInput: 0.3, output: 15 },
+  // Keyed by the resolved `ModelSpec.model`; the default tier model since Sonnet 5.5.
+  "claude-sonnet-5-5": { input: 3, cachedInput: 0.3, output: 15 },
 };
 
 /**

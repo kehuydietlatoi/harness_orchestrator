@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { OrchConfig } from "../config.js";
+import type { ModelSpec, OrchConfig } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
 import {
   lastFencedBlock,
@@ -65,7 +65,7 @@ export type PlannerRun = HeadlessResult;
 /** The spawn boundary — injectable so tests never launch a real adapter. */
 export type PlannerRunner = (
   prompt: string,
-  model: string | undefined,
+  model: ModelSpec | undefined,
   cfg: OrchConfig,
   cwd: string,
 ) => Promise<PlannerRun>;

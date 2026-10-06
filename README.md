@@ -187,8 +187,20 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "taskTimeoutMs": 1800000,
   "defaultEffort": "hard",
   "adapters": {
-    "claude": { "cmd": "claude", "models": { "easy": "sonnet", "hard": "opus" } },
-    "codex": { "cmd": "codex", "models": { "easy": "low", "hard": "high" } }
+    "claude": {
+      "cmd": "claude",
+      "models": {
+        "easy": { "model": "claude-sonnet-5-5", "effort": "medium" },
+        "hard": { "model": "claude-sonnet-5-5", "effort": "medium" }
+      }
+    },
+    "codex": {
+      "cmd": "codex",
+      "models": {
+        "easy": { "model": "gpt-6.1-sol", "effort": "medium" },
+        "hard": { "model": "gpt-6.1-sol", "effort": "medium" }
+      }
+    }
   }
 }
 ```
@@ -199,10 +211,16 @@ optional: when omitted, orch uses GitHub's default branch. Set it explicitly
 locally or as `origin/<name>` before work can be claimed, compared, repaired,
 or submitted.
 
-`effort:easy` and `effort:hard` select adapter-specific values: the Claude adapter
-passes a model name, while the Codex adapter sets reasoning effort. Tasks without
-an effort label use `defaultEffort`. Planning and the routing judge use the lead's
-`hard` tier.
+`effort:easy` and `effort:hard` select a `{ model, effort }` spec per adapter: Claude
+gets `--model` and `--effort`, Codex gets `-m` and `-c model_reasoning_effort=`. Either
+field may be omitted to defer to the harness's own default. Both harnesses pin their
+model (Claude `claude-sonnet-5-5`, Codex `gpt-6.1-sol`) so a personal harness default
+never changes cost; override `models.<tier>.model` to change it. Both tiers default to the same model at `medium` effort; raise `hard`
+(e.g. `{ "effort": "high" }`) to make `effort:hard` mean something. Partial specs merge
+per tier over the defaults, and the older string form (`"easy": "sonnet"`) is still read
+(a bare string means a model, except for Codex where it means a reasoning effort). Tasks
+without an effort label use `defaultEffort`. Planning and the routing judge use the
+lead's `hard` tier.
 
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies

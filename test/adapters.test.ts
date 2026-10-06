@@ -23,8 +23,8 @@ describe("task adapter arguments", () => {
     ]);
   });
 
-  it("appends Claude's model flag when a model is set", () => {
-    expect(buildClaudeTaskArgs("opus")).toEqual([
+  it("appends Claude's model and effort flags when a spec is set", () => {
+    expect(buildClaudeTaskArgs({ model: "claude-sonnet-5-5", effort: "medium" })).toEqual([
       "-p",
       "--output-format",
       "stream-json",
@@ -34,16 +34,24 @@ describe("task adapter arguments", () => {
       "--allowedTools",
       "Read,Edit,Write,Bash",
       "--model",
-      "opus",
+      "claude-sonnet-5-5",
+      "--effort",
+      "medium",
     ]);
+  });
+
+  it("emits only the Claude flag that the spec defines", () => {
+    expect(buildClaudeTaskArgs({ effort: "high" }).slice(-2)).toEqual(["--effort", "high"]);
+    expect(buildClaudeTaskArgs({ model: "opus" }).slice(-2)).toEqual(["--model", "opus"]);
+    expect(buildClaudeTaskArgs({ model: "opus" })).not.toContain("--effort");
   });
 
   it("leaves Codex task arguments unchanged without a model", () => {
     expect(buildCodexTaskArgs()).toEqual(["exec", "--approve-for-me", "--json"]);
   });
 
-  it("appends Codex's reasoning effort flag when a model is set", () => {
-    const args = buildCodexTaskArgs("high");
+  it("appends Codex's reasoning effort flag when only an effort is set", () => {
+    const args = buildCodexTaskArgs({ effort: "high" });
     expect(args).toEqual([
       "exec",
       "--approve-for-me",
@@ -54,6 +62,19 @@ describe("task adapter arguments", () => {
     expect(args).not.toContain("-p");
     expect(args).not.toContain("--output-format");
     expect(args).not.toContain("--model");
+    expect(args).not.toContain("-m");
+  });
+
+  it("passes Codex's -m model before the effort override", () => {
+    expect(buildCodexTaskArgs({ model: "gpt-6-astra", effort: "medium" })).toEqual([
+      "exec",
+      "--approve-for-me",
+      "--json",
+      "-m",
+      "gpt-6-astra",
+      "-c",
+      "model_reasoning_effort=medium",
+    ]);
   });
 });
 
@@ -115,10 +136,10 @@ describe("structured lead output", () => {
 
 describe("Claude interactive planning arguments", () => {
   it("carries the seed, allows Write, and sets the model", () => {
-    const args = buildClaudeInteractivePlanArgs("opus", "SEED");
+    const args = buildClaudeInteractivePlanArgs({ model: "opus", effort: "high" }, "SEED");
     expect(args[args.indexOf("--append-system-prompt") + 1]).toBe("SEED");
     expect(args).toContain("Write");
-    expect(args.slice(-2)).toEqual(["--model", "opus"]);
+    expect(args.slice(-4)).toEqual(["--model", "opus", "--effort", "high"]);
   });
 
   it("omits --model when none is configured", () => {

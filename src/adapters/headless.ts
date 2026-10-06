@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnLogged } from "../util/spawn.js";
+import type { ModelSpec } from "../config.js";
 import type { HarnessAdapter, HeadlessContext, HeadlessResult } from "./types.js";
 
 const WIN = process.platform === "win32";
@@ -60,7 +61,7 @@ export async function runStructuredHeadless(
 export async function runHeadlessAgent(
   adapter: HarnessAdapter,
   prompt: string,
-  model: string | undefined,
+  model: ModelSpec | undefined,
   cwd: string,
   logName: string,
   timeoutMs?: number,
