@@ -57,9 +57,9 @@ The judge emits an **abstract tier** — `easy` or `hard` — never a model name
 adapter maps the tier to its own concept at spawn time (`claude` → `sonnet`/`opus`,
 `codex` → reasoning-effort `low`/`high`; see `orch.config.json`). This keeps the
 judge's vocabulary stable as models churn and lets a heterogeneous fleet share one
-routing decision. The judge process itself runs at the **lead's `hard` tier**
-(`runJudge` resolves `cfg.adapters[cfg.lead].models.hard`) — routing is the kind of
-ambiguous, cross-cutting call the strong tier exists for.
+routing decision. The judge process itself runs at the **lead model**
+(`runJudge` calls `resolveLeadModel`: the lead adapter's `leadModel`, else its `hard`
+tier) — routing is the kind of ambiguous, cross-cutting call the strongest model exists for.
 
 ## Fail-closed by construction
 

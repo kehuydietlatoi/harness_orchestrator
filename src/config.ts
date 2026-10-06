@@ -21,6 +21,13 @@ export type ReviewPolicy = "cross" | "cross-or-self";
 export interface AdapterConfig {
   cmd: string;
   models?: Record<EffortTier, ModelSpec>;
+  /**
+   * What this adapter runs when it acts as the configured `lead`: the decision points
+   * (interactive/draft planning, the routing judge, escalation triage). These calls are
+   * rare and judgment-heavy, so they may use a stronger model than the task tiers.
+   * When omitted, the lead falls back to its `hard` tier.
+   */
+  leadModel?: ModelSpec;
 }
 
 /** Render a spec for telemetry/logs as `model@effort` (either half may be absent). */
@@ -34,7 +41,7 @@ export function formatModelSpec(spec: ModelSpec | undefined): string | undefined
  * meaning was adapter-specific: Codex's string was a reasoning effort, every other
  * adapter's was a model. Keep reading those configs rather than breaking them.
  */
-function normalizeModelSpec(agent: string, value: unknown): ModelSpec | undefined {
+function normalizeModelSpec(agent: string, value: unknown, field = "models entries"): ModelSpec | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return agent === "codex" ? { effort: value } : { model: value };
   if (typeof value === "object") {
@@ -44,7 +51,16 @@ function normalizeModelSpec(agent: string, value: unknown): ModelSpec | undefine
       ...(typeof effort === "string" ? { effort } : {}),
     };
   }
-  throw new Error(`adapters.${agent}.models entries must be a string or { model, effort }`);
+  throw new Error(`adapters.${agent}.${field} must be a string or { model, effort }`);
+}
+
+/**
+ * The model the configured lead runs at a decision point (planning, routing, triage):
+ * its `leadModel`, else its `hard` tier. Undefined defers to the harness default.
+ */
+export function resolveLeadModel(cfg: Pick<OrchConfig, "lead" | "adapters">): ModelSpec | undefined {
+  const adapter = cfg.adapters[cfg.lead];
+  return adapter?.leadModel ?? adapter?.models?.hard;
 }
 
 export interface OrchConfig {
@@ -100,6 +116,8 @@ export const DEFAULT_CONFIG: OrchConfig = {
   // Both tiers default to the same capable model at medium effort; set `models.hard`
   // (and `effort:` labels) to opt individual tasks into something stronger. Codex pins
   // its model explicitly so a user's ~/.codex/config.toml default never changes cost.
+  // Claude as lead uses Opus at the few decision points (plan, route, triage); Codex as
+  // lead has no separate lead model and uses its `hard` tier.
   adapters: {
     claude: {
       cmd: "claude",
@@ -107,6 +125,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
         easy: { model: "claude-sonnet-5-5", effort: "medium" },
         hard: { model: "claude-sonnet-5-5", effort: "medium" },
       },
+      leadModel: { model: "claude-opus-5-5", effort: "high" },
     },
     codex: {
       cmd: "codex",
@@ -182,6 +201,15 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
         if (Object.keys(spec).length > 0) models[tier] = spec;
       }
       merged.models = models as Record<EffortTier, ModelSpec>;
+    }
+    if (defaults?.leadModel || override.leadModel !== undefined) {
+      // Same partial merge: `{ leadModel: { effort: "max" } }` keeps the default lead model.
+      const lead = {
+        ...defaults?.leadModel,
+        ...normalizeModelSpec(agent, override.leadModel as unknown, "leadModel"),
+      };
+      if (Object.keys(lead).length > 0) merged.leadModel = lead;
+      else delete merged.leadModel;
     }
     adapters[agent] = merged;
   }

@@ -104,13 +104,15 @@ describe("runJudge (fail-closed)", () => {
     await expect(runJudge(brief, cfg, ".", runner)).rejects.toThrow(/empty plan/i);
   });
 
-  it.each(adapterFixtures)("resolves the %s judge model to the lead's hard tier", async (_name, fixtureCfg) => {
-    let seenModel: string | undefined = "unset";
+  it.each(adapterFixtures)("resolves the %s judge model to the lead model (leadModel, else hard tier)", async (_name, fixtureCfg) => {
+    let seenModel: unknown = "unset";
     const runner: JudgeRunner = async (_prompt, model) => {
       seenModel = model;
       return { code: 0, timedOut: false, text: '```json\n[{"issue":1,"agent":"claude","effort":"hard"}]\n```', raw: "" };
     };
     await runJudge(brief, fixtureCfg, ".", runner);
-    expect(seenModel).toBe(fixtureCfg.adapters[fixtureCfg.lead].models?.hard);
+    const adapter = fixtureCfg.adapters[fixtureCfg.lead];
+    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.hard);
+    expect(seenModel).toBeDefined();
   });
 });

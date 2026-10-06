@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import type { ModelSpec, OrchConfig } from "../config.js";
+import { resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
 import {
   lastFencedBlock,
@@ -74,7 +74,7 @@ const defaultRunner: PlannerRunner = (prompt, model, cfg, cwd) =>
   runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, "plan", cfg.taskTimeoutMs);
 
 /**
- * Draft a ticket list from a goal, headlessly at the lead's `hard` model.
+ * Draft a ticket list from a goal, headlessly at the lead model (`resolveLeadModel`).
  * Fail-closed: a non-zero exit, timeout, empty/unparseable reply, an empty draft,
  * or a draft with blocking validation errors all throw — the caller creates nothing.
  */
@@ -86,7 +86,7 @@ export async function runPlanner(
   cwd: string,
   runner: PlannerRunner = defaultRunner,
 ): Promise<Ticket[]> {
-  const model = cfg.adapters[cfg.lead]?.models?.hard;
+  const model = resolveLeadModel(cfg);
   const res = await runner(formatPlanPrompt(skill, goal, context), model, cfg, cwd);
 
   if (res.timedOut) throw new Error(`planner timed out after ${cfg.taskTimeoutMs}ms`);

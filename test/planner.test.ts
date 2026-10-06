@@ -126,13 +126,15 @@ describe("runPlanner (fail-closed)", () => {
     ).rejects.toThrow(/invalid tickets/i);
   });
 
-  it.each(adapterFixtures)("resolves the %s planner model to the lead's hard tier", async (_name, fixtureCfg) => {
-    let seenModel: string | undefined = "unset";
+  it.each(adapterFixtures)("resolves the %s planner model to the lead model (leadModel, else hard tier)", async (_name, fixtureCfg) => {
+    let seenModel: unknown = "unset";
     const runner: PlannerRunner = async (_prompt, model) => {
       seenModel = model;
       return { code: 0, timedOut: false, text: '```json\n[{"title":"x"}]\n```', raw: "" };
     };
     await runPlanner(goal, skill, "", fixtureCfg, ".", runner);
-    expect(seenModel).toBe(fixtureCfg.adapters[fixtureCfg.lead].models?.hard);
+    const adapter = fixtureCfg.adapters[fixtureCfg.lead];
+    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.hard);
+    expect(seenModel).toBeDefined();
   });
 });

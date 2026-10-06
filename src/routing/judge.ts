@@ -1,5 +1,5 @@
 import type { PlanEntry } from "./assign.js";
-import type { ModelSpec, OrchConfig } from "../config.js";
+import { resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
 import {
   lastFencedBlock,
@@ -93,7 +93,7 @@ const defaultRunner: JudgeRunner = (prompt, model, cfg, cwd) =>
   runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, "judge", cfg.taskTimeoutMs);
 
 /**
- * Run the judge headlessly at the lead's `hard` model and return a validated
+ * Run the judge headlessly at the lead model (`resolveLeadModel`) and return a validated
  * plan. Fail-closed: a non-zero exit, timeout, empty output, unparseable reply,
  * or an empty plan all throw — the caller writes nothing.
  */
@@ -103,7 +103,7 @@ export async function runJudge(
   cwd: string,
   runner: JudgeRunner = defaultRunner,
 ): Promise<PlanEntry[]> {
-  const model = cfg.adapters[cfg.lead]?.models?.hard;
+  const model = resolveLeadModel(cfg);
   const res = await runner(formatJudgePrompt(brief), model, cfg, cwd);
 
   if (res.timedOut) throw new Error(`judge timed out after ${cfg.taskTimeoutMs}ms`);
