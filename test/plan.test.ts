@@ -19,6 +19,12 @@ describe("renderTicketBody", () => {
 });
 
 describe("parseTickets", () => {
+  it("accepts advisory IDs and rejects malformed after fields", () => {
+    expect(parseTickets('[{"title":"B","after":["a"]}]')[0].after).toEqual(["a"]);
+    for (const after of ["a", [1], null]) {
+      expect(() => parseTickets(JSON.stringify([{ title: "B", after }]))).toThrow(/after must be an array of strings/);
+    }
+  });
   it("parses a ticket array and coerces missing optional fields", () => {
     const tickets = parseTickets(
       '[{"id":"a","title":"T","body":"b","dependsOn":["x"],"files":["f"]},{"title":"U"}]',
@@ -74,6 +80,20 @@ describe("parseTickets", () => {
 });
 
 describe("resolvePlan", () => {
+  it("resolves earlier advisory IDs and warns on self, later, or unknown IDs", () => {
+    const plan = resolvePlan([
+      { id: "a", title: "A" },
+      { id: "b", title: "B", after: ["a", "b", "c", "missing"] },
+      { id: "c", title: "C" },
+    ]);
+    expect(plan.errors).toEqual([]);
+    expect(plan.tickets[1]).toMatchObject({ after: ["a", "b", "c", "missing"], knownAfter: ["a"], knownDeps: [] });
+    expect(plan.warnings).toEqual([
+      'ticket 2 ("b") is after itself; dropped',
+      'ticket 2 is after unknown/later id "c"; dropped',
+      'ticket 2 is after unknown/later id "missing"; dropped',
+    ]);
+  });
   it("resolves earlier deps and reports nothing for a clean plan", () => {
     const r = resolvePlan([
       { title: "A", id: "a", files: ["src/a.ts"] },

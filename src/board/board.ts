@@ -22,8 +22,16 @@ export function issueEffort(i: Issue): "easy" | "hard" | null {
 
 /** Parse `Depends-on: #1, #2` (also "Depends on #3") from an issue body. */
 export function parseDeps(body: string): number[] {
+  return parseReferences(body, /depends[-\s]?on:?\s*((?:#\d+[\s,]*)+)/gi);
+}
+
+/** Explicit ordering preferences, separate from hard prerequisites. */
+export function parseAfter(body: string): number[] {
+  return parseReferences(body, /^\s*after:[ \t]*((?:#\d+[ \t,]*)+)/gim);
+}
+
+function parseReferences(body: string, re: RegExp): number[] {
   const deps = new Set<number>();
-  const re = /depends[-\s]?on:?\s*((?:#\d+[\s,]*)+)/gi;
   let m: RegExpExecArray | null;
   while ((m = re.exec(body))) {
     for (const num of m[1].matchAll(/#(\d+)/g)) deps.add(Number(num[1]));
@@ -84,13 +92,35 @@ export async function isEligible(
   return true;
 }
 
-/** Eligible issues in ascending issue-number order (stable pick order). */
-export async function eligibleIssues(cwd?: string): Promise<Issue[]> {
+/**
+ * Prefer advisory predecessors only within the eligible candidate set. Pick the
+ * lowest available number at each step. If preferences form a cycle, the
+ * remaining candidates fall back to issue-number order; none are withheld.
+ * Hard prerequisites and claim guards belong to eligibility, never this sort.
+ */
+export function orderByAfter(eligible: readonly Issue[]): Issue[] {
+  const remaining = new Map([...eligible].sort((a, b) => a.number - b.number).map((i) => [i.number, i]));
+  const after = new Map(eligible.map((i) => [i.number, parseAfter(i.body)]));
+  const ordered: Issue[] = [];
+  while (remaining.size) {
+    const next = [...remaining.values()].find((i) =>
+      !after.get(i.number)!.some((n) => remaining.has(n)),
+    );
+    if (!next) return [...ordered, ...remaining.values()];
+    ordered.push(next);
+    remaining.delete(next.number);
+  }
+  return ordered;
+}
+
+/** Eligible issues, with advisory ordering applied after filtering availability. */
+export async function eligibleIssues(cwd?: string, agent?: string): Promise<Issue[]> {
   const issues = (await listIssues({ cwd, state: "open" })).sort((a, b) => a.number - b.number);
   const open = byNumber(issues);
   const out: Issue[] = [];
   for (const i of issues) {
+    if (agent && issueAgent(i) && issueAgent(i) !== agent) continue;
     if (await isEligible(i, cwd, open)) out.push(i);
   }
-  return out;
+  return orderByAfter(out);
 }

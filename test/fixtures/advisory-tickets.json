@@ -1,0 +1,5 @@
+[
+  { "id": "api", "title": "Add required API" },
+  { "id": "docs", "title": "Draft operator guidance" },
+  { "title": "Build consumer", "dependsOn": ["api"], "after": ["docs"] }
+]

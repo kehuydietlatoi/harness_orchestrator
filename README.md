@@ -207,7 +207,15 @@ an effort label use `defaultEffort`. Planning and the routing judge use the lead
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
 are `Depends-on: #n` references in issue bodies; open prerequisites block dispatch.
-Cycles are reported for manual resolution.
+Use `After: #n` for advisory ordering: an available eligible predecessor is preferred,
+but blocked, claimed, missing, or closed predecessors never block runnable work.
+Hard dependency cycles are reported for manual resolution; advisory cycles fall
+back to issue-number order. Direct targeted dispatch ignores advisory ordering
+while enforcing hard prerequisites and claim/lifecycle guards.
+
+In ticket plans, `dependsOn` and optional `after` contain earlier ticket IDs.
+Both appear separately in plan previews; created bodies render `Depends-on:` and
+`After:` references. File ownership remains a hint, not proof of independence.
 
 Completed runs append best-effort telemetry to `~/.orch/<project>/runs.jsonl`.
 Cost uses harness-reported data or configured per-million-token `pricing` rates;

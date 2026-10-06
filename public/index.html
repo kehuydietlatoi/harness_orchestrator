@@ -882,6 +882,7 @@
                 <th>#</th>
                 <th>Title</th>
                 <th>Depends on</th>
+                <th>After (advisory)</th>
                 <th>Files</th>
               </tr>
             </thead>
@@ -1181,6 +1182,11 @@
               const blocked = make("span", "badge is-blocked", `blocked by ${blockers.map((dep) => `#${dep}`).join(", ")}`);
               blocked.title = "Waiting on open dependencies before it can be dispatched.";
               statusNode.append(document.createTextNode(" "), blocked);
+            }
+            if (Array.isArray(task.after) && task.after.length) {
+              const advisory = make("div", "muted", `After (advisory): ${task.after.map((n) => `#${n}`).join(", ")}`);
+              advisory.title = "Ordering preference only. Unavailable predecessors never block dispatch; direct dispatch ignores this preference.";
+              statusNode.append(advisory);
             }
 
             const agentNode = cell("Agent");
@@ -1735,6 +1741,7 @@
               planCell(String(t.index)),
               planCell(t.title || "—"),
               planCell(t.knownDeps && t.knownDeps.length ? t.knownDeps.join(", ") : "—"),
+              planCell(t.knownAfter && t.knownAfter.length ? t.knownAfter.join(", ") : "—"),
               planCell(t.files && t.files.length ? t.files.join(", ") : "—"),
             );
             planUI.body.append(tr);

@@ -377,12 +377,13 @@ describe("write surface", () => {
     const port = await start(deps);
     const res = await post(port, "/actions/plan-preview", [
       { id: "a", title: "A", files: ["src/x.ts"] },
-      { id: "b", title: "B", dependsOn: ["a"], files: ["src/x.ts"] },
+      { id: "b", title: "B", dependsOn: ["a"], after: ["a"], files: ["src/x.ts"] },
     ]);
 
     expect(res.status).toBe(200);
     const parsed = JSON.parse(res.body);
     expect(parsed.tickets).toHaveLength(2);
+    expect(parsed.tickets[1]).toMatchObject({ knownDeps: ["a"], knownAfter: ["a"] });
     expect(parsed.errors).toEqual([]);
     expect(parsed.warnings.some((w: string) => /claimed by tickets 1, 2/.test(w))).toBe(true);
     expect(creates).toHaveLength(0);
@@ -400,7 +401,7 @@ describe("write surface", () => {
     const port = await start(deps);
     const res = await post(port, "/actions/plan-create", [
       { id: "a", title: "First" },
-      { id: "b", title: "Second", dependsOn: ["a"] },
+      { id: "b", title: "Second", after: ["a"] },
     ]);
 
     expect(res.status).toBe(200);
@@ -411,6 +412,7 @@ describe("write surface", () => {
     expect(JSON.parse(res.body).reused).toEqual([]);
     expect(JSON.parse(res.body).failed).toEqual([]);
     expect(creates).toHaveLength(1);
+    expect(creates[0][1].after).toEqual(["a"]);
   });
 
   it("POST /actions/plan-create refuses a draft with blocking errors (400, no creates)", async () => {

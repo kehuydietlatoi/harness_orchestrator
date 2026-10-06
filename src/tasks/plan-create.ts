@@ -57,6 +57,8 @@ export function buildPlanMarkers(tickets: readonly Ticket[]): PlanMarkers {
     body: (ticket.body ?? "").trim(),
     dependsOn: ticket.dependsOn ?? [],
     files: ticket.files ?? [],
+    // Keep v1 identities byte-for-byte compatible for plans without ordering.
+    ...(ticket.after?.length ? { after: ticket.after } : {}),
   }));
   const planDigest = digest(JSON.stringify(normalized));
   const plan = `<!-- orch-plan:${MARKER_VERSION}:${planDigest} -->`;
@@ -72,6 +74,7 @@ export function renderTicketBody(
   ticket: Ticket,
   depNumbers: number[],
   markers?: TicketMarkers,
+  afterNumbers: number[] = [],
 ): string {
   const parts: string[] = [];
   if (ticket.body) parts.push(ticket.body.trim());
@@ -80,6 +83,9 @@ export function renderTicketBody(
   }
   if (depNumbers.length) {
     parts.push(`Depends-on: ${depNumbers.map((n) => `#${n}`).join(", ")}`);
+  }
+  if (afterNumbers.length) {
+    parts.push(`After: ${afterNumbers.map((n) => `#${n}`).join(", ")}`);
   }
   if (markers) parts.push(`${markers.plan}\n${markers.ticket}`);
   return parts.join("\n\n") || "_(no description)_";
@@ -168,8 +174,17 @@ export async function createFromPlan(
       continue;
     }
 
+    // Creation needs a concrete issue number even for advisory references.
+    // Defer this create on failure so retry cannot permanently lose the hint.
+    const missingAfter = plan.tickets[index].knownAfter.filter((id) => !idToNumber.has(id));
+    if (missingAfter.length) {
+      result.failed.push(failure(ticket, `advisory ticket(s) unavailable: ${missingAfter.join(", ")}`));
+      continue;
+    }
+
     const depNumbers = plan.tickets[index].knownDeps.map((id) => idToNumber.get(id) as number);
-    const body = renderTicketBody(ticket, depNumbers, { plan: markers.plan, ticket: marker });
+    const afterNumbers = plan.tickets[index].knownAfter.map((id) => idToNumber.get(id) as number);
+    const body = renderTicketBody(ticket, depNumbers, { plan: markers.plan, ticket: marker }, afterNumbers);
     try {
       const number = await deps.createIssue(ticket.title, body, [STATUS.todo], { cwd });
       const created = { id: ticket.id, number, title: ticket.title };

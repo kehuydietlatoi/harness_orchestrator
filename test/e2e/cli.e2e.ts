@@ -49,4 +49,12 @@ describe("built CLI smoke", () => {
     const { code } = runCli(["definitely-not-a-real-command"]);
     expect(code).not.toBe(0);
   });
+
+  it("previews hard and advisory ticket references separately through the built CLI", () => {
+    const { code, stdout, stderr } = runCli(["plan", "--dry-run", "test/fixtures/advisory-tickets.json"]);
+    expect(code, stderr).toBe(0);
+    expect(stdout).toContain("deps:api");
+    expect(stdout).toContain("after (advisory):docs");
+    expect(stdout).not.toContain("warning:");
+  });
 });

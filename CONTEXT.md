@@ -26,8 +26,11 @@ the source of truth for what the words mean. Hard-to-reverse decisions live in
   while any dependency is still open. Blocking is *computed on read*
   (`isEligible` / `openDepsFromMap`), never stored — see the `status:blocked` note in
   `docs/WORKFLOW.md`.
+- **advisory ordering** — an `After: #n` preference for an available eligible
+  predecessor to run first. Unavailable predecessors never block work; advisory
+  cycles fall back to issue-number order, and targeted dispatch ignores preferences.
 - **eligible** — an issue that may be claimed now: `status:todo`, unlocked, and not
-  blocked. `eligibleIssues` returns these in ascending number order.
+  blocked. Advisory ordering chooses among eligible issues without excluding any.
 
 ## Routing (the assignment brain)
 
@@ -102,4 +105,3 @@ The pieces of the routing pipeline:
 New batches are built by **codex as sole implementer**; **claude cross-reviews and
 merges**. Tickets are dependency-chained, each independently test-green. This is orch
 running on its own repo.
-
