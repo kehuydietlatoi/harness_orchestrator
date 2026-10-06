@@ -334,6 +334,28 @@ describe("runAutopilot", () => {
     expect(w.calls).toEqual([]);
   });
 
+  it("never starts a new task when told not to claim, but still drives existing PRs", async () => {
+    const w = new World();
+    w.todo.push({ issue: 7, agent: "claude", pr: {} });
+    w.add(pr(38, { approved: true }));
+
+    const summary = await drive(w, { claim: "none" });
+
+    expect(w.calls).toEqual(["merge:38"]);
+    expect(w.calls.some((c) => c.startsWith("implement"))).toBe(false);
+    expect(w.todo).toHaveLength(1);
+    expect(summary).toMatchObject({ merged: [38], submitted: [], stopped: "drained" });
+  });
+
+  it("claims by default (the routed filter lives in the implement dependency, not the loop)", async () => {
+    const w = new World();
+    w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+
+    const summary = await drive(w, { claim: "routed" });
+
+    expect(summary.submitted).toEqual([7]);
+  });
+
   it("launches implementation for each available harness when there is no PR backlog", async () => {
     const w = new World();
     w.todo.push({ issue: 1, agent: "claude", pr: { author: "claude", approved: true } });

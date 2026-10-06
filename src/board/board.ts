@@ -113,6 +113,17 @@ export function orderByAfter(eligible: readonly Issue[]): Issue[] {
   return ordered;
 }
 
+/**
+ * May `agent` claim this issue? Never when it is pinned to another agent. An issue with no
+ * `agent:` label is claimable only when routing is not required: `orch run` has always taken
+ * unrouted work, but a loop that merges on its own must only run what someone routed on purpose.
+ */
+export function claimableBy(issue: Issue, agent: string, opts: { requireRouted?: boolean } = {}): boolean {
+  const owner = issueAgent(issue);
+  if (owner) return owner === agent;
+  return !opts.requireRouted;
+}
+
 /** Eligible issues, with advisory ordering applied after filtering availability. */
 export async function eligibleIssues(cwd?: string, agent?: string): Promise<Issue[]> {
   const issues = (await listIssues({ cwd, state: "open" })).sort((a, b) => a.number - b.number);

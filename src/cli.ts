@@ -142,7 +142,8 @@ program
   .option("-m, --max <n>", "max concurrent agent runs (defaults to config.maxConcurrent)")
   .option("--poll <seconds>", "how often to re-check CI and the board when nothing finishes (default 20)")
   .option("--max-idle <minutes>", "stop after this long with work waiting and no progress (default 30)")
-  .option("--dry-run", "show the next step for every open task PR without doing anything")
+  .option("--no-claim", "only drive pull requests that already exist; never start new tasks")
+  .option("--dry-run", "show the next step for every open task PR, and which issues it would claim, without doing anything")
   .action(wrap(autopilotCommand));
 
 program

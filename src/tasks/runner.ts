@@ -126,13 +126,14 @@ export async function processNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
+  opts: { requireRouted?: boolean } = {},
 ): Promise<RunSummary | null> {
   const pausedUntil = unavailableUntil(agent, cwd);
   if (pausedUntil) {
     log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
     return null;
   }
-  const task = await claimNext(agent, cfg, cwd);
+  const task = await claimNext(agent, cfg, cwd, opts);
   if (!task) return null;
 
   return processClaimed(task, agent, cfg, cwd);

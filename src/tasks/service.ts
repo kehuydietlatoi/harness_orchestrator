@@ -26,7 +26,7 @@ import {
   resolveBaseBranch,
   type RepositoryBase,
 } from "../git/git.js";
-import { eligibleIssues, issueAgent } from "../board/board.js";
+import { claimableBy, eligibleIssues } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
 
@@ -345,6 +345,7 @@ export async function claimNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
+  opts: { requireRouted?: boolean } = {},
 ): Promise<ClaimedTask | null> {
   const candidates = await eligibleIssues(cwd, agent);
   if (candidates.length === 0) return null;
@@ -356,8 +357,7 @@ export async function claimNext(
     resolveBaseBranch: async () => base,
   };
   for (const candidate of candidates) {
-    const owner = issueAgent(candidate);
-    if (owner && owner !== agent) continue; // reserved for another agent
+    if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, or unrouted when routing is required
     try {
       return await claimSpecific(candidate.number, agent, cfg, cwd, deps);
     } catch {

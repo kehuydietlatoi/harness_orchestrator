@@ -71,3 +71,13 @@ implementation, bounded by `--max` concurrent agent runs.
   `requireHumanMerge: true`; the loop then stops at an approved, green PR.
 - Not covered: automatically re-queueing a task whose *implement* run died on a usage limit (it lands
   in `needs-attention`), and a dashboard view of loop state.
+
+## Amendment: what the loop may start
+
+The first live run claimed two issues that nobody had routed (#68, #69): `issueStatus` treats an issue with
+no `status:` label as a todo, and `orch run` has always taken unrouted work. That is fine for a dispatcher a
+person starts per task, but not for a loop that also reviews and merges, so autopilot now only claims issues
+that carry an explicit `agent:` label (`claimableBy(..., { requireRouted: true })`); an unrouted issue is
+backlog that was never triaged, not a decision to run it. `--no-claim` restricts the loop to pull requests that
+already exist, and `--dry-run` prints what would be claimed and what would be skipped. `orch run` and
+`orch dispatch` are unchanged.

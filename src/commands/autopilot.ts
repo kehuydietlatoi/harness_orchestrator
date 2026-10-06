@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { eligibleIssues, issueAgent } from "../board/board.js";
 import { loadConfig } from "../config.js";
 import { defaultDeps, runAutopilot } from "../tasks/coordinator.js";
 import { observeTasks } from "../tasks/observe.js";
@@ -24,6 +25,8 @@ export async function autopilotCommand(opts: {
   poll?: string;
   maxIdle?: string;
   dryRun?: boolean;
+  /** Commander sets this to false for `--no-claim`. */
+  claim?: boolean;
 }): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
@@ -36,6 +39,19 @@ export async function autopilotCommand(opts: {
       console.log(`  #${t.issue.number} PR #${t.pr.number} by ${t.author}: ${pc.cyan(describeStep(t.step))}` +
         pc.dim(`  [round ${t.facts.rounds}/${t.facts.maxRounds}]`));
     }
+    // Say what it would start, and what it would leave alone, so nothing is claimed by surprise.
+    const eligible = await eligibleIssues(cwd);
+    const routed = eligible.filter((i) => cfg.agents.includes(issueAgent(i) ?? ""));
+    const unrouted = eligible.filter((i) => !issueAgent(i));
+    console.log("");
+    console.log(
+      opts.claim === false
+        ? pc.dim("  --no-claim: would not start any new task")
+        : `  would claim (routed): ${routed.map((i) => `#${i.number} (${issueAgent(i)})`).join(", ") || "none"}`,
+    );
+    if (unrouted.length) {
+      console.log(pc.dim(`  skipped (no agent: label; route with orch assign): ${unrouted.map((i) => `#${i.number}`).join(", ")}`));
+    }
     return;
   }
 
@@ -47,7 +63,8 @@ export async function autopilotCommand(opts: {
     pc.bold("orch autopilot") +
       pc.dim(
         ` — up to ${max} concurrent, polling every ${pollMs / 1000}s, ${cfg.maxReviewRounds} fix round(s) per task` +
-          (cfg.requireHumanMerge ? ", human merges" : ", auto-merge"),
+          (cfg.requireHumanMerge ? ", human merges" : ", auto-merge") +
+          (opts.claim === false ? ", no new tasks" : ", claims only issues with an agent: label"),
       ),
   );
 
@@ -60,7 +77,10 @@ export async function autopilotCommand(opts: {
     console.log(pc.yellow("\nStopping after in-flight steps finish (Ctrl-C again to exit now)."));
   });
 
-  const summary = await runAutopilot({ max, pollMs, maxIdleMs, signal: controller.signal }, defaultDeps(cfg, cwd));
+  const summary = await runAutopilot(
+    { max, pollMs, maxIdleMs, signal: controller.signal, claim: opts.claim === false ? "none" : "routed" },
+    defaultDeps(cfg, cwd),
+  );
 
   console.log("");
   console.log(pc.bold(`Autopilot stopped (${summary.stopped}).`));

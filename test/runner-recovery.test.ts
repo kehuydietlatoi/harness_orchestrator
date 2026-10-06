@@ -89,6 +89,16 @@ describe("processNext recovery", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("passes the routing requirement through to the claim", async () => {
+    mocks.claimNext.mockResolvedValue(null);
+
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd, { requireRouted: true })).toBeNull();
+    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, { requireRouted: true });
+
+    await processNext("codex", DEFAULT_CONFIG, cwd);
+    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, {});
+  });
+
   it("returns one failed outcome and records it once when adapter execution rejects", async () => {
     mocks.runTask.mockRejectedValue(new Error("adapter exploded"));
 

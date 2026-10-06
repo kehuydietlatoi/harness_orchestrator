@@ -20,6 +20,11 @@ export interface AutopilotOptions {
   maxIdleMs: number;
   /** Stop launching new work (in-flight steps still finish). */
   signal?: AbortSignal;
+  /**
+   * Which new tasks the loop may start: `routed` (default) only issues someone labelled with an
+   * `agent:`, `none` only drives pull requests that already exist.
+   */
+  claim?: "routed" | "none";
 }
 
 export interface AutopilotSummary {
@@ -69,7 +74,8 @@ export function defaultDeps(cfg: OrchConfig, cwd: string): CoordinatorDeps {
         case "escalate": return executeEscalate(obs, step.reason, cwd);
       }
     },
-    implement: (agent) => processNext(agent, cfg, cwd),
+    // Unrouted backlog is never started by a loop that merges on its own.
+    implement: (agent) => processNext(agent, cfg, cwd, { requireRouted: true }),
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
     now: () => Date.now(),
     sleep: (ms, opts) =>
@@ -241,7 +247,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (inflight.size < max) launchStep(obs, step);
       else backlog += 1;
     }
-    if (backlog === 0) {
+    if (backlog === 0 && opts.claim !== "none") {
       for (const agent of deps.availableAgents()) {
         if (inflight.size >= max) break;
         if (!drained.has(agent) && !inflight.has(`impl:${agent}`)) launchImplement(agent);
