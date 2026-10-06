@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("../src/github/github.js", () => ({ listIssues: vi.fn(), listPrs: vi.fn(), getIssue: vi.fn(), getBranchPrs: vi.fn(), getIssueReferencedPrs: vi.fn(), getRepoUrl: vi.fn(), prChecksState: vi.fn() }));
+vi.mock("../src/github/github.js", () => ({ listIssues: vi.fn(), listPrs: vi.fn(), listPrReviews: vi.fn(), getIssue: vi.fn(), getBranchPrs: vi.fn(), getIssueReferencedPrs: vi.fn(), getRepoUrl: vi.fn(), prChecksState: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ listLocks: vi.fn() }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn(), compareBranchToBase: vi.fn() }));
 vi.mock("../src/config.js", () => ({ loadConfig: () => ({ baseBranch: "main" }) }));
@@ -10,12 +10,14 @@ import * as git from "../src/git/git.js";
 import { listLocks } from "../src/git/lock.js";
 import { exec } from "../src/util/exec.js";
 import { buildSnapshot } from "../src/board/snapshot.js";
+import { formatReview } from "../src/board/approval.js";
 let fixture = 0;
 beforeEach(() => {
   vi.resetAllMocks(); fixture++;
   vi.mocked(gh.listIssues).mockResolvedValue([{ number: 1, state: "OPEN", labels: ["review:needed"], assignees: [], body: "", title: "task" }]);
   vi.mocked(gh.listPrs).mockResolvedValue([{ number: 2, state: "OPEN", headRefName: "task/1-x", body: "", title: "pr", headSha: "a", htmlUrl: "" }]);
   vi.mocked(gh.getRepoUrl).mockResolvedValue(null);
+  vi.mocked(gh.listPrReviews).mockResolvedValue([]);
   vi.mocked(gh.getBranchPrs).mockResolvedValue([]);
   vi.mocked(gh.getIssueReferencedPrs).mockResolvedValue([]);
   vi.mocked(gh.prChecksState).mockResolvedValue("pending");
@@ -26,6 +28,49 @@ beforeEach(() => {
     args?.[0] === "worktree" ? `worktree ${process.cwd()}/src\nbranch refs/heads/task/1-x\n\n` : "task/1-x\n" }));
 });
 describe("snapshot observation", () => {
+  it("caches current approvals by repository and head, refreshing same-head decisions after ten seconds", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
+    const head = "a".repeat(40);
+    const pr = { number: 2, state: "OPEN", headRefName: "task/1-x", body: "", title: "pr", headSha: head, htmlUrl: "" };
+    const record = (decision: "approve" | "request-changes") => ({ id: 1, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", pr: 2, head, decision, timestamp: "2026-09-09T12:00:00Z" }, "review") });
+    try {
+      const cwd = `/repo-${fixture}`;
+      vi.mocked(gh.listPrs).mockResolvedValue([pr]);
+      vi.mocked(gh.listPrReviews).mockResolvedValue([record("approve")]);
+      expect((await buildSnapshot(cwd)).tasks[0].reviewedBy).toEqual(["claude"]);
+      vi.mocked(gh.listPrReviews).mockResolvedValue([record("request-changes")]);
+      now.mockReturnValue(102_000);
+      expect((await buildSnapshot(cwd)).tasks[0].reviewedBy).toEqual(["claude"]);
+      expect(gh.listPrReviews).toHaveBeenCalledOnce();
+      now.mockReturnValue(110_000);
+      const bounced = (await buildSnapshot(cwd)).tasks[0];
+      expect(bounced.reviewedBy).toEqual([]);
+      expect(bounced.health.kind).toBe("in-progress");
+      expect(gh.listPrReviews).toHaveBeenCalledTimes(2);
+      vi.mocked(gh.listPrReviews).mockResolvedValue([record("approve")]);
+      vi.mocked(gh.listPrs).mockResolvedValue([{ ...pr, headSha: "b".repeat(40) }]);
+      expect((await buildSnapshot(cwd)).tasks[0].reviewedBy).toEqual([]);
+      expect(gh.listPrReviews).toHaveBeenCalledTimes(3);
+      await buildSnapshot(`${cwd}-other`);
+      expect(gh.listPrReviews).toHaveBeenCalledTimes(4);
+    } finally { now.mockRestore(); }
+  });
+  it("reads reviews only for open task PRs and retries failed reads without displaying approval labels", async () => {
+    const cwd = `/repo-${fixture}`;
+    vi.mocked(gh.listIssues).mockResolvedValue([{ number: 1, state: "OPEN", labels: ["reviewed-by:claude"], assignees: [], body: "", title: "task" }]);
+    const pr = { number: 2, state: "OPEN", headRefName: "task/1-x", body: "", title: "pr", headSha: "a", htmlUrl: "" };
+    vi.mocked(gh.listPrs).mockResolvedValue([pr, { ...pr, number: 3, state: "CLOSED" },
+      { ...pr, number: 4, headRefName: "unrelated" }, { ...pr, number: 5, headRefName: "task/99-missing" }]);
+    vi.mocked(gh.listPrReviews).mockRejectedValueOnce(new Error("offline"));
+    const failed = (await buildSnapshot(cwd)).tasks[0];
+    expect(failed.health.kind).toBe("inconsistent");
+    expect(failed.reviewedBy).toEqual([]);
+    expect(gh.listPrReviews).toHaveBeenCalledOnce();
+    expect(gh.listPrReviews).toHaveBeenCalledWith(2, { cwd });
+    expect((await buildSnapshot(cwd)).tasks[0].health.kind).toBe("in-review");
+    expect(gh.listPrReviews).toHaveBeenCalledTimes(2);
+  });
   it("reads GitHub collections once and derives health from branch observations", async () => {
     const snapshot = await buildSnapshot(`/repo-${fixture}`);
     expect(snapshot.tasks[0].health.kind).toBe("in-review");

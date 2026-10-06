@@ -25,6 +25,7 @@ describe("deriveTaskState", () => {
     ["claimed during setup", { ...ready, lock: true }, "claimed"],
     ["claimed with an unchanged worktree", { ...ready, lock: true, worktree: true, branch: "unchanged" }, "claimed"],
     ["in progress", { ...ready, lock: true, worktree: true, branch: "ahead" }, "in-progress"],
+    ["in progress after changes requested", { ...ready, lock: true, worktree: true, branch: "ahead", pr: "open", changesRequested: true }, "in-progress"],
     [
       "in review",
       { ...ready, lock: true, worktree: true, branch: "ahead", pr: "open", telemetry: "submitted" },

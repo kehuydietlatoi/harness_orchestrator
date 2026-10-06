@@ -21,7 +21,8 @@ derivation would give each consumer a subtly different answer.
 
 `src/tasks/lifecycle.ts` is the single pure lifecycle model. Its input is a `TaskFacts`
 snapshot containing only observed issue, lock, worktree, branch, PR, and latest relevant
-telemetry facts. Status and review labels are deliberately not input. The model returns
+telemetry facts, plus whether the latest structured PR review requests changes on
+the current head. Status and review labels are deliberately not input. The model returns
 one `TaskState`, including invariant violations and a recovery direction when the state
 requires intervention. It performs no I/O.
 
@@ -31,8 +32,8 @@ The stable states and their evidence are:
 |---|---|
 | `ready` | Open issue; no claim resources, PR, unresolved run outcome, or unsubmitted commits |
 | `claimed` | Open issue and lock; worktree setup may be incomplete, but no commits or PR exist yet |
-| `in-progress` | Open issue, lock, worktree, and an ahead branch; no PR yet |
-| `in-review` | Open issue and open PR, with lock, worktree, ahead branch, and no failed current run |
+| `in-progress` | Open issue, lock, worktree, and an ahead branch; no PR yet, or latest structured review requests changes on the current PR head |
+| `in-review` | Open issue and open PR, with lock, worktree, ahead branch, no failed current run, and no current-head changes requested |
 | `needs-attention` | Coherent but non-happy evidence: failed/no-commit run, closed-unmerged PR, or ahead branch with no claim |
 | `done` | Closed issue with no active lock or worktree; a PR may be merged, closed, or absent for a manual resolution |
 | `inconsistent` | Facts violate one or more lifecycle invariants or match no coherent state |
@@ -41,7 +42,9 @@ State precedence is deliberate: contradictions become `inconsistent` before any 
 state is considered; a closed, cleaned issue is terminal; recoverable failure evidence
 beats active-state inference; an open PR beats branch progress; and a lock beats a
 worktree/branch heuristic. This makes partial failure visible instead of accepting the
-most optimistic fact.
+most optimistic fact. A current-head request-changes decision preserves the author
+bounce until the PR head changes or a later approval supersedes it. Repair and
+snapshot derive this fact from the same review reducer; stale labels cannot undo it.
 
 The invariants enforced by the model are:
 

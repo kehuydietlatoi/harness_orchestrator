@@ -390,33 +390,21 @@ export async function prChecksState(
   return "pass";
 }
 
-export async function reviewPr(
-  number: number,
-  decision: "approve" | "request-changes" | "comment",
-  body: string,
-  opts: { cwd?: string } = {},
-): Promise<void> {
-  const flag =
-    decision === "approve"
-      ? "--approve"
-      : decision === "request-changes"
-        ? "--request-changes"
-        : "--comment";
-  const args = ["pr", "review", String(number), flag];
-  if (body) args.push("--body", body);
-  const r = await exec("gh", args, { cwd: opts.cwd });
-  if (r.code !== 0) {
-    // GitHub forbids approving your own PR. Both agents share one GitHub user,
-    // so approval is tracked by orch labels instead; treat this as non-fatal.
-    if (/can not approve your own|your own pull request/i.test(r.stderr)) return;
-    throw new Error(`gh pr review #${number} failed: ${r.stderr.trim()}`);
-  }
-}
-
 export async function mergePr(
   number: number,
-  opts: { cwd?: string; method?: "squash" | "merge" | "rebase"; deleteBranch?: boolean } = {},
+  opts: { cwd?: string; method?: "squash" | "merge" | "rebase"; deleteBranch?: boolean; expectedHead?: string } = {},
 ): Promise<void> {
+  if (opts.expectedHead) {
+    const r = await exec("gh", ["api", `repos/{owner}/{repo}/pulls/${number}/merge`,
+      "--method", "PUT", "--input", "-"], {
+      cwd: opts.cwd,
+      input: JSON.stringify({ sha: opts.expectedHead, merge_method: opts.method ?? "squash" }),
+    });
+    if (r.code !== 0) throw new Error(`guarded merge #${number} failed: ${r.stderr.trim()}`);
+    if (JSON.parse(r.stdout).merged !== true) throw new Error(`GitHub did not merge PR #${number}`);
+    // Branch deletion is deliberately left to safe cleanup after confirmed merge.
+    return;
+  }
   const args = ["pr", "merge", String(number), `--${opts.method ?? "squash"}`];
   if (opts.deleteBranch !== false) args.push("--delete-branch");
   const r = await exec("gh", args, { cwd: opts.cwd });
@@ -429,4 +417,24 @@ export async function mergePr(
     if (/Cannot delete branch .* checked out at/i.test(r.stderr)) return;
     throw new Error(`gh pr merge #${number} failed: ${r.stderr.trim()}`);
   }
+}
+
+export interface PrReview {
+  id: number;
+  body: string;
+  state: string;
+  commit_id: string;
+}
+
+export async function listPrReviews(number: number, opts: { cwd?: string } = {}): Promise<PrReview[]> {
+  return paginatedApi<PrReview>(`repos/{owner}/{repo}/pulls/${number}/reviews`, {}, opts);
+}
+
+/** COMMENT works when both harnesses share the PR author's GitHub identity. */
+export async function recordPrReview(number: number, head: string, body: string, opts: { cwd?: string } = {}): Promise<void> {
+  const r = await exec("gh", ["api", `repos/{owner}/{repo}/pulls/${number}/reviews`,
+    "--method", "POST", "--input", "-"], {
+    cwd: opts.cwd, input: JSON.stringify({ event: "COMMENT", commit_id: head, body }),
+  });
+  if (r.code !== 0) throw new Error(`record review #${number} failed: ${r.stderr.trim()}`);
 }

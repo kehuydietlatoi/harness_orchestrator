@@ -1,4 +1,5 @@
-import { prFact, telemetryFact } from "./facts.js";
+import { prFact, reviewFact, telemetryFact } from "./facts.js";
+import { issueAgent } from "../board/board.js";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import type { OrchConfig } from "../config.js";
@@ -10,14 +11,17 @@ import {
   getIssue,
   listIssues,
   listPrs,
+  listPrReviews,
   type Issue,
   type Pr,
+  type PrReview,
 } from "../github/github.js";
 import {
   NEEDS_ATTENTION,
   REVIEWED_BY_PREFIX,
   REVIEW_NEEDED,
   STATUS_LABELS,
+  reviewedByLabel,
 } from "../github/labels.js";
 import {
   claim as claimLock,
@@ -60,6 +64,7 @@ export interface RepairObservation {
   worktree: RepairWorktree;
   branch: TaskFacts["branch"];
   prs: Pr[];
+  reviews: PrReview[];
   telemetry: TaskFacts["telemetry"];
 }
 
@@ -233,6 +238,7 @@ export function factsFromObservation(observation: RepairObservation): TaskFacts 
     worktree: observation.worktree.kind === "usable",
     branch: observation.branch,
     pr: prFact(observation.prs),
+    changesRequested: reviewFact(observation.prs.find((pr) => pr.state === "OPEN"), observation.reviews).changesRequested,
     telemetry: observation.telemetry,
   };
 }
@@ -434,11 +440,15 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
       (label) => issue.labels.includes(label) && !expected.has(label),
     );
 
-    const hasReview = issue.labels.some((label) => label.startsWith(REVIEWED_BY_PREFIX));
+    const review = reviewFact(pr, observation.reviews);
+    const reviewers = review.reviewers.filter((reviewer) => reviewer !== issueAgent(issue));
+    const reviewLabels = reviewers.map(reviewedByLabel);
+    remove.push(...issue.labels.filter((label) => label.startsWith(REVIEWED_BY_PREFIX) && !reviewLabels.includes(label)));
+    add.push(...reviewLabels.filter((label) => !issue.labels.includes(label)));
     if (projectedState.kind === "in-review") {
-      if (hasReview && issue.labels.includes(REVIEW_NEEDED)) remove.push(REVIEW_NEEDED);
-      else if (!hasReview && !issue.labels.includes(REVIEW_NEEDED)) add.push(REVIEW_NEEDED);
-    } else if (facts.pr !== "open" && issue.labels.includes(REVIEW_NEEDED)) {
+      if (reviewers.length && issue.labels.includes(REVIEW_NEEDED)) remove.push(REVIEW_NEEDED);
+      else if (!reviewers.length && !issue.labels.includes(REVIEW_NEEDED)) add.push(REVIEW_NEEDED);
+    } else if ((facts.pr !== "open" || review.changesRequested) && issue.labels.includes(REVIEW_NEEDED)) {
       remove.push(REVIEW_NEEDED);
     }
 
@@ -481,6 +491,9 @@ async function observeRepair(
     Promise.resolve(readRuns(cwd)),
   ]);
   const branch = expectedBranch ? await branchFact(expectedBranch, base, cwd) : "absent";
+  // Repair re-observes before every mutation; never reuse the dashboard's cached decisions.
+  const reviews = (await Promise.all(prs.filter((pr) => pr.state === "OPEN")
+    .map((pr) => listPrReviews(pr.number, { cwd })))).flat();
   const worktree = expectedBranch
     ? await observeWorktreeForRepair(number, expectedBranch, cfg, cwd)
     : { kind: "absent" as const };
@@ -492,6 +505,7 @@ async function observeRepair(
     worktree,
     branch,
     prs,
+    reviews,
     telemetry: telemetryFact(records, number),
   };
 }
@@ -661,4 +675,3 @@ export async function discoverRepairIssues(cwd: string): Promise<number[]> {
   }
   return [...numbers].sort((a, b) => a - b);
 }
-

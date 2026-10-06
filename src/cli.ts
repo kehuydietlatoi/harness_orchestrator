@@ -154,6 +154,7 @@ program
 program
   .command("review-approve <pr>")
   .description("Record a cross-review approval (satisfies the merge gate)")
+  .requiredOption("--head <sha>", "full commit OID printed by orch review")
   .option(agentOpt, agentDesc)
   .option("-n, --notes <text>", "optional approval note")
   .action(wrap(reviewApproveCommand));
