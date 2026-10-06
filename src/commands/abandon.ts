@@ -31,7 +31,7 @@ export async function abandonCommand(
   const path = worktreePath(cfg.worktreeRoot, number, cwd);
   const removed = opts.discard
     ? await discardWorktree(path, { cwd })
-    : await removeWorktree(path, { cwd });
+    : await removeWorktree(path, { cwd, disposableIgnored: cfg.disposableIgnored });
   if (!removed && existsSync(path)) {
     const detail = opts.discard
       ? "the explicit discard failed; its lock and issue projection were preserved"

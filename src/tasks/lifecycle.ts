@@ -48,6 +48,7 @@ export type TaskInvariant =
   | "submitted-run-requires-pr"
   | "failed-run-forbids-open-pr"
   | "finished-run-requires-released-resources"
+  | "local-branch-matches-pr-head"
   | "unrecognized-fact-combination";
 
 export interface TaskInvariantViolation {

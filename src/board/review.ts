@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   type Issue,
   type Pr,
@@ -241,15 +242,22 @@ export async function merge(
   cfg: OrchConfig,
   cwd: string,
   humanApproved = false,
-): Promise<{ issue: number | null }> {
+): Promise<{ issue: number | null; worktree: "removed" | "retained" | "none" }> {
   const gate = await checkMergeGate(prNum, cfg, cwd, humanApproved);
   if (!gate.ok) {
     throw new Error(`merge blocked for PR #${prNum}:\n  - ${gate.reasons.join("\n  - ")}`);
   }
   await mergePr(prNum, { cwd, method: "squash", expectedHead: gate.head });
 
+  // Report what cleanup actually did; a retained worktree is not "pruned".
+  let worktree: "removed" | "retained" | "none" = "none";
   if (gate.issue !== null) {
-    await removeWorktree(worktreePath(cfg.worktreeRoot, gate.issue, cwd), { cwd });
+    const path = worktreePath(cfg.worktreeRoot, gate.issue, cwd);
+    if (existsSync(path)) {
+      worktree = (await removeWorktree(path, { cwd, disposableIgnored: cfg.disposableIgnored }))
+        ? "removed"
+        : "retained";
+    }
   }
 
   if (gate.issue !== null) {
@@ -264,5 +272,5 @@ export async function merge(
       /* issue already closed by "Closes #n"; labelling is best-effort */
     }
   }
-  return { issue: gate.issue };
+  return { issue: gate.issue, worktree };
 }

@@ -97,6 +97,44 @@ export async function compareBranchToBase(
   return (await countCommitsAhead(base.ref, ref, cwd)) > 0 ? "ahead" : "unchanged";
 }
 
+/** Observe a commit (e.g. an open PR head) relative to the validated repository base. */
+export async function compareCommitToBase(
+  commit: string,
+  base: RepositoryBase,
+  cwd: string = process.cwd(),
+): Promise<Exclude<BranchComparison, "absent">> {
+  return (await countCommitsAhead(base.ref, commit, cwd)) > 0 ? "ahead" : "unchanged";
+}
+
+export async function commitExists(commit: string, cwd: string = process.cwd()): Promise<boolean> {
+  const r = await exec("git", ["cat-file", "-e", `${commit}^{commit}`], { cwd });
+  return r.code === 0;
+}
+
+export type BranchRelation = "equal" | "behind" | "ahead" | "diverged";
+
+/** Relate a local branch to a commit it is expected to track. Both must exist. */
+export async function relateBranchToCommit(
+  branch: string,
+  commit: string,
+  cwd: string = process.cwd(),
+): Promise<BranchRelation> {
+  const ref = `refs/heads/${branch}`;
+  const tip = await exec("git", ["rev-parse", "--verify", `${ref}^{commit}`], { cwd });
+  if (tip.code !== 0) throw commandFailure("git rev-parse", tip.stderr);
+  if (tip.stdout.trim() === commit) return "equal";
+  const isAncestor = async (a: string, b: string): Promise<boolean> => {
+    const r = await exec("git", ["merge-base", "--is-ancestor", a, b], { cwd });
+    // Exit 1 is a definite "no"; anything else is an observation failure.
+    if (r.code === 0) return true;
+    if (r.code === 1) return false;
+    throw commandFailure("git merge-base --is-ancestor", r.stderr);
+  };
+  if (await isAncestor(ref, commit)) return "behind";
+  if (await isAncestor(commit, ref)) return "ahead";
+  return "diverged";
+}
+
 export async function isGitRepo(cwd: string = process.cwd()): Promise<boolean> {
   const r = await exec("git", ["rev-parse", "--is-inside-work-tree"], { cwd });
   return r.code === 0 && r.stdout.trim() === "true";

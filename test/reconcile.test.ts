@@ -1,4 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import * as github from "../src/github/github.js";
+import * as telemetry from "../src/board/telemetry.js";
+import { exec } from "../src/util/exec.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { formatReview } from "../src/board/approval.js";
 import type { Issue, Pr } from "../src/github/github.js";
@@ -6,6 +12,7 @@ import { NEEDS_ATTENTION, REVIEW_NEEDED, STATUS } from "../src/github/labels.js"
 import {
   planRepairs,
   reconcileIssue,
+  reconcileDeps,
   type ReconcileDeps,
   type RepairAction,
   type RepairObservation,
@@ -115,6 +122,25 @@ function fakeDeps(initial: RepairObservation): {
 }
 
 describe("planRepairs", () => {
+  it.each(["diverged", "unavailable"] as const)("plans nothing when the local branch is %s from the PR head", (kind) => {
+    const detail = `${kind}: inspect before resetting`;
+    const plan = planRepairs(observation({
+      issue: issue({ labels: [STATUS.inReview, REVIEW_NEEDED] }),
+      lockOwner: "owner",
+      worktree: { kind: "usable", path: "/wt/issue-36", branch: "task/36-preview-first-repair", removable: false },
+      branch: "ahead",
+      prs: [pr()],
+      prHead: { kind, detail },
+    }));
+
+    expect(plan.actions).toEqual([]);
+    expect(plan.blocked).toEqual([detail]);
+    expect(plan.state).toEqual(plan.projectedState);
+    expect(plan.projectedState).toMatchObject({ kind: "inconsistent", violations: [
+      { invariant: "local-branch-matches-pr-head", detail },
+    ] });
+  });
+
   it("projects stale labels from lifecycle facts without mutating the observation", () => {
     const observed = observation({ issue: issue({ labels: [STATUS.claimed, NEEDS_ATTENTION] }) });
 
@@ -270,6 +296,84 @@ describe("planRepairs", () => {
     expect(plan.actions.map((action) => action.kind)).not.toContain("release-lock");
     expect(plan.actions.map((action) => action.kind)).not.toContain("supersede-telemetry");
     expect(plan.blocked.join(" ")).toMatch(/preserved/i);
+  });
+});
+
+describe("repair observation of an open PR", () => {
+  let root: string | undefined;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
+  it.each([
+    { local: "stale at base", expected: "in-review" },
+    { local: "stale ahead of base", expected: "in-review" },
+    { local: "equal", expected: "in-review" },
+    { local: "ahead of PR", expected: "inconsistent" },
+    { local: "diverged", expected: "inconsistent" },
+    { local: "absent", expected: "in-review" },
+  ])("uses PR head with local branch $local", async ({ local, expected }) => {
+    root = mkdtempSync(join(tmpdir(), "orch-reconcile-"));
+    const git = async (...args: string[]) => {
+      const result = await exec("git", args, { cwd: root });
+      if (result.code !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    // Unique messages: identical empty commits made within one second would
+    // otherwise hash to the same object and collapse distinct histories.
+    let commits = 0;
+    const commit = async () => {
+      await git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "--allow-empty", "-qm", `fixture ${++commits}`);
+      return git("rev-parse", "HEAD");
+    };
+    await git("init", "-q", "-b", "main");
+    const base = await commit();
+    await git("checkout", "-qb", "pr-head");
+    const ancestor = await commit();
+    const headSha = await commit();
+    const openPr = { ...pr(), headSha };
+    const branch = openPr.headRefName;
+    const cfg = { ...DEFAULT_CONFIG, baseBranch: "main", worktreeRoot: "./wt" };
+    let localSha: string | undefined;
+    if (local !== "absent") {
+      const start = local === "stale at base" || local === "diverged" ? base
+        : local === "stale ahead of base" ? ancestor : headSha;
+      await git("checkout", "-qb", branch, start);
+      if (local === "ahead of PR" || local === "diverged") await commit();
+      localSha = await git("rev-parse", branch);
+      await git("checkout", "-q", "main");
+      await git("worktree", "add", "--quiet", join(root, "wt", "issue-36"), branch);
+    }
+    await git("update-ref", "refs/orch/lock/issue-36", base);
+    vi.spyOn(github, "getIssue").mockResolvedValue(issue({ labels: [STATUS.inReview, REVIEW_NEEDED] }));
+    vi.spyOn(github, "listPrs").mockResolvedValue([openPr]);
+    vi.spyOn(github, "listPrReviews").mockResolvedValue([]);
+    vi.spyOn(telemetry, "readRuns").mockReturnValue([]);
+    const execute = vi.fn();
+
+    const result = await reconcileIssue(36, cfg, root, { apply: expected === "inconsistent" },
+      { observe: reconcileDeps.observe, execute });
+
+    expect(result.projectedState.kind).toBe(expected);
+    if (expected === "inconsistent") {
+      expect(result.state).toMatchObject({ kind: "inconsistent", violations: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("local branch diverged from PR head") }),
+      ]) });
+      expect(result.blocked.join(" ")).toContain("local branch diverged from PR head");
+      expect(result.actions).toEqual([]);
+      expect(execute).not.toHaveBeenCalled();
+    } else if (local === "absent") {
+      expect(result.actions.map((action) => action.kind)).toEqual(["restore-branch", "add-worktree"]);
+    } else {
+      expect(result.state.kind).toBe("in-review");
+      expect(result.actions).toEqual([]);
+      expect(result.blocked).toEqual([]);
+    }
+    if (localSha) expect(await git("rev-parse", branch)).toBe(localSha);
   });
 });
 
