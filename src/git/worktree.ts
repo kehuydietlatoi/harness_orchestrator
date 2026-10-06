@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { existsSync, realpathSync } from "node:fs";
 import { exec } from "../util/exec.js";
+import { DEFAULT_DISPOSABLE_IGNORED } from "../config.js";
 
 export interface Worktree {
   path: string;
@@ -143,29 +144,58 @@ export async function addWorktree(
 }
 
 /**
- * Remove a worktree only when doing so cannot hide recoverable work. HEAD must
- * be attached, clean, and reachable from a ref other than the checked-out branch.
+ * Pure: the entries of `git status --porcelain=v1 --untracked-files=all
+ * --ignored=matching` that make a worktree unsafe to remove — every dirty or
+ * untracked entry, plus ignored paths outside the `disposable` allowlist.
+ * Allowlist entries are worktree-relative; a trailing `/` covers a directory and
+ * its contents. Quoted (unusual-character) paths are never guessed safe.
  */
-export async function removeWorktree(path: string, opts: { cwd?: string } = {}): Promise<boolean> {
-  if (!existsSync(path)) return false;
+export function blockingStatusEntries(porcelain: string, disposable: readonly string[]): string[] {
+  return porcelain
+    .split(/\r?\n/)
+    .filter((line) => line.length > 0)
+    .filter((line) => {
+      if (!line.startsWith("!! ")) return true;
+      const path = line.slice(3);
+      if (path.startsWith('"')) return true;
+      return !disposable.some((entry) =>
+        entry.endsWith("/") ? path === entry || path.startsWith(entry) : path === entry,
+      );
+    });
+}
 
-  const cwd = opts.cwd ?? process.cwd();
-  let registered: RegisteredWorktree;
-  try {
-    registered = await registeredWorktree(path, cwd);
-  } catch {
-    return false;
-  }
-  if (registered.branch === null) return false;
+export interface RemovalSafety {
+  removable: boolean;
+  reason?: string;
+}
 
+/**
+ * The single safe-removal predicate shared by repair and every cleanup path:
+ * nothing dirty, untracked, or ignored-but-not-disposable, and HEAD reachable
+ * from a ref other than the checked-out branch.
+ */
+export async function worktreeRemovalSafety(
+  path: string,
+  registeredBranch: string,
+  disposable: readonly string[] = DEFAULT_DISPOSABLE_IGNORED,
+): Promise<RemovalSafety> {
   const status = await exec(
     "git",
     ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"],
     { cwd: path },
   );
-  if (status.code !== 0 || status.stdout.length > 0) return false;
+  if (status.code !== 0) return { removable: false, reason: "worktree status is unreadable" };
+  const blocking = blockingStatusEntries(status.stdout, disposable);
+  if (blocking.length > 0) {
+    const shown = blocking.slice(0, 3).map((line) => line.slice(3)).join(", ");
+    const more = blocking.length > 3 ? ` (+${blocking.length - 3} more)` : "";
+    return {
+      removable: false,
+      reason: `worktree has dirty, untracked, or non-disposable ignored files: ${shown}${more}`,
+    };
+  }
 
-  const containingRefs = await exec(
+  const refs = await exec(
     "git",
     [
       "for-each-ref",
@@ -177,12 +207,39 @@ export async function removeWorktree(path: string, opts: { cwd?: string } = {}):
     ],
     { cwd: path },
   );
-  if (containingRefs.code !== 0) return false;
-  const preservedElsewhere = containingRefs.stdout
+  if (refs.code !== 0) return { removable: false, reason: "commit reachability is unreadable" };
+  const preserved = refs.stdout
     .split(/\r?\n/)
-    .some((ref) => ref.length > 0 && ref !== registered.branch);
-  if (!preservedElsewhere) return false;
+    .some((ref) => ref.length > 0 && ref !== registeredBranch);
+  return preserved
+    ? { removable: true }
+    : { removable: false, reason: "HEAD is not preserved by another branch, remote, or tag" };
+}
 
+/**
+ * Remove a worktree only when doing so cannot hide recoverable work. HEAD must
+ * be attached, safe per `worktreeRemovalSafety`, and reachable elsewhere.
+ */
+export async function removeWorktree(
+  path: string,
+  opts: { cwd?: string; disposableIgnored?: readonly string[] } = {},
+): Promise<boolean> {
+  if (!existsSync(path)) return false;
+
+  const cwd = opts.cwd ?? process.cwd();
+  let registered: RegisteredWorktree;
+  try {
+    registered = await registeredWorktree(path, cwd);
+  } catch {
+    return false;
+  }
+  if (registered.branch === null) return false;
+
+  const safety = await worktreeRemovalSafety(path, registered.branch, opts.disposableIgnored);
+  if (!safety.removable) return false;
+
+  // Without --force, git still refuses tracked modifications or untracked
+  // files, so a change racing in after the check above is never discarded.
   const r = await exec("git", ["worktree", "remove", path], { cwd });
   return r.code === 0;
 }

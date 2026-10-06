@@ -45,6 +45,16 @@ describe("loadConfig", () => {
     });
   });
 
+  it("defaults and overrides the disposable ignored allowlist, rejecting malformed values", () => {
+    expect(loadConfig(writeConfig({})).disposableIgnored).toEqual(["node_modules/", "dist/", "coverage/", "logs/"]);
+    rmSync(dir, { recursive: true, force: true });
+    expect(loadConfig(writeConfig({ disposableIgnored: [".venv/"] })).disposableIgnored).toEqual([".venv/"]);
+    for (const bad of ["node_modules/", [""], [1]]) {
+      rmSync(dir, { recursive: true, force: true });
+      expect(() => loadConfig(writeConfig({ disposableIgnored: bad }))).toThrow(/disposableIgnored/);
+    }
+  });
+
   it("leaves baseBranch unset so repositories use their GitHub default", () => {
     const config = loadConfig(writeConfig({}));
 
