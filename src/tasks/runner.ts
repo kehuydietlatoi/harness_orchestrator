@@ -5,7 +5,8 @@ import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
-import { getIssue, editIssue, listIssues, type Issue } from "../github/github.js";
+import { getIssue, editIssue, listIssues, listOpenPrs, type Issue } from "../github/github.js";
+import { prIssueNumber } from "../board/review.js";
 import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
@@ -220,7 +221,7 @@ async function processClaimed(
       const limitedUntil = noteUsageLimit(agent, logFile, cwd, logMark);
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
-      if (limitedUntil && (await requeueClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored }))) {
+      if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd))) {
         console.log(pc.yellow(`↺ #${n} requeued — '${agent}' is out of usage until ${limitedUntil.toLocaleString()}`));
         summary = { issue: n, outcome: "requeued", durationMs: result.durationMs };
         telemetryOutcome = "usage-limited";
@@ -306,19 +307,20 @@ async function recoverClaim(
 }
 
 /**
- * Return a task whose implement run died on a usage limit to `status:todo`. Safe cleanup runs first and
- * must prove nothing is left behind (a retained worktree means the agent produced work, which belongs to
- * a human or `orch repair`, not to a blind retry); the lock is released before the labels change so a
- * `todo` task never still looks claimed. Returns false, having changed no labels, when it cannot.
+ * Return a task whose implement run died on a usage limit to `status:todo`, but only when the run
+ * demonstrably left nothing behind. A removable worktree is not that proof: safe cleanup also allows a
+ * clean worktree whose commits are preserved elsewhere (a pushed branch, an open PR), and requeueing that
+ * would run the task again over its own work. So, before touching anything, require no commits ahead of
+ * the base and no open PR for the issue, failing closed when either cannot be observed. Then cleanup must
+ * actually remove the worktree (retained work belongs to a human or `orch repair`), and the lock is
+ * released before the labels change so a `todo` task never still looks claimed. Returns false, having
+ * changed no labels, when any of that does not hold.
  */
-async function requeueClaim(
-  n: number,
-  worktree: string,
-  cwd: string,
-  opts: { disposableIgnored?: readonly string[] } = {},
-): Promise<boolean> {
+async function requeueClaim(n: number, worktree: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
   try {
-    if (!(await removeWorktree(worktree, { cwd, disposableIgnored: opts.disposableIgnored }))) return false;
+    if ((await commitsAhead(worktree, cfg, cwd)) > 0) return false;
+    if ((await listOpenPrs({ cwd })).some((pr) => prIssueNumber(pr) === n)) return false;
+    if (!(await removeWorktree(worktree, { cwd, disposableIgnored: cfg.disposableIgnored }))) return false;
     // release() reports failure by returning false, not by throwing: a lock that is still held must never
     // be relabelled todo (it would read as claimed and the task could not run after the cooldown).
     if (!(await lockRelease(n, { cwd }))) return false;
