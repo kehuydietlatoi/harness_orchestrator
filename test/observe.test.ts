@@ -75,10 +75,16 @@ describe("assembleFacts", () => {
     expect(assembleFacts({ ...base, reviews: [], cfg }).review.approved).toBe(true);
   });
 
-  it("takes the larger of the PR's history and the local log as the round count", () => {
+  it("takes the larger of the PR's answered history and the local log as the round count", () => {
+    // One request on an older head (answered by a fix) and one still pending on the current head.
     const reviews = [review("codex", "request-changes", { head: OLD }), review("codex", "request-changes")];
-    expect(assembleFacts({ ...base, reviews, localRounds: 0 }).rounds).toBe(2);
+    expect(assembleFacts({ ...base, reviews, localRounds: 0 }).rounds).toBe(1);
     expect(assembleFacts({ ...base, reviews, localRounds: 5 }).rounds).toBe(5);
+  });
+
+  it("does not count the change request that is still waiting for its fix", () => {
+    expect(assembleFacts({ ...base, reviews: [review("codex", "request-changes")] }).rounds).toBe(0);
+    expect(assembleFacts({ ...base, reviews: [review("codex", "request-changes", { head: OLD })] }).rounds).toBe(1);
   });
 
   it("carries the attention label, round budget and merge policy", () => {
@@ -99,26 +105,27 @@ describe("observeTasks", () => {
   });
 
   it("derives the next step for each orch-owned task PR", async () => {
-    const [task] = await observeTasks(DEFAULT_CONFIG, "/repo");
+    const { tasks: [task], unobserved } = await observeTasks(DEFAULT_CONFIG, "/repo");
     expect(task).toMatchObject({ author: "claude", step: { kind: "review" }, feedback: null });
     expect(task.pr.number).toBe(62);
+    expect(unobserved).toEqual([]);
   });
 
   it("surfaces the reviewer's notes and routes the PR back to the author", async () => {
     vi.mocked(gh.listPrReviews).mockResolvedValue([review("codex", "request-changes", { note: "add a test" })]);
-    const [task] = await observeTasks(DEFAULT_CONFIG, "/repo");
+    const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo");
     expect(task.step).toEqual({ kind: "fix", reason: "review" });
     expect(task.feedback).toBe("add a test");
   });
 
   it("skips PRs it does not own: no issue, unknown author, unmapped branch", async () => {
     vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:ghost"] }]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual([]);
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
     vi.mocked(gh.listIssues).mockResolvedValue([]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual([]);
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
     vi.mocked(gh.listIssues).mockResolvedValue([issue]);
     vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headRefName: "random", body: "no ref" }]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual([]);
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
   });
 
   it("skips just the PR it cannot observe and keeps the rest", async () => {
@@ -129,7 +136,55 @@ describe("observeTasks", () => {
       if (n === 62) throw new Error("gh exploded");
       return "clean";
     });
-    const tasks = await observeTasks(DEFAULT_CONFIG, "/repo");
+    const { tasks, unobserved } = await observeTasks(DEFAULT_CONFIG, "/repo");
     expect(tasks.map((t) => t.pr.number)).toEqual([63]);
+    expect(unobserved).toEqual([62]); // reported, so the caller cannot mistake it for "done"
+  });
+
+  it("reports every PR it could not read when none can be", async () => {
+    vi.mocked(gh.listPrReviews).mockRejectedValue(new Error("rate limited"));
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [62] });
+  });
+
+  describe("round budget through the real observation-to-decision pipeline", () => {
+    const withBudget = (maxReviewRounds: number): OrchConfig => ({ ...DEFAULT_CONFIG, maxReviewRounds });
+    /** `answered` change requests on earlier heads (each answered by a fix), plus one pending on the current head. */
+    const history = (answered: number, pending: boolean) => [
+      ...Array.from({ length: answered }, (_, i) => review("codex", "request-changes", { head: String(i).repeat(40) })),
+      ...(pending ? [review("codex", "request-changes")] : []),
+    ];
+
+    it("lets the author fix a first change request even when the budget is a single round", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(history(0, true));
+      const { tasks: [task] } = await observeTasks(withBudget(1), "/repo");
+
+      expect(task.facts.rounds).toBe(0);
+      expect(task.step).toEqual({ kind: "fix", reason: "review" });
+    });
+
+    it("escalates a second change request once that single round has been spent", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(history(1, true));
+      const { tasks: [task] } = await observeTasks(withBudget(1), "/repo");
+
+      expect(task.facts.rounds).toBe(1);
+      expect(task.step.kind).toBe("escalate");
+    });
+
+    it("allows the full default budget of three fixes, and escalates on the fourth request", async () => {
+      for (const [answered, expected] of [[0, "fix"], [1, "fix"], [2, "fix"], [3, "escalate"]] as const) {
+        vi.mocked(gh.listPrReviews).mockResolvedValue(history(answered, true));
+        const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo");
+        expect(task.facts.rounds, `${answered} answered`).toBe(answered);
+        expect(task.step.kind, `${answered} answered`).toBe(expected);
+      }
+    });
+
+    it("counts answered requests as spent once the head moved on (no pending request)", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(history(2, false));
+      const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo");
+
+      expect(task.facts.rounds).toBe(2);
+      expect(task.step).toEqual({ kind: "review" });
+    });
   });
 });

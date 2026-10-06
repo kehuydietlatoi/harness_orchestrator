@@ -43,11 +43,20 @@ The author's conversation id is stored per task (`~/.orch/<project>/sessions/`).
 is an optimisation, never a dependency: if the harness refuses it, the fix is retried in a fresh
 session briefed from durable facts (the spec, the diff, the review notes). Fixes and conflict merges
 are pushed by orch, never forced; a new head voids earlier approvals, so the change is re-reviewed.
+Before a writable harness touches the task worktree, orch proves it is the right one: Git must
+register the path on the task branch (`observeWorktree`), that branch must be the PR's, and the PR
+head must already be in its history. A switched, detached, or unregistered directory is refused
+rather than pushed from, since its commits would land on the PR.
 
 **3. It must converge or hand off.**
-Each task has a round budget (`maxReviewRounds`, default 3), counted as the larger of the PR's own
-change-request history and the local event log. Exhausting it, or failing the same step twice in a
-row, escalates: `needs-attention` plus a comment explaining why. Failures back off; a paused harness
+Each task has a round budget (`maxReviewRounds`, default 3) of *spent* rounds: the larger of the
+change requests on the PR's own history that have since been answered, and the fixes recorded in the
+local event log. A request that is still pending on the current head has not been answered, so it is
+not spent: a budget of N allows N fixes, and the N+1th request escalates. Exhausting it, or failing the
+same step twice in a row, escalates: `needs-attention` plus a comment explaining why. A PR that cannot
+be read on a pass is reported as unobserved and the loop keeps polling; it is never mistaken for
+"nothing left to do". Time spent waiting on a paused harness does not count as progress, so
+`--max-idle` still ends a wait that outlasts it. Failures back off; a paused harness
 (usage limit, ADR-0008) is waited out and never counted as a failure. Merge still goes through the
 full gate (`checkMergeGate`: approval bound to the head, CI, SHA-guarded squash), and conflicts are
 resolved by merging the base into the branch (Claude preferred), never by rewriting history.

@@ -59,22 +59,34 @@ export function assembleFacts(params: {
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },
-    // The PR's own history is durable; the local event log can only add to it.
-    rounds: Math.max(countChangeRequests(reviews, pr.number), localRounds),
+    // Rounds already *spent*. Every change request on the PR's own (durable) history asks for one fix,
+    // but one that is still pending on the current head has not been answered yet, so it is not a
+    // spent round: otherwise maxReviewRounds=1 would escalate before the author ever got to fix, and
+    // the default of 3 would allow only two fixes. The local event log can only add to this.
+    rounds: Math.max(countChangeRequests(reviews, pr.number) - (rs.changesRequested ? 1 : 0), localRounds),
     maxRounds: cfg.maxReviewRounds,
     requireHumanMerge: cfg.requireHumanMerge,
   };
 }
 
+/** One pass over the board: the tasks we could read, and the PRs we could not. */
+export interface Observation {
+  tasks: TaskObservation[];
+  /** PR numbers that could not be read this pass. Callers must treat them as unknown, never as done. */
+  unobserved: number[];
+}
+
 /**
- * Observe every open task PR once. A PR that cannot be observed this pass is skipped with a
- * warning (no decision is better than a decision from partial facts); the next pass retries.
+ * Observe every open task PR once. A PR that cannot be observed gets no decision (a decision from
+ * partial facts is worse than none) but is reported in `unobserved`, so the caller keeps polling
+ * instead of concluding that nothing is left to do.
  */
-export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<TaskObservation[]> {
+export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observation> {
   const [issues, prs] = await Promise.all([listIssues({ cwd, state: "open" }), listOpenPrs({ cwd })]);
   const open = byNumber(issues);
   const events = readEvents(cwd);
   const out: TaskObservation[] = [];
+  const unobserved: number[] = [];
 
   for (const pr of prs) {
     const n = prIssueNumber(pr);
@@ -96,8 +108,9 @@ export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<TaskOb
         feedback: latestChangeRequestNotes(reviews, pr.number, pr.headSha),
       });
     } catch (error) {
+      unobserved.push(pr.number);
       log.warn(`could not observe PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return out;
+  return { tasks: out, unobserved };
 }

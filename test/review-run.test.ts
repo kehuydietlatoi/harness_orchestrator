@@ -27,13 +27,19 @@ const limitRaw =
   '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}';
 
 function runner(results: Array<{ code?: number; text?: string; raw?: string; timedOut?: boolean }>) {
-  const calls: Array<{ reviewer: string; prompt: string }> = [];
+  const calls: Array<{ reviewer: string; prompt: string; runCwd: string }> = [];
+  const checkouts: Array<{ path: string; released: boolean }> = [];
   const fn: ReviewRunDeps["runner"] = async (args) => {
-    calls.push({ reviewer: args.reviewer, prompt: args.prompt });
+    calls.push({ reviewer: args.reviewer, prompt: args.prompt, runCwd: args.runCwd });
     const r = results[calls.length - 1] ?? {};
     return { code: r.code ?? 0, timedOut: r.timedOut ?? false, text: r.text ?? "", raw: r.raw ?? "" };
   };
-  return { deps: { runner: fn, now: () => new Date() } satisfies ReviewRunDeps, calls };
+  const checkout: ReviewRunDeps["checkout"] = async (p) => {
+    const c = { path: `/checkout/${p.headSha.slice(0, 8)}/${checkouts.length}`, released: false };
+    checkouts.push(c);
+    return { path: c.path, release: async () => { c.released = true; } };
+  };
+  return { deps: { runner: fn, checkout, now: () => new Date() } satisfies ReviewRunDeps, calls, checkouts };
 }
 
 describe("parseVerdict", () => {
@@ -97,6 +103,62 @@ describe("runAutomatedReview", () => {
     const body = vi.mocked(gh.recordPrReview).mock.calls[0][2];
     expect(body).toContain('"reviewer":"codex"');
     expect(body).not.toContain('"mode"');
+  });
+
+  describe("exact-head checkout (the verdict is recorded against the PR SHA)", () => {
+    it("runs the reviewer in a checkout of the PR head, not in the repository or the author worktree", async () => {
+      const { deps, calls, checkouts } = runner([{ text: approveText }]);
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+      expect(calls[0].runCwd).toBe(checkouts[0].path);
+      expect(calls[0].runCwd).toContain(head.slice(0, 8));
+      expect(calls[0].runCwd).not.toBe(cwd);
+    });
+
+    it("removes the checkout after a normal review", async () => {
+      const { deps, checkouts } = runner([{ text: approveText }]);
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+      expect(checkouts).toHaveLength(1);
+      expect(checkouts[0].released).toBe(true);
+    });
+
+    it("removes the checkout even when the reviewer run blows up", async () => {
+      const { deps, checkouts } = runner([]);
+      deps.runner = async () => { throw new Error("harness exploded"); };
+
+      await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("harness exploded");
+      expect(checkouts[0].released).toBe(true);
+      expect(gh.recordPrReview).not.toHaveBeenCalled();
+    });
+
+    it("uses a fresh checkout for each attempt when falling back to a self-review", async () => {
+      const { deps, calls, checkouts } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+      expect(checkouts).toHaveLength(2);
+      expect(calls.map((c) => c.runCwd)).toEqual(checkouts.map((c) => c.path));
+      expect(checkouts.every((c) => c.released)).toBe(true);
+    });
+
+    it("fails closed when no exact-head checkout can be provided: no review, nothing recorded", async () => {
+      const { deps, calls } = runner([{ text: approveText }]);
+      deps.checkout = async () => { throw new Error("could not check out PR #62 head aaaaaaaa"); };
+
+      await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("could not check out PR #62");
+      expect(calls).toHaveLength(0);
+      expect(gh.recordPrReview).not.toHaveBeenCalled();
+      expect(gh.editIssue).not.toHaveBeenCalled();
+    });
+
+    it("asks for the head the PR had when the review began", async () => {
+      const seen: string[] = [];
+      const { deps } = runner([{ text: approveText }]);
+      const inner = deps.checkout;
+      deps.checkout = async (p) => { seen.push(p.headSha); return inner(p); };
+
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+      expect(seen).toEqual([head]);
+    });
   });
 
   it("records request-changes and bounces the issue", async () => {

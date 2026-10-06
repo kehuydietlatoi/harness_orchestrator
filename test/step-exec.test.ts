@@ -9,7 +9,7 @@ vi.mock("../src/github/github.js", () => ({
   prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(),
 }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn() }));
-vi.mock("../src/git/worktree.js", () => ({ worktreePath: vi.fn(), removeWorktree: vi.fn() }));
+vi.mock("../src/git/worktree.js", () => ({ observeWorktree: vi.fn(), worktreePath: vi.fn(), removeWorktree: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
 vi.mock("../src/tasks/runner.js", () => ({
   recordRun: vi.fn(),
@@ -25,7 +25,7 @@ import { availabilityPath, markUnavailable, unavailableUntil } from "../src/boar
 import { merge } from "../src/board/review.js";
 import { NoReviewerError, runAutomatedReview } from "../src/board/review-run.js";
 import { resolveBaseBranch } from "../src/git/git.js";
-import { worktreePath } from "../src/git/worktree.js";
+import { observeWorktree } from "../src/git/worktree.js";
 import * as gh from "../src/github/github.js";
 import type { TaskObservation } from "../src/tasks/observe.js";
 import { recordRun } from "../src/tasks/runner.js";
@@ -63,7 +63,10 @@ function fakeEnv(opts: {
   head?: string;
   dirty?: boolean;
   pushCode?: number;
+  /** Whether the base branch is an ancestor of HEAD (conflict resolution check). */
   ancestor?: boolean;
+  /** Whether the worktree HEAD contains the PR head (the pre-flight worktree check). */
+  headContained?: boolean;
 }) {
   const agentCalls: Array<Parameters<StepEnv["runAgent"]>[0]> = [];
   const gitCalls: string[][] = [];
@@ -80,7 +83,10 @@ function fakeEnv(opts: {
       if (args[0] === "rev-parse") return { ...ok, stdout: `${opts.head ?? NEW_HEAD}\n` };
       if (args[0] === "status") return { ...ok, stdout: opts.dirty ? " M file.ts\n" : "" };
       if (args[0] === "push") return { code: opts.pushCode ?? 0, stdout: "", stderr: opts.pushCode ? "rejected" : "" };
-      if (args[0] === "merge-base") return { code: opts.ancestor === false ? 1 : 0, stdout: "", stderr: "" };
+      if (args[0] === "merge-base") {
+        const intact = args[2] === HEAD ? opts.headContained !== false : opts.ancestor !== false;
+        return { code: intact ? 0 : 1, stdout: "", stderr: "" };
+      }
       return { ...ok, stdout: "" };
     },
   };
@@ -94,7 +100,9 @@ describe("step executors", () => {
     cwd = mkdtempSync(join(tmpdir(), "orch-step-"));
     wt = mkdtempSync(join(tmpdir(), "orch-step-wt-"));
     vi.resetAllMocks();
-    vi.mocked(worktreePath).mockReturnValue(wt);
+    vi.mocked(observeWorktree).mockResolvedValue({
+      outcome: "usable", worktree: { path: wt, branch: "task/38-add-the-thing" },
+    });
     vi.mocked(resolveBaseBranch).mockResolvedValue({ name: "main", ref: "refs/heads/main" });
     vi.mocked(gh.failingChecks).mockResolvedValue(["build", "lint"]);
   });
@@ -223,11 +231,81 @@ describe("step executors", () => {
     });
 
     it("fails when the task worktree is gone", async () => {
-      vi.mocked(worktreePath).mockReturnValue(join(wt, "does-not-exist"));
+      vi.mocked(observeWorktree).mockResolvedValue({ outcome: "absent" });
       const { env, agentCalls } = fakeEnv({});
       const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+      expect(result.detail).toContain("is missing");
       expect(result.detail).toContain("orch repair 38");
       expect(agentCalls).toHaveLength(0);
+    });
+
+    describe("worktree verification (a directory existing is not enough)", () => {
+      it.each([
+        ["detached or unregistered", { outcome: "conflict" as const, detail: "worktree path is attached to 'detached HEAD', expected 'task/38-add-the-thing'" }],
+        ["unreadable", { outcome: "error" as const, detail: "git worktree list failed" }],
+      ])("refuses a %s worktree before any agent runs or anything is pushed", async (_name, seen) => {
+        vi.mocked(observeWorktree).mockResolvedValue(seen);
+        const { env, agentCalls, gitCalls } = fakeEnv({});
+
+        const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+        expect(result.signal).toBe("step.failed");
+        expect(result.detail).toContain("not usable");
+        expect(result.detail).toContain(seen.detail);
+        expect(agentCalls).toHaveLength(0);
+        expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+      });
+
+      it("refuses a worktree on a different branch than the PR", async () => {
+        vi.mocked(observeWorktree).mockResolvedValue({
+          outcome: "usable", worktree: { path: wt, branch: "task/99-something-else" },
+        });
+        const { env, agentCalls, gitCalls } = fakeEnv({});
+
+        const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+        expect(result.detail).toContain("is on 'task/99-something-else' but PR #62 is 'task/38-add-the-thing'");
+        expect(agentCalls).toHaveLength(0);
+        expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+      });
+
+      it("refuses a worktree whose history does not contain the PR head", async () => {
+        const { env, agentCalls, gitCalls } = fakeEnv({ headContained: false });
+
+        const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+        expect(result.detail).toContain(`does not contain PR head ${HEAD.slice(0, 8)}`);
+        expect(agentCalls).toHaveLength(0);
+        expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+      });
+
+      it("fetches the PR branch first so a head pushed from elsewhere is known locally", async () => {
+        const { env, gitCalls } = fakeEnv({});
+        await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+        expect(gitCalls[0]).toEqual(["fetch", "origin", "task/38-add-the-thing"]);
+        expect(gitCalls[1]).toEqual(["merge-base", "--is-ancestor", HEAD, "HEAD"]);
+      });
+
+      it("applies the same checks before resolving a conflict", async () => {
+        vi.mocked(observeWorktree).mockResolvedValue({
+          outcome: "usable", worktree: { path: wt, branch: "task/99-something-else" },
+        });
+        const { env, agentCalls, gitCalls } = fakeEnv({});
+
+        const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
+
+        expect(result.signal).toBe("step.failed");
+        expect(result.detail).toContain("refusing to edit or push");
+        expect(agentCalls).toHaveLength(0);
+        expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+
+        const second = fakeEnv({ headContained: false });
+        vi.mocked(observeWorktree).mockResolvedValue({
+          outcome: "usable", worktree: { path: wt, branch: "task/38-add-the-thing" },
+        });
+        expect((await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, second.env)).detail).toContain("does not contain PR head");
+        expect(second.agentCalls).toHaveLength(0);
+      });
     });
 
     it("reports a generic crash as a failure, not an outage", async () => {
@@ -253,7 +331,7 @@ describe("step executors", () => {
       const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
 
       expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'claude'" });
-      expect(gitCalls[0]).toEqual(["fetch", "origin", "main"]);
+      expect(gitCalls.find((a) => a[0] === "fetch" && a[2] === "main")).toEqual(["fetch", "origin", "main"]);
       expect(agentCalls[0].agent).toBe("claude");
       expect(agentCalls[0].prompt).toContain("git merge origin/main");
       expect(agentCalls[0].prompt).toContain("not a rebase");

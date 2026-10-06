@@ -32,12 +32,15 @@ export async function autopilotCommand(opts: {
   const cfg = loadConfig(cwd);
 
   if (opts.dryRun) {
-    const tasks = await observeTasks(cfg, cwd);
+    const { tasks, unobserved } = await observeTasks(cfg, cwd);
     console.log(pc.bold(`orch autopilot --dry-run — ${tasks.length} open task PR(s)\n`));
     if (!tasks.length) console.log(pc.dim("  (no open task PRs; autopilot would claim new work instead)"));
     for (const t of tasks) {
       console.log(`  #${t.issue.number} PR #${t.pr.number} by ${t.author}: ${pc.cyan(describeStep(t.step))}` +
         pc.dim(`  [round ${t.facts.rounds}/${t.facts.maxRounds}]`));
+    }
+    if (unobserved.length) {
+      console.log(pc.yellow(`  could not observe PR(s): ${unobserved.map((n) => `#${n}`).join(", ")} (autopilot would keep retrying)`));
     }
     // Say what it would start, and what it would leave alone, so nothing is claimed by surprise.
     const eligible = await eligibleIssues(cwd);

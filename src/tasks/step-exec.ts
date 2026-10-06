@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RunContext, RunResult } from "../adapters/types.js";
 import { makeAdapter } from "../adapters/index.js";
@@ -8,7 +8,7 @@ import { NoReviewerError, runAutomatedReview } from "../board/review-run.js";
 import type { RunPhase } from "../board/telemetry.js";
 import type { OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
-import { worktreePath } from "../git/worktree.js";
+import { observeWorktree } from "../git/worktree.js";
 import { commentOnPr, editIssue, failingChecks } from "../github/github.js";
 import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS } from "../github/labels.js";
 import { exec } from "../util/exec.js";
@@ -121,9 +121,35 @@ async function pushAndRequeueReview(
   return null; // pushed
 }
 
-function resolveWorktree(obs: TaskObservation, cfg: OrchConfig, cwd: string): string | null {
-  const path = worktreePath(cfg.worktreeRoot, obs.issue.number, cwd);
-  return existsSync(path) ? path : null;
+/**
+ * Prove the task worktree is the one this PR was built in before a writable harness touches it
+ * or anything is pushed from it. "A directory exists" is not enough: a switched, detached, or
+ * unregistered worktree could contribute unrelated commits to the PR branch. Git must register
+ * the path on the expected task branch (`observeWorktree`), that branch must be the PR's, and the
+ * PR head must already be part of its history so that pushing is a plain fast-forward.
+ */
+async function resolveWorktree(
+  obs: TaskObservation,
+  cfg: OrchConfig,
+  cwd: string,
+  env: StepEnv,
+): Promise<{ path: string } | { problem: string }> {
+  const n = obs.issue.number;
+  const repair = `run \`orch repair ${n}\``;
+  const seen = await observeWorktree(n, obs.issue.title, cfg.worktreeRoot, { cwd });
+  if (seen.outcome === "absent") return { problem: `the task worktree for #${n} is missing; ${repair}` };
+  if (seen.outcome !== "usable") return { problem: `the task worktree for #${n} is not usable (${seen.detail}); ${repair}` };
+
+  const { path, branch } = seen.worktree;
+  if (branch !== obs.pr.headRefName) {
+    return { problem: `the task worktree is on '${branch}' but PR #${obs.pr.number} is '${obs.pr.headRefName}'; refusing to edit or push` };
+  }
+  await env.git(["fetch", "origin", obs.pr.headRefName], path); // best-effort: makes the PR head object available locally
+  const contains = await env.git(["merge-base", "--is-ancestor", obs.pr.headSha, "HEAD"], path);
+  if (contains.code !== 0) {
+    return { problem: `the task worktree does not contain PR head ${obs.pr.headSha.slice(0, 8)}; refusing to edit or push` };
+  }
+  return { path };
 }
 
 function followUpLog(cwd: string, issue: number, tag: string): string {
@@ -148,8 +174,9 @@ export async function executeFix(
   const agent = obs.author;
   const pausedUntil = unavailableUntil(agent, cwd);
   if (pausedUntil) return { signal: "agent.unavailable", detail: `'${agent}' is paused until ${pausedUntil.toISOString()}` };
-  const worktree = resolveWorktree(obs, cfg, cwd);
-  if (!worktree) return failure(`the task worktree for #${n} is missing; run \`orch repair ${n}\``);
+  const found = await resolveWorktree(obs, cfg, cwd, env);
+  if ("problem" in found) return failure(found.problem);
+  const worktree = found.path;
 
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const failing = reason === "ci" ? await failingChecks(obs.pr.number, { cwd }) : [];
@@ -205,8 +232,9 @@ export async function executeResolveConflict(
   const n = obs.issue.number;
   const agent = pickResolver(obs.author, cfg, cwd);
   if (!agent) return { signal: "agent.unavailable", detail: "no harness is available to resolve the conflict" };
-  const worktree = resolveWorktree(obs, cfg, cwd);
-  if (!worktree) return failure(`the task worktree for #${n} is missing; run \`orch repair ${n}\``);
+  const found = await resolveWorktree(obs, cfg, cwd, env);
+  if ("problem" in found) return failure(found.problem);
+  const worktree = found.path;
 
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const fetch = await env.git(["fetch", "origin", base.name], worktree);

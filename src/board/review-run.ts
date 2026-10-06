@@ -1,12 +1,14 @@
-import { existsSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { HeadlessResult } from "../adapters/headless.js";
 import { lastFencedBlock, runHeadlessAgent } from "../adapters/headless.js";
 import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { getIssue, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
-import { worktreePath } from "../git/worktree.js";
 import { resolveTaskModel } from "../tasks/runner.js";
+import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import type { ReviewMode } from "./approval.js";
 import { markUnavailable, unavailableAgents } from "./availability.js";
@@ -91,6 +93,55 @@ export function formatReviewPrompt(params: {
   ].join("\n");
 }
 
+/** A checkout of exactly the commit under review. `release` removes it (safe to call once). */
+export interface ReviewCheckout {
+  path: string;
+  release(): Promise<void>;
+}
+
+type GitRunner = (args: string[], cwd: string) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+/**
+ * Give the reviewer an exact, throwaway checkout of the PR head. The verdict is recorded against
+ * `pr.headSha`, so the files the reviewer Reads (the diff is truncated when large) must be that
+ * revision - not the author's worktree, which may be ahead, behind, dirty or on another branch,
+ * and not the repository checkout, which is usually on a different branch altogether. If no such
+ * checkout can be made this throws: reviewing the wrong code and approving the right SHA is worse
+ * than not reviewing.
+ */
+export async function prepareReviewCheckout(
+  pr: Pick<Pr, "number" | "headSha">,
+  cwd: string,
+  git: GitRunner = (args, dir) => exec("git", args, { cwd: dir }),
+): Promise<ReviewCheckout> {
+  const sha = pr.headSha;
+  const have = await git(["cat-file", "-e", `${sha}^{commit}`], cwd);
+  if (have.code !== 0) {
+    const fetch = await git(["fetch", "origin", `pull/${pr.number}/head`], cwd);
+    if (fetch.code !== 0) {
+      throw new Error(`PR #${pr.number} head ${sha.slice(0, 8)} is not available locally and could not be fetched: ${fetch.stderr.trim()}`);
+    }
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), `orch-review-${pr.number}-`));
+  const release = async (): Promise<void> => {
+    await git(["worktree", "remove", "--force", dir], cwd);
+    rmSync(dir, { recursive: true, force: true });
+  };
+  try {
+    const add = await git(["worktree", "add", "--detach", dir, sha], cwd);
+    if (add.code !== 0) throw new Error(`could not check out PR #${pr.number} head ${sha.slice(0, 8)}: ${add.stderr.trim()}`);
+    const head = await git(["rev-parse", "HEAD"], dir);
+    if (head.code !== 0 || head.stdout.trim() !== sha) {
+      throw new Error(`review checkout for PR #${pr.number} is not at the PR head ${sha.slice(0, 8)}`);
+    }
+  } catch (error) {
+    await release().catch(() => undefined);
+    throw error;
+  }
+  return { path: dir, release };
+}
+
 export interface ReviewRunDeps {
   runner(args: {
     reviewer: string;
@@ -99,6 +150,8 @@ export interface ReviewRunDeps {
     runCwd: string;
     logName: string;
   }): Promise<HeadlessResult>;
+  /** An exact checkout of the PR head for the reviewer to read. */
+  checkout(pr: Pick<Pr, "number" | "headSha">): Promise<ReviewCheckout>;
   now(): Date;
 }
 
@@ -119,6 +172,7 @@ function defaultDeps(cfg: OrchConfig, cwd: string): ReviewRunDeps {
         readOnly: true,
         runCwd,
       }),
+    checkout: (pr) => prepareReviewCheckout(pr, cwd),
     now: () => new Date(),
   };
 }
@@ -168,18 +222,24 @@ export async function runAutomatedReview(
     tried.add(pick.reviewer);
 
     const model = resolveTaskModel(pick.reviewer, issue, cfg);
-    const worktree = worktreePath(cfg.worktreeRoot, n, cwd);
     const prompt = formatReviewPrompt({
       issue, pr, diff: await prDiff(prNum, { cwd }), author, reviewer: pick.reviewer, mode: pick.mode,
     });
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
-    const run = await deps.runner({
-      reviewer: pick.reviewer,
-      prompt,
-      model,
-      runCwd: existsSync(worktree) ? worktree : cwd,
-      logName: `review-${prNum}-${pick.reviewer}`,
-    });
+    const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
+    let run: HeadlessResult;
+    try {
+      run = await deps.runner({
+        reviewer: pick.reviewer,
+        prompt,
+        model,
+        runCwd: checkout.path,
+        logName: `review-${prNum}-${pick.reviewer}`,
+      });
+    } finally {
+      await checkout.release().catch((error: unknown) =>
+        log.warn(`could not remove review checkout ${checkout.path}: ${error instanceof Error ? error.message : String(error)}`));
+    }
 
     const verdict = run.code === 0 && !run.timedOut ? parseVerdict(run.text) : null;
     if (!verdict) {

@@ -3,7 +3,7 @@ import {
   MAX_STEP_FAILURES, runAutopilot, type ActionableStep, type AutopilotOptions, type CoordinatorDeps,
 } from "../src/tasks/coordinator.js";
 import type { OrchEvent } from "../src/tasks/events.js";
-import type { TaskObservation } from "../src/tasks/observe.js";
+import type { Observation, TaskObservation } from "../src/tasks/observe.js";
 import type { RunSummary } from "../src/tasks/runner.js";
 import type { StepResult } from "../src/tasks/step-exec.js";
 import { decideStep, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
@@ -44,6 +44,8 @@ class World {
   maxRounds = 3;
   requireHumanMerge = false;
   observeFailures = 0;
+  /** The next N polls cannot read any PR (they are reported as unobserved). */
+  unobservedPolls = 0;
   implementThrows = false;
   /** Called once per poll so a test can flip external state (CI finishing, a human acting). */
   onSleep?: (calls: number) => void;
@@ -51,9 +53,14 @@ class World {
 
   add(p: SimPr): SimPr { this.prs.set(p.issue, p); return p; }
 
-  observe = async (): Promise<TaskObservation[]> => {
+  observe = async (): Promise<Observation> => {
     if (this.observeFailures > 0) { this.observeFailures -= 1; throw new Error("gh unreachable"); }
-    return [...this.prs.values()].filter((p) => !p.merged).map((p) => {
+    const open = [...this.prs.values()].filter((p) => !p.merged);
+    if (this.unobservedPolls > 0) {
+      this.unobservedPolls -= 1;
+      return { tasks: [], unobserved: open.map((p) => 1000 + p.issue) };
+    }
+    const tasks = open.map((p) => {
       const facts = {
         attention: p.attention,
         pr: { number: 1000 + p.issue, head: `h${p.version}`, checks: p.checks, mergeable: p.mergeable },
@@ -67,6 +74,7 @@ class World {
         reviews: [], facts, step: decideStep(facts), feedback: p.changes ? "please fix" : null,
       } as TaskObservation;
     });
+    return { tasks, unobserved: [] };
   };
 
   execute = async (obs: TaskObservation, step: ActionableStep): Promise<StepResult> => {
@@ -267,6 +275,53 @@ describe("runAutopilot", () => {
 
     expect(summary.merged).toEqual([38]);
     expect(w.said.some((l) => l.includes("could not observe the board"))).toBe(true);
+  });
+
+  it("gives up on a persistently paused harness once --max-idle passes, instead of retrying forever", async () => {
+    const w = new World();
+    const paused: StepResult = { signal: "agent.unavailable", detail: "all harnesses paused" };
+    w.add(pr(38, { overrides: { review: Array.from({ length: 20 }, () => paused) } }));
+
+    // The pause backoff is 60s, so with a 90s idle limit the loop may retry exactly once (t=60s) and
+    // must stop at t=120s. If a refusal counted as progress it would reset the timer on every retry.
+    const summary = await drive(w, { maxIdleMs: 90_000 });
+
+    expect(summary.stopped).toBe("idle-timeout");
+    expect(w.calls).toEqual(["review:38", "review:38"]);
+    expect(summary.failures).toBe(0);
+  });
+
+  it("still counts a real step as progress, so a slow but advancing task is not abandoned", async () => {
+    const w = new World();
+    w.add(pr(38, { verdicts: ["changes", "changes", "approve"], overrides: { review: [{ signal: "agent.unavailable" }] } }));
+
+    const summary = await drive(w, { maxIdleMs: 90_000 });
+
+    expect(summary.merged).toEqual([38]);
+    expect(summary.stopped).toBe("drained");
+  });
+
+  it("keeps polling when a PR could not be read, even with nothing else to do (--no-claim)", async () => {
+    const w = new World();
+    w.add(pr(38, { approved: true }));
+    w.unobservedPolls = 3; // a transient lookup failure on the only PR, for three polls
+
+    const summary = await drive(w, { claim: "none" });
+
+    expect(summary).toMatchObject({ merged: [38], stopped: "drained" });
+    expect(w.said.some((l) => l.includes("could not observe PR #1038; will retry"))).toBe(true);
+    expect(w.sleeps).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not report drained while a PR stays unreadable; it times out instead", async () => {
+    const w = new World();
+    w.add(pr(38, { approved: true }));
+    w.unobservedPolls = Number.MAX_SAFE_INTEGER;
+
+    const summary = await drive(w, { claim: "none", maxIdleMs: 10_000 });
+
+    expect(summary.stopped).toBe("idle-timeout");
+    expect(summary.merged).toEqual([]);
   });
 
   it("never runs more steps at once than its slot limit", async () => {

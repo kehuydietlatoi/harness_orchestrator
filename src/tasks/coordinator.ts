@@ -1,7 +1,7 @@
 import type { OrchConfig } from "../config.js";
 import { unavailableUntil } from "../board/availability.js";
 import { appendEvent, type OrchEvent } from "./events.js";
-import { observeTasks, type TaskObservation } from "./observe.js";
+import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
 import { processNext, type RunSummary } from "./runner.js";
 import {
   executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, type StepResult,
@@ -40,7 +40,7 @@ export interface AutopilotSummary {
 
 /** All I/O the loop performs, injected so whole task lifecycles can be simulated in tests. */
 export interface CoordinatorDeps {
-  observe(): Promise<TaskObservation[]>;
+  observe(): Promise<Observation>;
   execute(obs: TaskObservation, step: ActionableStep): Promise<StepResult>;
   /** Claim and implement the next task routed to `agent`; null when there is nothing for it. */
   implement(agent: string): Promise<RunSummary | null>;
@@ -119,7 +119,9 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   let lastProgress = deps.now();
 
   const settle = (issue: number, step: string, result: StepResult, startedAt: number): void => {
-    lastProgress = deps.now();
+    // A refusal because a harness is paused is not progress: counting it would let a cooldown that
+    // outlasts --max-idle keep resetting the timer, so the loop would never give up waiting.
+    if (result.signal !== "agent.unavailable") lastProgress = deps.now();
     deps.record({ type: "step.finished", issue, step, signal: result.signal, detail: result.detail, durationMs: deps.now() - startedAt });
     deps.say(`  #${issue} ${step} -> ${result.signal}${result.detail ? ` (${result.detail})` : ""}`);
     switch (result.signal) {
@@ -202,16 +204,21 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     }
 
     let tasks: TaskObservation[] = [];
+    let unobserved: number[] = [];
     let observed = true;
     try {
-      tasks = await deps.observe();
+      ({ tasks, unobserved } = await deps.observe());
     } catch (error) {
       observed = false; // GitHub unreachable: say so and retry rather than concluding "nothing to do"
       deps.say(`  could not observe the board: ${error instanceof Error ? error.message : String(error)}`);
     }
+    if (unobserved.length > 0) {
+      // A PR we could not read is unknown, not finished: keep polling instead of reporting "drained".
+      deps.say(`  could not observe PR${unobserved.length > 1 ? "s" : ""} ${unobserved.map((n) => `#${n}`).join(", ")}; will retry`);
+    }
 
     const actionable: Array<{ obs: TaskObservation; step: ActionableStep }> = [];
-    let waiting = !observed;
+    let waiting = !observed || unobserved.length > 0;
     for (const obs of tasks) {
       const n = obs.issue.number;
       if (inflight.has(`issue:${n}`)) continue;

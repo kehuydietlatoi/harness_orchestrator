@@ -42,6 +42,11 @@ missing. Issue #71 was interrupted exactly this way.
   cooldown are caller-supplied process state under one shared identity.
 - Reviewer sessions are fresh by construction (a new process per review), so no author context
   leaks into the review. Resuming the *author's* session after a review is separate work.
+- The verdict is recorded against the PR head SHA, so the reviewer reads a throwaway detached
+  checkout of exactly that commit (`prepareReviewCheckout`), created before the run and removed
+  after it. The author's worktree (possibly ahead, behind, dirty or on another branch) and the
+  repository checkout are never used, and if no exact-head checkout can be made the review fails
+  closed with nothing recorded.
 - A harness that is paused is skipped by the dispatcher; its in-flight failed task still lands in
   `needs-attention` and needs `orch repair`/re-dispatch after the reset (automatic requeue is
   future work).
