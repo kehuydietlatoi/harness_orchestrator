@@ -221,6 +221,9 @@ async function listWorktrees(cwd: string): Promise<Worktree[]> {
 /** Repository-scoped CI cache, refreshed on new heads or after ten seconds. */
 const checksCache = new Map<string, { state: ChecksState; expires: number }>();
 
+/** Successful task PR history (including empty results), refreshed every minute. */
+const historyCache = new Map<string, { prs: Pr[]; expires: number }>();
+
 /** CI roll-up for the PRs whose issue is awaiting review — the only ones the
  * dashboard renders a checks badge for. Unknown SHAs use the same short TTL. */
 async function reviewChecks(prs: readonly Pr[], issues: readonly Issue[], cwd: string): Promise<Map<number, ChecksState>> {
@@ -258,12 +261,12 @@ export async function buildSnapshot(cwd: string): Promise<Snapshot> {
     Promise.resolve(readRuns(cwd)),
     getRepoUrl({ cwd }),
   ]);
-  const active = new Set(issues.map((issue) => issue.number));
-  for (const number of locks) active.add(number);
+  const localResources = new Set(locks);
   for (const worktree of worktrees) {
     const number = worktreeIssueNumber(worktree);
-    if (number !== null) active.add(number);
+    if (number !== null) localResources.add(number);
   }
+  const active = new Set([...issues.map((issue) => issue.number), ...localResources]);
   // Only retained resources warrant individual issue reads. Old task branches
   // alone are normal merge residue and must not grow polling work with history.
   const openNumbers = new Set(issues.map((issue) => issue.number));
@@ -292,24 +295,32 @@ export async function buildSnapshot(cwd: string): Promise<Snapshot> {
     try { branches.set(number, { state: await compareBranchToBase(ref, base, cwd) }); }
     catch (error) { branches.set(number, { state: "absent", error: String(error) }); }
   }
-  // An open PR dominates prFact, so history is needed only for active tasks
-  // without one. Include the expected branch when its local ref was removed.
+  // An open PR dominates prFact. Only tasks with local resources need history;
+  // plain todos must not cause per-issue GitHub calls on dashboard polls.
+  // Include the expected branch for retained locks/worktrees with no local ref.
   const withOpenPr = new Set(prs.map(prIssueNumber));
   const issueNumbers = new Set(issues.map((issue) => issue.number));
   for (const issue of issues) {
-    if (!taskBranches.has(issue.number)) {
+    if (localResources.has(issue.number) && !taskBranches.has(issue.number)) {
       taskBranches.set(issue.number, new Set([branchName(issue.number, slugify(issue.title))]));
     }
   }
+  for (const [key, value] of historyCache) if (value.expires <= Date.now()) historyCache.delete(key);
   for (const [number, names] of taskBranches) {
     if (withOpenPr.has(number)) continue;
     try {
-      const history = await Promise.all([
-        ...[...names].map((name) => getBranchPrs(name, { cwd })),
-        ...(issueNumbers.has(number) ? [getIssueReferencedPrs(number, { cwd })] : []),
-      ]);
-      const taskPrs = new Map(history.flat().filter((pr) => prIssueNumber(pr) === number).map((pr) => [pr.number, pr]));
-      prs.push(...taskPrs.values());
+      const key = `${cwd}:${number}`;
+      const cached = historyCache.get(key);
+      let taskPrs = cached?.prs;
+      if (!cached || cached.expires <= Date.now()) {
+        const history = await Promise.all([
+          ...[...names].map((name) => getBranchPrs(name, { cwd })),
+          ...(issueNumbers.has(number) ? [getIssueReferencedPrs(number, { cwd })] : []),
+        ]);
+        taskPrs = [...new Map(history.flat().filter((pr) => prIssueNumber(pr) === number).map((pr) => [pr.number, pr])).values()];
+        historyCache.set(key, { prs: taskPrs, expires: Date.now() + 60_000 });
+      }
+      prs.push(...taskPrs!);
     } catch (error) {
       const branch = branches.get(number);
       branches.set(number, { state: branch?.state ?? "absent",
