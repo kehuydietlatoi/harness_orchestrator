@@ -634,6 +634,15 @@ describe("step executors", () => {
       expect(vi.mocked(gh.commentOnPr).mock.calls[0][1]).toContain("CI is still failing after 3 fix rounds");
     });
 
+    it("tells the human how to hand the task back, including that a spent round budget must be raised first", async () => {
+      await executeEscalate(obs(), "review feedback is still unresolved after 3 fix rounds (limit 3)", cwd);
+      const comment = vi.mocked(gh.commentOnPr).mock.calls[0][1];
+
+      expect(comment).toContain("Remove the `needs-attention` label");
+      expect(comment).toContain("raise `maxReviewRounds`");
+      expect(comment).toContain("escalate again straight away");
+    });
+
     it("still escalates when the comment cannot be posted", async () => {
       vi.mocked(gh.commentOnPr).mockRejectedValue(new Error("offline"));
       expect((await executeEscalate(obs(), "why", cwd)).signal).toBe("task.escalated");

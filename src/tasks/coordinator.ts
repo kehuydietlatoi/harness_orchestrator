@@ -195,6 +195,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         summary.escalated.push(issue);
         escalationFailures.delete(issue);
         escalateRetryAt.delete(issue);
+        // The task is now a human's. The comment promises that removing `needs-attention` hands it back to the
+        // loop, so whatever made us escalate must not linger: with the old failure count still on record, a
+        // handback while we are running would re-escalate at once instead of trying the step again.
+        failing.delete(issue);
+        retryAt.delete(issue);
+        lastUnavailable.delete(issue);
         break;
       default:
         failing.delete(issue);

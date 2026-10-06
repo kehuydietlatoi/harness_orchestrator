@@ -635,6 +635,63 @@ describe("runAutopilot", () => {
     });
   });
 
+  describe("a human hands an escalated task back while the loop is still running", () => {
+    const failed: StepResult = { signal: "step.failed", detail: "no new commits" };
+
+    it("tries the original step again instead of re-escalating on the old failure count", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true, overrides: { fix: [failed, failed] } })); // two failed fixes -> escalated
+      w.add(pr(39, { approved: true, checks: "pending" })); // keeps the loop alive while the human decides
+      w.onSleep = (n) => {
+        if (n === 100) w.prs.get(38)!.attention = false; // the human removes `needs-attention`
+        if (n === 200) w.prs.get(39)!.checks = "pass";
+      };
+
+      const summary = await drive(w);
+
+      // Fixed twice (both fail), escalated once, then - after the handback - the fix is simply tried again and
+      // works, and the task goes on to review and merge. It is not escalated a second time.
+      expect(w.calls).toEqual([
+        "fix:review:38", "fix:review:38", "escalate:38", "fix:review:38", "review:38", "merge:38", "merge:39",
+      ]);
+      expect(summary).toMatchObject({ escalated: [38], merged: [38, 39], stopped: "drained" });
+    });
+
+    it("does not make the handed-back step wait out a retry timer left over from before the escalation", async () => {
+      const w = new World();
+      w.maxRounds = 1;
+      w.add(pr(38, { changes: true, overrides: { fix: [failed] } })); // the first fix fails: backed off for 30s
+      w.add(pr(39, { approved: true, checks: "pending" })); // keeps the loop alive meanwhile
+      w.onSleep = (n) => {
+        if (n === 5) w.prs.get(38)!.rounds = 1; // the budget is now spent -> escalate (long before the 30s is up)
+        if (n === 10) { const p = w.prs.get(38)!; p.attention = false; p.rounds = 0; } // handed back, fresh budget
+        if (n === 120) w.prs.get(39)!.checks = "pass";
+      };
+      const deps = w.deps();
+      const inner = deps.execute;
+      const started = Date.now();
+      const fixAt: number[] = [];
+      deps.execute = async (obs, step) => {
+        if (step.kind === "fix") fixAt.push(Date.now() - started);
+        return inner(obs, step);
+      };
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 2000 && !done; i += 1) {
+        await vi.advanceTimersByTimeAsync(1000);
+        w.sleeps += 1;
+        w.onSleep?.(w.sleeps);
+      }
+
+      expect(done).toBe(true);
+      expect(w.calls.slice(0, 3)).toEqual(["fix:review:38", "escalate:38", "fix:review:38"]);
+      // The first fix backed off until t=30s, but after the escalation and handback that timer is gone.
+      expect(fixAt[1]).toBeLessThan(20_000);
+      expect((await run).escalated).toEqual([38]);
+    });
+  });
+
   describe("escalation that itself fails", () => {
     const failed: StepResult = { signal: "step.failed", detail: "label write failed" };
     /** A task that must escalate (its one allowed fix round is spent), whose escalation writes then fail. */

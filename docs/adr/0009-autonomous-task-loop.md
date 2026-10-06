@@ -89,6 +89,12 @@ ready meanwhile (a merge needs no agent). Only the refused step itself is a "ret
 the idle deadline is enforced *before* such a retry is relaunched: with `--poll` at least as long as the
 pause, every poll would otherwise make the retry actionable again and the loop would never give up.
 
+A successful escalation hands the task to a human and clears the loop's memory of it (failure count,
+retry timer, pause marker). The PR comment promises that removing `needs-attention` hands it back, so a
+handback while the loop is running tries the original step afresh instead of re-escalating on the old
+failure count. Rounds already spent are counted from the PR's own history, so when it was the round
+budget that ran out the comment says to raise `maxReviewRounds` first.
+
 Escalation is the safety valve, so it is retried, but not blindly: when escalating itself fails (the
 label or comment write errors), the attempt backs off, is bounded (`MAX_ESCALATION_FAILURES`, then the
 issue is reported as `escalationFailed` and left alone), and is not counted as progress, so `--max-idle`

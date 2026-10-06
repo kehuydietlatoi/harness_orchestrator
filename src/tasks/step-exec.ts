@@ -335,7 +335,9 @@ export async function executeEscalate(obs: TaskObservation, reason: string, cwd:
     await commentOnPr(
       obs.pr.number,
       `**orch autopilot stopped on #${obs.issue.number}.** ${reason}.\n\n` +
-        "A human needs to decide what happens next. Remove the `needs-attention` label to hand the task back to the loop.",
+        "A human needs to decide what happens next. Remove the `needs-attention` label to hand the task back to the loop. " +
+        "If the round budget is what ran out, raise `maxReviewRounds` in `orch.config.json` first (or fix the PR by hand): " +
+        "rounds already spent are counted from the PR's history, so the loop would otherwise escalate again straight away.",
       { cwd },
     );
   } catch (error) {
