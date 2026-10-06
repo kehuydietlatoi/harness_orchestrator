@@ -66,6 +66,19 @@ before starting tasks so new worktrees inherit it.
 
 ## The loop
 
+**One gate, then hands-off.** `orch plan` opens an interactive session with the lead
+(Claude on Opus by default). Brainstorm the goal with it; it saves `tickets.json` (with
+routing) and `plan-brief.md` (the reasons behind the plan). orch previews the plan and asks
+once: *Create N issues, route them, and start the autopilot?* On yes it creates the issues
+(the brief embedded in each), has the judge route any ticket the plan left unrouted, and
+runs `orch autopilot --issues <the plan's issues>` until every one is merged or handed to
+you. `orch plan tickets.json --brief plan-brief.md --yes` does the same non-interactively;
+`--no-run` stops after routing. If the run is interrupted, it prints the
+`orch autopilot --issues …` command that resumes it. See
+[ADR-0010](docs/adr/0010-lead-at-decision-points.md).
+
+The individual steps remain available:
+
 ```bash
 orch plan                                         # interactive planning (currently Claude)
 # Or generate a headless draft:
@@ -105,7 +118,9 @@ escalates to you (`needs-attention` plus a PR comment) after `maxReviewRounds` f
 failed attempts at a step. `orch autopilot --dry-run` shows the next step for every open PR without
 doing anything (it also lists what it would claim and what it would skip); set `requireHumanMerge: true`
 to stop at an approved, green PR. Autopilot **only starts issues that carry an `agent:` label**: unrouted
-backlog is left alone (route it with `orch assign`), and `--no-claim` makes it drive existing PRs only. See
+backlog is left alone (route it with `orch assign`), and `--no-claim` makes it drive existing PRs only.
+`--issues 12,13,14` scopes a run to those issues (one plan's tickets): nothing else is claimed or driven,
+and the run stops with *plan complete* once each is closed or escalated (or lists the ones still open). See
 [ADR-0009](docs/adr/0009-autonomous-task-loop.md).
 
 Review and merge are separate steps. `orch review-run <pr>` reviews a PR headlessly in a
@@ -168,7 +183,7 @@ request checks. Off-machine access would require additional authentication.
 | Command | Purpose |
 |---|---|
 | `orch init` / `orch doctor` | scaffold project setup / verify environment, labels, and dependencies |
-| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example] [--brief <file>]` | interactive planning without args; headless draft; file preview or issue creation; example ticket format |
+| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example] [--brief <file>] [--yes] [--no-run]` | interactive planning without args; headless draft; file preview or issue creation; example ticket format |
 | `orch assign` | emit a whole-graph routing brief with telemetry |
 | `orch assign --judge` | propose routing as JSON |
 | `orch assign --auto [--dry-run]` | judge and apply routing, or preview changes |
@@ -180,7 +195,7 @@ request checks. Off-machine access would require additional authentication.
 | `orch run [--agent x] [--max n] [--once]` | process eligible tasks in isolated worktrees |
 | `orch dispatch <issue>` | run one routed todo by issue number |
 | `orch review-queue` / `orch review <pr>` | list review work / print a diff and checklist |
-| `orch autopilot [--max n] [--poll s] [--max-idle min] [--no-claim] [--dry-run]` | run tasks end to end (implement, review, fix, resolve conflicts, merge), escalating to a human when stuck |
+| `orch autopilot [--max n] [--poll s] [--max-idle min] [--no-claim] [--dry-run] [--issues list]` | run tasks end to end (implement, review, fix, resolve conflicts, merge), escalating to a human when stuck |
 | `orch review-run <pr> [--agent <reviewer>]` | headless read-only review that records the verdict; falls back to a fresh self-review when the other harness is out of usage |
 | `orch review-approve <pr>` | record a cross-review approval (`--self` for the fallback) |
 | `orch review-changes <pr> --notes "..."` | request changes from the author |

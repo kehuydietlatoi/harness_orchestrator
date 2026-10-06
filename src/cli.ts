@@ -144,6 +144,7 @@ program
   .option("--max-idle <minutes>", "stop after this long with work waiting and no progress (default 30)")
   .option("--no-claim", "only drive pull requests that already exist; never start new tasks")
   .option("--dry-run", "show the next step for every open task PR, and which issues it would claim, without doing anything")
+  .option("--issues <list>", "scope the run to these issues (e.g. 12,13,14, one plan's tickets); stops when they are done")
   .action(wrap(autopilotCommand));
 
 program
@@ -219,6 +220,8 @@ program
   .option("--dry-run", "validate a tickets file and preview the issues without creating them")
   .option("--example", "print an annotated example tickets.json")
   .option("--brief <file>", "plan brief (markdown) embedded in every created issue as collapsed plan context")
+  .option("-y, --yes", "approve the plan: create the issues, route them, and start an autopilot scoped to them")
+  .option("--no-run", "with the pipeline: create and route, but do not start the autopilot")
   .action(wrap(planCommand));
 
 program

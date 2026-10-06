@@ -129,7 +129,7 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 ## Autopilot (the autonomous loop)
 
 `orch autopilot` (`src/tasks/coordinator.ts`) only *starts* issues that carry an `agent:` label (`--no-claim`: none), and drives
-every open task PR. It derives each open task PR's next step from facts
+every open task PR. `--issues <list>` (what the `orch plan` pipeline starts) narrows both to the listed issues. It derives each open task PR's next step from facts
 (`decideStep`, `src/tasks/steps.ts`) and performs it; it adds no labels of its own beyond the ones below.
 
 | Step | Trigger (facts) | Effect | Labels it sets / clears |

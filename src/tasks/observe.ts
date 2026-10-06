@@ -85,9 +85,14 @@ export interface Observation {
 /**
  * Observe every open task PR once. A PR that cannot be observed gets no decision (a decision from
  * partial facts is worse than none) but is reported in `unobserved`, so the caller keeps polling
- * instead of concluding that nothing is left to do.
+ * instead of concluding that nothing is left to do. With `opts.issues`, PRs for any other issue
+ * are skipped before any per-PR lookup (an autopilot run scoped to one plan).
  */
-export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observation> {
+export async function observeTasks(
+  cfg: OrchConfig,
+  cwd: string,
+  opts: { issues?: ReadonlySet<number> } = {},
+): Promise<Observation> {
   const [issues, prs] = await Promise.all([listIssues({ cwd, state: "open" }), listOpenPrs({ cwd })]);
   const open = byNumber(issues);
   const events = readEvents(cwd);
@@ -100,6 +105,7 @@ export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observ
     const n = prIssueNumber(pr);
     const issue = n === null ? undefined : open.get(n);
     if (!issue || n === null) continue;
+    if (opts.issues && !opts.issues.has(n)) continue; // outside this run's scope
     const author = issueAgent(issue);
     if (!author || !cfg.agents.includes(author)) continue; // not an orch-owned task
     const entry = owned.get(n) ?? { issue, author, prs: [] };

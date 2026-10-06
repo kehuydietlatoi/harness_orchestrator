@@ -1,10 +1,14 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import pc from "picocolors";
-import { configExists, loadConfig, resolveLeadModel } from "../config.js";
+import { configExists, loadConfig, resolveLeadModel, type OrchConfig } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
-import { parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
-import { createFromPlan, type Created, type Failed } from "../tasks/plan-create.js";
+import { parseTickets, resolvePlan, type ResolvedPlan, type Ticket } from "../tasks/plan.js";
+import { createFromPlan, type Created, type Failed, type PlanCreateResult } from "../tasks/plan-create.js";
+import { autoRoute } from "./assign.js";
+import { autopilotCommand } from "./autopilot.js";
+import { planGate, runPlanPipeline } from "./plan-pipeline.js";
 import {
   ensurePlanSkill,
   formatInteractiveSeed,
@@ -20,6 +24,10 @@ export interface PlanOptions {
   example?: boolean;
   /** Path to a plan brief (markdown) embedded in every created issue as "Plan context". */
   brief?: string;
+  /** Approve up front: create, route, and start the autopilot without asking. */
+  yes?: boolean;
+  /** Commander sets this to false for `--no-run`: create and route, but do not start the autopilot. */
+  run?: boolean;
 }
 
 /** File the interactive session writes the brainstorm's reasoning to, next to tickets.json. */
@@ -39,7 +47,7 @@ async function repoContext(cwd: string): Promise<string> {
 }
 
 /** Render a resolved plan for humans: the issues that would be created, plus warnings/errors. */
-function printPreview(plan: ResolvedPlan, brief?: string): void {
+function printPreview(plan: ResolvedPlan, brief?: string, note = "(dry run — no issues created)"): void {
   console.log(pc.bold(`Would create ${plan.tickets.length} issue(s):`));
   for (const t of plan.tickets) {
     const meta = [
@@ -59,7 +67,7 @@ function printPreview(plan: ResolvedPlan, brief?: string): void {
   console.log(pc.dim(words ? `  plan brief: ${words} words, embedded in every issue` : "  plan brief: none"));
   plan.warnings.forEach((w) => console.log(pc.yellow(`  warning: ${w}`)));
   plan.errors.forEach((e) => console.log(pc.red(`  error: ${e}`)));
-  if (!plan.errors.length) console.log(pc.dim("  (dry run — no issues created)"));
+  if (!plan.errors.length && note) console.log(pc.dim(`  ${note}`));
 }
 
 function printIssueResults(label: string, issues: readonly Created[], color: (text: string) => string): void {
@@ -72,6 +80,44 @@ function printIssueResults(label: string, issues: readonly Created[], color: (te
 function printFailures(failed: readonly Failed[]): void {
   console.log(pc.red(`Failed ${failed.length} issue(s):`));
   failed.forEach((item) => console.log(`  ${item.title}${item.id ? pc.dim(` (${item.id})`) : ""}: ${item.error}`));
+}
+
+function printCreateResult(result: PlanCreateResult): void {
+  printIssueResults("Created", result.created, pc.green);
+  printIssueResults("Reused", result.reused, pc.cyan);
+  printFailures(result.failed);
+  if (result.failed.length) process.exitCode = 1;
+}
+
+/** Ask one yes/no question on the terminal; anything but y/yes is a no. */
+async function confirm(question: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^y(es)?$/i.test((await rl.question(question)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
+/** Create, route, and (unless --no-run) drive the plan to completion with a scoped autopilot. */
+async function runPipeline(
+  tickets: readonly Ticket[],
+  brief: string | undefined,
+  cfg: OrchConfig,
+  cwd: string,
+  run: boolean,
+): Promise<void> {
+  const result = await runPlanPipeline(
+    { tickets, brief, agents: cfg.agents, run },
+    {
+      create: (t, o) => createFromPlan(t, cwd, undefined, o),
+      report: printCreateResult,
+      route: (only) => autoRoute(cfg, cwd, { only }),
+      autopilot: (issues) => autopilotCommand({ issues: issues.join(",") }),
+      say: (line) => console.log(line),
+    },
+  );
+  if (result.stage === "create-failed" || result.stage === "route-failed") process.exitCode = 1;
 }
 
 export async function planCommand(file: string | undefined, opts: PlanOptions): Promise<void> {
@@ -112,11 +158,12 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
       printPreview(plan, brief);
       throw new Error(`refusing to create: ${plan.errors.length} error(s) in ${file}`);
     }
-    const result = await createFromPlan(tickets, cwd, undefined, { agents, brief });
-    printIssueResults("Created", result.created, pc.green);
-    printIssueResults("Reused", result.reused, pc.cyan);
-    printFailures(result.failed);
-    if (result.failed.length) process.exitCode = 1;
+    // --yes: the whole pipeline (create, route, autopilot); otherwise create only, as always.
+    if (planGate({ yes: opts.yes, interactive: false, tty: false }) === "run") {
+      await runPipeline(tickets, brief, loadConfig(cwd), cwd, opts.run !== false);
+      return;
+    }
+    printCreateResult(await createFromPlan(tickets, cwd, undefined, { agents, brief }));
     return;
   }
 
@@ -159,12 +206,34 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   // Only a brief this session wrote belongs to this plan; an older file is a previous plan's.
   const briefWritten = existsSync(briefPath) && statSync(briefPath).mtimeMs >= started;
   const brief = briefWritten ? readBrief(briefPath) : undefined;
-  const plan = resolvePlan(parseTickets(readFileSync(outputPath, "utf8")), { agents: cfg.agents, brief });
+  const tickets = parseTickets(readFileSync(outputPath, "utf8"));
+  const plan = resolvePlan(tickets, { agents: cfg.agents, brief });
   console.log("");
-  printPreview(plan, brief);
+  printPreview(plan, brief, "");
   console.log(pc.green(`\nSaved ${plan.tickets.length} ticket(s) to ${outputPath}${briefWritten ? ` and the brief to ${briefPath}` : ""}.`));
   const briefArg = briefWritten ? ` --brief ${BRIEF_FILE}` : "";
-  console.log(
-    pc.dim(`Next: \`orch plan --dry-run tickets.json${briefArg}\` (or the dashboard) to review, then \`orch plan tickets.json${briefArg}\` to create.`),
-  );
+  const hint = (): void =>
+    console.log(
+      pc.dim(
+        `Next: \`orch plan --dry-run tickets.json${briefArg}\` (or the dashboard) to review, then ` +
+          `\`orch plan tickets.json${briefArg} --yes\` to create, route, and run it.`,
+      ),
+    );
+  if (plan.errors.length) {
+    console.log(pc.red("The plan has blocking errors; fix tickets.json, then run the create command."));
+    hint();
+    return;
+  }
+
+  // The one human gate: approve the plan once, then everything up to merge is autonomous.
+  const run = opts.run !== false;
+  const gate = planGate({ yes: opts.yes, interactive: true, tty: Boolean(process.stdin.isTTY && process.stdout.isTTY) });
+  const question = run
+    ? `\nCreate ${plan.tickets.length} issue(s), route them, and start the autopilot? [y/N] `
+    : `\nCreate ${plan.tickets.length} issue(s) and route them? [y/N] `;
+  if (gate === "hint" || (gate === "ask" && !(await confirm(question)))) {
+    hint();
+    return;
+  }
+  await runPipeline(tickets, brief, cfg, cwd, run);
 }

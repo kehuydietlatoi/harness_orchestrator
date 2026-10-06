@@ -1,4 +1,6 @@
 import { eligibleIssues, issueAgent } from "../board/board.js";
+import { listIssues } from "../github/github.js";
+import { NEEDS_ATTENTION } from "../github/labels.js";
 import type { OrchConfig } from "../config.js";
 import { unavailableUntil } from "../board/availability.js";
 import { appendEvent, type OrchEvent } from "./events.js";
@@ -26,6 +28,12 @@ export interface AutopilotOptions {
    * `agent:`, `none` only drives pull requests that already exist.
    */
   claim?: "routed" | "none";
+  /**
+   * Scope the run to these issues (one plan's tickets): only their PRs are driven and only they are
+   * claimed. When nothing is left to do, the run reports `plan-complete` if every scoped issue is
+   * closed or handed to a human, and otherwise `drained` with the issues still open in `remaining`.
+   */
+  issues?: ReadonlySet<number>;
 }
 
 export interface AutopilotSummary {
@@ -40,7 +48,9 @@ export interface AutopilotSummary {
   /** Issues that needed a human but could not be escalated (its label/comment writes kept failing). Look at these first. */
   escalationFailed: number[];
   failures: number;
-  stopped: "drained" | "idle-timeout" | "aborted";
+  stopped: "drained" | "plan-complete" | "idle-timeout" | "aborted";
+  /** Scoped runs only: scoped issues still open and not handed to a human when the run stopped (null: unknown). */
+  remaining?: number[] | null;
 }
 
 /** All I/O the loop performs, injected so whole task lifecycles can be simulated in tests. */
@@ -57,6 +67,11 @@ export interface CoordinatorDeps {
   availableAgents(): string[];
   /** Issues that are routed and ready but belong to a harness that is currently paused. */
   blockedBacklog(): Promise<number[]>;
+  /**
+   * Scoped runs: the scoped issues that are still open and not handed to a human (`needs-attention`).
+   * Read once when the run runs out of work, to tell a finished plan from one that is stuck.
+   */
+  remaining?(): Promise<number[]>;
   now(): number;
   /** `unref` timers do not keep the process alive; the loop uses them only while a child process does. */
   sleep(ms: number, opts?: { unref?: boolean }): Promise<void>;
@@ -79,9 +94,10 @@ export const MAX_ESCALATION_FAILURES = 3;
 const FAILURE_BACKOFF_MS = 30_000;
 const UNAVAILABLE_BACKOFF_MS = 60_000;
 
-export function defaultDeps(cfg: OrchConfig, cwd: string): CoordinatorDeps {
+export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<number>): CoordinatorDeps {
+  const inScope = (n: number): boolean => !scope || scope.has(n);
   return {
-    observe: () => observeTasks(cfg, cwd),
+    observe: () => observeTasks(cfg, cwd, { issues: scope }),
     execute: (obs, step) => {
       switch (step.kind) {
         case "review": return executeReview(obs, cfg, cwd);
@@ -92,13 +108,21 @@ export function defaultDeps(cfg: OrchConfig, cwd: string): CoordinatorDeps {
       }
     },
     // Unrouted backlog is never started by a loop that merges on its own.
-    implement: (agent, onClaimed) => processNext(agent, cfg, cwd, { requireRouted: true, onClaimed }),
+    implement: (agent, onClaimed) => processNext(agent, cfg, cwd, { requireRouted: true, only: scope, onClaimed }),
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
     blockedBacklog: async () => {
       const paused = new Set(cfg.agents.filter((a) => unavailableUntil(a, cwd) !== null));
       if (paused.size === 0) return [];
       const eligible = await eligibleIssues(cwd);
-      return eligible.filter((i) => paused.has(issueAgent(i) ?? "")).map((i) => i.number);
+      return eligible.filter((i) => inScope(i.number) && paused.has(issueAgent(i) ?? "")).map((i) => i.number);
+    },
+    // One batched open-issue read: a scoped issue absent from it is closed (or gone), i.e. finished.
+    remaining: async () => {
+      const open = await listIssues({ cwd, state: "open" });
+      return open
+        .filter((i) => inScope(i.number) && !i.labels.includes(NEEDS_ATTENTION))
+        .map((i) => i.number)
+        .sort((a, b) => a - b);
     },
     now: () => Date.now(),
     sleep: (ms, opts) =>
@@ -109,6 +133,19 @@ export function defaultDeps(cfg: OrchConfig, cwd: string): CoordinatorDeps {
     record: (event) => appendEvent(event, cwd),
     say: (line) => console.log(line),
   };
+}
+
+/** A scoped run ran out of work: is the plan finished, or are some of its issues stuck (blocked, unroutable)? */
+async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): Promise<void> {
+  try {
+    const left = (await deps.remaining?.()) ?? [];
+    summary.remaining = left;
+    if (left.length === 0) summary.stopped = "plan-complete";
+    else deps.say(`  out of work with ${left.map((n) => `#${n}`).join(", ")} still open (blocked, unrouted, or awaiting a merge)`);
+  } catch (error) {
+    summary.remaining = null; // unknown: report "drained", never a completion we could not check
+    deps.say(`  could not check the plan's remaining issues: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function isActionable(step: Step): step is ActionableStep {
@@ -294,6 +331,11 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     settledDuringObserve.clear();
     try {
       ({ tasks, unobserved, ambiguous } = await deps.observe());
+      if (opts.issues) {
+        const scope = opts.issues;
+        tasks = tasks.filter((t) => scope.has(t.issue.number));
+        ambiguous = ambiguous.filter((a) => scope.has(a.issue));
+      }
     } catch (error) {
       observed = false; // GitHub unreachable: say so and retry rather than concluding "nothing to do"
       deps.say(`  could not observe the board: ${error instanceof Error ? error.message : String(error)}`);
@@ -420,7 +462,11 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
 
     if (inflight.size === 0) {
       // A task dropped as stale is not finished: look again at once instead of concluding there is nothing left.
-      if (!waiting && !staleDropped) return summary; // nothing running, nothing left that could change by itself
+      if (!waiting && !staleDropped) {
+        // Nothing running, nothing left that could change by itself.
+        if (opts.issues && deps.remaining) await concludeScope(summary, deps);
+        return summary;
+      }
       if (!staleDropped) await deps.sleep(opts.pollMs);
       drained.clear(); // new work may have appeared while we waited
     } else {
