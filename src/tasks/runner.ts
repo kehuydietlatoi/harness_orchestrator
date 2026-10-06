@@ -319,7 +319,9 @@ async function requeueClaim(
 ): Promise<boolean> {
   try {
     if (!(await removeWorktree(worktree, { cwd, disposableIgnored: opts.disposableIgnored }))) return false;
-    await lockRelease(n, { cwd });
+    // release() reports failure by returning false, not by throwing: a lock that is still held must never
+    // be relabelled todo (it would read as claimed and the task could not run after the cooldown).
+    if (!(await lockRelease(n, { cwd }))) return false;
     await editIssue(n, { cwd, addLabels: [STATUS.todo], removeLabels: [STATUS.claimed, STATUS.inProgress] });
     return true;
   } catch (error) {

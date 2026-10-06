@@ -178,14 +178,20 @@ describe("processNext recovery", () => {
       expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
     });
 
-    it("falls back to needs-attention, never todo, when the lock cannot be released", async () => {
+    // git.release() signals failure by RETURNING false (update-ref failed), not by throwing.
+    it.each([
+      ["returns false", () => mocks.lockRelease.mockResolvedValue(false)],
+      ["throws", () => mocks.lockRelease.mockRejectedValue(new Error("lock busy"))],
+    ])("falls back to needs-attention, never todo, when releasing the lock %s", async (_name, arrange) => {
       mocks.runTask.mockImplementation(dies);
-      mocks.lockRelease.mockRejectedValue(new Error("lock busy"));
+      arrange();
 
       const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
 
       expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
       expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
     });
 
     it("does not requeue a plain failure (no usage-limit event in this run's own output)", async () => {
