@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createHash } from "node:crypto";
 import type { Issue } from "../src/github/github.js";
 import type { Ticket } from "../src/tasks/plan.js";
 import {
@@ -73,6 +74,16 @@ function committedPrefix(count: number): Issue[] {
 }
 
 describe("plan markers", () => {
+  it("preserves the legacy v1 digest for omitted/empty after and distinguishes advisory changes", () => {
+    const legacy = tickets.map((t) => ({
+      id: t.id ?? null, title: t.title, body: (t.body ?? "").trim(), dependsOn: t.dependsOn ?? [], files: t.files ?? [],
+    }));
+    const hash = createHash("sha256").update(JSON.stringify(legacy)).digest("hex");
+    const original = buildPlanMarkers(tickets);
+    expect(original.plan).toBe(`<!-- orch-plan:v1:${hash} -->`);
+    expect(buildPlanMarkers(tickets.map((t) => ({ ...t, after: [] })))).toEqual(original);
+    expect(buildPlanMarkers([tickets[0], { ...tickets[1], after: ["a"] }, tickets[2]])).not.toEqual(original);
+  });
   it("are deterministic for semantically equivalent ticket input", () => {
     const explicitEmpty: Ticket[] = [
       { id: "a", title: "First", body: "  one  ", dependsOn: [], files: [] },
@@ -98,6 +109,37 @@ describe("plan markers", () => {
 });
 
 describe("createFromPlan recovery", () => {
+  it.each(["before", "response-loss"] as const)("preserves advisory links after %s and retry creates no duplicates", async (phase) => {
+    const advisory: Ticket[] = [
+      { id: "a", title: "First" },
+      { id: "b", title: "Second", after: ["a"] },
+      { id: "c", title: "Third", dependsOn: ["a"], after: ["b"] },
+    ];
+    const h = harness([], { title: "First", phase, fired: false });
+    const first = await createFromPlan(advisory, CWD, h.deps);
+    if (phase === "before") {
+      expect(first.failed.map((f) => f.title)).toEqual(["First", "Second", "Third"]);
+      expect(first.failed[1].error).toMatch(/advisory ticket.*unavailable/);
+    }
+    const retry = await createFromPlan(advisory, CWD, h.deps);
+    expect(retry.failed).toEqual([]);
+    expect(h.issues).toHaveLength(3);
+    expect(h.issues.find((i) => i.title === "Second")?.body).toContain("After: #1");
+    expect(h.issues.find((i) => i.title === "Second")?.body).not.toContain("Depends-on:");
+    expect(h.issues.find((i) => i.title === "Third")?.body).toContain("Depends-on: #1\n\nAfter: #2");
+    expect(await createFromPlan(advisory, CWD, h.deps)).toMatchObject({ created: [], failed: [] });
+    expect(h.issues).toHaveLength(3);
+  });
+
+  it("renders a reused closed predecessor's number as an advisory reference", async () => {
+    const advisory = [{ id: "a", title: "First" }, { title: "Second", after: ["a"] }];
+    const markers = buildPlanMarkers(advisory);
+    const first = issue(42, "First", renderTicketBody(advisory[0], [], { plan: markers.plan, ticket: markers.tickets[0] }));
+    first.state = "CLOSED";
+    const h = harness([first]);
+    expect((await createFromPlan(advisory, CWD, h.deps)).failed).toEqual([]);
+    expect(h.creates[0].body).toContain("After: #42");
+  });
   it.each([1, 2, 3])(
     "resumes a process interrupted after create call %i",
     async (completedCount) => {

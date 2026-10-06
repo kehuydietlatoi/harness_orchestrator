@@ -35,6 +35,7 @@ function printPreview(plan: ResolvedPlan): void {
     const meta = [
       t.id && `id:${t.id}`,
       t.knownDeps.length && `deps:${t.knownDeps.join(",")}`,
+      t.knownAfter.length && `after (advisory):${t.knownAfter.join(",")}`,
       t.files.length && `files:${t.files.join(", ")}`,
     ]
       .filter(Boolean)

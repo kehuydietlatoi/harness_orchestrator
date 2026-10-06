@@ -346,7 +346,7 @@ export async function claimNext(
   cfg: OrchConfig,
   cwd: string,
 ): Promise<ClaimedTask | null> {
-  const candidates = await eligibleIssues(cwd);
+  const candidates = await eligibleIssues(cwd, agent);
   if (candidates.length === 0) return null;
   // Resolve once outside the retry loop. A repository configuration/ref error
   // applies to every candidate and must not look like an empty eligible queue.
