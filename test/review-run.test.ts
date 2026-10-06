@@ -11,9 +11,10 @@ vi.mock("../src/github/github.js", () => ({
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/no/such/worktree", removeWorktree: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
-vi.mock("../src/tasks/runner.js", () => ({ resolveTaskModel: () => ({ model: "m", effort: "medium" }) }));
+vi.mock("../src/tasks/runner.js", () => ({ resolveTaskModel: () => ({ model: "m", effort: "medium" }), recordRun: vi.fn() }));
 
 import * as gh from "../src/github/github.js";
+import { recordRun } from "../src/tasks/runner.js";
 import { availabilityPath, markUnavailable, unavailableUntil } from "../src/board/availability.js";
 import {
   formatReviewPrompt, listChangedFiles, MAX_DIFF_CHARS, parseVerdict, runAutomatedReview, type ReviewRunDeps,
@@ -185,6 +186,19 @@ describe("runAutomatedReview", () => {
     const body = vi.mocked(gh.recordPrReview).mock.calls[0][2];
     expect(body).toContain('"reviewer":"codex"');
     expect(body).not.toContain('"mode"');
+  });
+
+  it("records one review run in telemetry per completed review, including failed ones", async () => {
+    const { deps } = runner([{ text: approveText }]);
+    await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+    expect(vi.mocked(recordRun).mock.calls.map((c) => [c[0], c[1], c[3], c[8]])).toEqual([
+      [issue.number, "codex", "review-approved", expect.objectContaining({ phase: "review", since: expect.any(Number) })],
+    ]);
+
+    vi.mocked(recordRun).mockClear();
+    const bad = runner([{ text: "no verdict" }]);
+    await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, bad.deps)).rejects.toThrow(/no valid verdict/);
+    expect(vi.mocked(recordRun).mock.calls.map((c) => c[3])).toEqual(["review-failed"]);
   });
 
   describe("exact-head checkout (the verdict is recorded against the PR SHA)", () => {

@@ -2,14 +2,15 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 import type { HeadlessResult } from "../adapters/headless.js";
-import { lastFencedBlock, runHeadlessAgent } from "../adapters/headless.js";
+import { headlessLogFile, lastFencedBlock, runHeadlessAgent } from "../adapters/headless.js";
 import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { getIssue, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
-import { resolveTaskModel } from "../tasks/runner.js";
+import { recordRun, resolveTaskModel } from "../tasks/runner.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
+import { logSize } from "../util/log-file.js";
 import type { ReviewMode } from "./approval.js";
 import { markUnavailable, unavailableAgents } from "./availability.js";
 import { issueAgent } from "./board.js";
@@ -331,6 +332,10 @@ export async function runAutomatedReview(
     const model = resolveTaskModel(pick.reviewer, issue, cfg);
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
+    const logName = `review-${prNum}-${pick.reviewer}`;
+    const logFile = headlessLogFile(cwd, logName);
+    const since = logSize(logFile); // the log is shared by every review of this PR: read only this run's range
+    const started = Date.now();
     let run: HeadlessResult;
     try {
       // Fail closed again: an oversized diff that cannot be staged in full is not reviewed in part.
@@ -341,7 +346,7 @@ export async function runAutomatedReview(
         prompt,
         model,
         runCwd: checkout.path,
-        logName: `review-${prNum}-${pick.reviewer}`,
+        logName,
         timeoutMs: cfg.reviewTimeoutMs,
       });
     } finally {
@@ -350,6 +355,10 @@ export async function runAutomatedReview(
     }
 
     const verdict = run.code === 0 && !run.timedOut ? parseVerdict(run.text) : null;
+    // One telemetry record per completed review run, so review cost counts toward the task (best-effort).
+    recordRun(n, pick.reviewer, model,
+      verdict ? (verdict.decision === "approve" ? "review-approved" : "review-changes") : "review-failed",
+      Date.now() - started, logFile, cwd, cfg, { phase: "review", since });
     if (!verdict) {
       const limit = detectUsageLimit(run.raw, now);
       if (limit) {

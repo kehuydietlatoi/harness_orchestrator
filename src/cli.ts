@@ -27,6 +27,7 @@ import { snapshotCommand } from "./commands/snapshot.js";
 import { serveCommand } from "./commands/serve.js";
 import { dispatchCommand } from "./commands/dispatch.js";
 import { repairCommand } from "./commands/repair.js";
+import { reportCommand } from "./commands/report.js";
 
 /** Wrap an async action so thrown errors print cleanly and set a non-zero exit code. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -204,6 +205,15 @@ program
   .description("Print the task briefing (spec + memory pointer + loop) for an issue")
   .option(agentOpt, agentDesc)
   .action(wrap(briefCommand));
+
+program
+  .command("report")
+  .description("Measure what the autopilot achieved: outcomes, rounds to approval, escalation rate, cost per merged task")
+  .option("--since <when>", "only activity since an ISO date/time or a relative 30m / 12h / 7d")
+  .option("--issues <list>", "only these issues (e.g. one plan's tickets: 12,13,14)")
+  .option("--json", "print the report as JSON")
+  .option("--summarize", "have the lead summarise the run and draft follow-up tickets to tickets.followup.json (creates no issues)")
+  .action(wrap(reportCommand));
 
 const memory = program.command("memory").description("Shared project memory (AGENTS.md)");
 memory

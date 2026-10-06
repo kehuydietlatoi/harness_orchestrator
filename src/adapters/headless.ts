@@ -66,6 +66,11 @@ export async function runStructuredHeadless(
  * `PlannerRunner`) so tests can substitute a canned reply and never launch a real
  * harness. Unsupported adapters fail before any process is launched.
  */
+/** Where `runHeadlessAgent` logs a run named `logName`: always under the repo's `logs/`. */
+export function headlessLogFile(cwd: string, logName: string): string {
+  return resolve(cwd, "logs", `${logName}.jsonl`);
+}
+
 export async function runHeadlessAgent(
   adapter: HarnessAdapter,
   prompt: string,
@@ -78,7 +83,7 @@ export async function runHeadlessAgent(
   if (!adapter.runHeadless) {
     throw new Error(`lead adapter '${adapter.id}' does not support planner/judge execution`);
   }
-  const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
+  const logFile = headlessLogFile(cwd, logName);
   return adapter.runHeadless({
     cwd: opts.runCwd ?? cwd, // process cwd; the log always lands under the repo's logs/
     prompt,
