@@ -46,6 +46,10 @@ class World {
   observeFailures = 0;
   /** The next N polls cannot read any PR (they are reported as unobserved). */
   unobservedPolls = 0;
+  /** Harnesses currently on a usage-limit cooldown. */
+  paused = new Set<string>();
+  /** When set, `implement` opens the PR and claims the issue, then waits for this before returning. */
+  implementGate?: Promise<void>;
   implementThrows = false;
   /** Called once per poll so a test can flip external state (CI finishing, a human acting). */
   onSleep?: (calls: number) => void;
@@ -107,13 +111,15 @@ class World {
     }
   };
 
-  implement = async (agent: string): Promise<RunSummary | null> => {
+  implement = async (agent: string, onClaimed: (issue: number) => void = () => undefined): Promise<RunSummary | null> => {
     if (this.implementThrows) throw new Error("claim exploded");
-    const i = this.todo.findIndex((t) => t.agent === agent);
+    const i = this.todo.findIndex((t) => t.agent === agent && !this.paused.has(agent));
     if (i < 0) return null;
     const [t] = this.todo.splice(i, 1);
     this.calls.push(`implement:${agent}:${t.issue}`);
-    this.add(pr(t.issue, { author: agent, ...t.pr }));
+    onClaimed(t.issue);
+    this.add(pr(t.issue, { author: agent, ...t.pr })); // the agent ran `orch submit` itself
+    if (this.implementGate) await this.implementGate; // ...but its process has not finished yet
     return { issue: t.issue, outcome: "submitted", durationMs: 1, prUrl: `https://example/pull/${1000 + t.issue}` };
   };
 
@@ -121,7 +127,8 @@ class World {
     observe: this.observe,
     execute: this.execute,
     implement: this.implement,
-    availableAgents: () => ["claude", "codex"],
+    availableAgents: () => ["claude", "codex"].filter((a) => !this.paused.has(a)),
+    blockedBacklog: async () => this.todo.filter((t) => this.paused.has(t.agent)).map((t) => t.issue),
     now: () => Date.now(),
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     record: (e) => { this.events.push(e); },
@@ -322,6 +329,109 @@ describe("runAutopilot", () => {
 
     expect(summary.stopped).toBe("idle-timeout");
     expect(summary.merged).toEqual([]);
+  });
+
+  describe("a PR the agent opened itself while its implementation is still running", () => {
+    it("is left alone until the implementation has finalised, then driven normally", async () => {
+      const w = new World();
+      let release!: () => void;
+      w.implementGate = new Promise<void>((resolve) => { release = resolve; });
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } }); // ready to merge
+
+      let done = false;
+      const run = runAutopilot({ ...OPTS, max: 2, claim: "routed" }, w.deps()).finally(() => { done = true; });
+      for (let i = 0; i < 30; i += 1) await vi.advanceTimersByTimeAsync(1000); // many polls while it is "still running"
+
+      // The PR exists and is mergeable, but the agent process has not returned: do not touch it.
+      expect(w.calls).toEqual(["implement:claude:7"]);
+      expect(done).toBe(false);
+
+      release();
+      for (let i = 0; i < 200 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+      expect(done).toBe(true);
+      expect(w.calls).toEqual(["implement:claude:7", "merge:7"]);
+      expect(await run).toMatchObject({ submitted: [7], merged: [7] });
+    });
+
+    it("does not stop other tasks from being driven in the meantime", async () => {
+      const w = new World();
+      let release!: () => void;
+      w.implementGate = new Promise<void>((resolve) => { release = resolve; });
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+      w.add(pr(9, { approved: true }));
+
+      let done = false;
+      const run = runAutopilot({ ...OPTS, max: 3, claim: "routed" }, w.deps()).finally(() => { done = true; });
+      for (let i = 0; i < 30; i += 1) await vi.advanceTimersByTimeAsync(1000);
+      expect(w.calls).toContain("merge:9");
+      expect(w.calls).not.toContain("merge:7");
+
+      release();
+      for (let i = 0; i < 200 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+      await run;
+      expect(w.calls).toContain("merge:7");
+    });
+  });
+
+  describe("routed work owned by a paused harness", () => {
+    it("waits for the task's owner to resume instead of reporting the queue drained (only the owner paused)", async () => {
+      const w = new World();
+      w.paused.add("claude"); // codex is available but has nothing queued
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+      w.onSleep = (n) => { if (n === 4) w.paused.delete("claude"); };
+
+      const summary = await drive(w);
+
+      expect(w.calls).toEqual(["implement:claude:7", "merge:7"]);
+      expect(summary).toMatchObject({ merged: [7], stopped: "drained" });
+      expect(w.said.some((l) => l.includes("waiting for a paused harness to resume: #7"))).toBe(true);
+    });
+
+    it("waits when every harness is paused and a routed task is queued", async () => {
+      const w = new World();
+      w.paused.add("claude");
+      w.paused.add("codex");
+      w.todo.push({ issue: 7, agent: "codex", pr: { approved: true } });
+      w.onSleep = (n) => { if (n === 3) { w.paused.clear(); } };
+
+      const summary = await drive(w);
+
+      expect(summary.merged).toEqual([7]);
+      expect(w.calls[0]).toBe("implement:codex:7");
+    });
+
+    it("gives up after --max-idle when the owner never resumes, leaving the task queued", async () => {
+      const w = new World();
+      w.paused.add("claude");
+      w.todo.push({ issue: 7, agent: "claude", pr: {} });
+
+      const summary = await drive(w, { maxIdleMs: 10_000 });
+
+      expect(summary.stopped).toBe("idle-timeout");
+      expect(w.todo).toHaveLength(1);
+      expect(w.calls).toEqual([]);
+    });
+
+    it("is not waited on when the loop must not claim anything (--no-claim)", async () => {
+      const w = new World();
+      w.paused.add("claude");
+      w.todo.push({ issue: 7, agent: "claude", pr: {} });
+
+      const summary = await drive(w, { claim: "none" });
+
+      expect(summary.stopped).toBe("drained");
+      expect(w.todo).toHaveLength(1);
+    });
+
+    it("does not wait when nothing queued belongs to a paused harness", async () => {
+      const w = new World();
+      w.paused.add("codex"); // the queued task is claude's, and claude is available
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+
+      const summary = await drive(w);
+
+      expect(summary).toMatchObject({ merged: [7], stopped: "drained" });
+    });
   });
 
   it("never runs more steps at once than its slot limit", async () => {

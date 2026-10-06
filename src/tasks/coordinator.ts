@@ -1,3 +1,4 @@
+import { eligibleIssues, issueAgent } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 import { unavailableUntil } from "../board/availability.js";
 import { appendEvent, type OrchEvent } from "./events.js";
@@ -42,9 +43,16 @@ export interface AutopilotSummary {
 export interface CoordinatorDeps {
   observe(): Promise<Observation>;
   execute(obs: TaskObservation, step: ActionableStep): Promise<StepResult>;
-  /** Claim and implement the next task routed to `agent`; null when there is nothing for it. */
-  implement(agent: string): Promise<RunSummary | null>;
+  /**
+   * Claim and implement the next task routed to `agent`; null when there is nothing for it.
+   * `onClaimed` fires as soon as the issue is claimed, before the harness runs: the agent can open its
+   * own PR (`orch submit`) while this call is still in progress, and the loop must not act on that PR
+   * (review, fix, merge) until the implementation has finished and finalised.
+   */
+  implement(agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null>;
   availableAgents(): string[];
+  /** Issues that are routed and ready but belong to a harness that is currently paused. */
+  blockedBacklog(): Promise<number[]>;
   now(): number;
   /** `unref` timers do not keep the process alive; the loop uses them only while a child process does. */
   sleep(ms: number, opts?: { unref?: boolean }): Promise<void>;
@@ -75,8 +83,14 @@ export function defaultDeps(cfg: OrchConfig, cwd: string): CoordinatorDeps {
       }
     },
     // Unrouted backlog is never started by a loop that merges on its own.
-    implement: (agent) => processNext(agent, cfg, cwd, { requireRouted: true }),
+    implement: (agent, onClaimed) => processNext(agent, cfg, cwd, { requireRouted: true, onClaimed }),
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
+    blockedBacklog: async () => {
+      const paused = new Set(cfg.agents.filter((a) => unavailableUntil(a, cwd) !== null));
+      if (paused.size === 0) return [];
+      const eligible = await eligibleIssues(cwd);
+      return eligible.filter((i) => paused.has(issueAgent(i) ?? "")).map((i) => i.number);
+    },
     now: () => Date.now(),
     sleep: (ms, opts) =>
       new Promise((resolve) => {
@@ -114,6 +128,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const failing = new Map<number, { count: number; detail: string }>();
   const retryAt = new Map<number, number>();
   const drained = new Set<string>();
+  /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
+  const implementing = new Set<number>();
   /** When a step last finished or a task was last implemented. Idle time is measured from here,
    * not from "nothing in flight", because probing a harness for new work is not progress. */
   let lastProgress = deps.now();
@@ -170,10 +186,14 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const launchImplement = (agent: string): void => {
     const key = `impl:${agent}`;
     const startedAt = deps.now();
+    const claim: { issue: number | null } = { issue: null };
     const run = (async (): Promise<void> => {
       let result: RunSummary | null = null;
       try {
-        result = await deps.implement(agent);
+        result = await deps.implement(agent, (issue) => {
+          claim.issue = issue;
+          implementing.add(issue);
+        });
       } catch (error) {
         drained.add(agent); // do not hot-loop a claim error
         deps.say(`  ${agent} could not claim work: ${error instanceof Error ? error.message : String(error)}`);
@@ -192,10 +212,14 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         signal: ok ? "task.submitted" : "step.failed", detail: result.outcome, durationMs: deps.now() - startedAt,
       });
       deps.say(`  #${result.issue} implement (${agent}) -> ${result.outcome}${result.prUrl ? ` ${result.prUrl}` : ""}`);
-    })().finally(() => inflight.delete(key));
+    })().finally(() => {
+      if (claim.issue !== null) implementing.delete(claim.issue); // finalised: the PR is now ours to drive
+      inflight.delete(key);
+    });
     inflight.set(key, run);
   };
 
+  let lastBlocked = "";
   for (;;) {
     if (opts.signal?.aborted) {
       await Promise.all(inflight.values());
@@ -221,7 +245,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     let waiting = !observed || unobserved.length > 0;
     for (const obs of tasks) {
       const n = obs.issue.number;
-      if (inflight.has(`issue:${n}`)) continue;
+      if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
       const fails = failing.get(n);
       if (fails && fails.count >= MAX_STEP_FAILURES && isActionable(step) && step.kind !== "escalate") {
@@ -241,7 +265,27 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     }
     actionable.sort((a, b) => PRIORITY[a.step.kind] - PRIORITY[b.step.kind] || a.obs.issue.number - b.obs.issue.number);
 
-    const stepsRunning = [...inflight.keys()].some((k) => k.startsWith("issue:"));
+    const stepsRunning = implementing.size > 0 || [...inflight.keys()].some((k) => k.startsWith("issue:"));
+    if (opts.claim !== "none" && actionable.length === 0 && !stepsRunning) {
+      // Routed work owned by a paused harness is not "nothing left to do": it will become runnable when
+      // the cooldown ends. Wait for it (bounded by --max-idle) instead of reporting the queue drained.
+      let blocked: number[] = [];
+      try {
+        blocked = await deps.blockedBacklog();
+      } catch {
+        blocked = []; // best-effort: a failed lookup must not wedge the loop
+      }
+      if (blocked.length > 0) {
+        waiting = true;
+        const key = blocked.join(",");
+        if (key !== lastBlocked) {
+          deps.say(`  waiting for a paused harness to resume: ${blocked.map((n) => `#${n}`).join(", ")}`);
+          lastBlocked = key;
+        }
+      } else {
+        lastBlocked = "";
+      }
+    }
     if (waiting && actionable.length === 0 && !stepsRunning && deps.now() - lastProgress >= opts.maxIdleMs) {
       await Promise.all(inflight.values()); // let any harness probe finish; it is short
       deps.say(`  no progress for ${Math.round((deps.now() - lastProgress) / 60_000)} min with work still waiting; stopping`);

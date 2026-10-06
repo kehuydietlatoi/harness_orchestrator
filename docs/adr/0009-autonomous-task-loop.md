@@ -56,7 +56,15 @@ not spent: a budget of N allows N fixes, and the N+1th request escalates. Exhaus
 same step twice in a row, escalates: `needs-attention` plus a comment explaining why. A PR that cannot
 be read on a pass is reported as unobserved and the loop keeps polling; it is never mistaken for
 "nothing left to do". Time spent waiting on a paused harness does not count as progress, so
-`--max-idle` still ends a wait that outlasts it. Failures back off; a paused harness
+`--max-idle` still ends a wait that outlasts it. Routed todos owned by a paused harness are likewise
+waited for (bounded by `--max-idle`) rather than reported as a drained queue.
+
+Two races are closed explicitly. An implementing agent runs `orch submit` itself, so its PR can exist
+before its process has finished: the loop records the issue as *implementing* from the moment it is
+claimed (`processNext`'s `onClaimed`) and takes no step on it until implementation has finalised. And
+harness logs are append-only and shared by every retry of a round, so a run is judged only by the text
+it appended itself (`logSize`/`readLogSince`); otherwise an earlier attempt's usage-limit event would
+re-pause a harness for an unrelated failure, suppress the cold-session fallback, and bypass escalation. Failures back off; a paused harness
 (usage limit, ADR-0008) is waited out and never counted as a failure. Merge still goes through the
 full gate (`checkMergeGate`: approval bound to the head, CI, SHA-guarded squash), and conflicts are
 resolved by merging the base into the branch (Claude preferred), never by rewriting history.

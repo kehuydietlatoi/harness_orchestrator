@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,7 +74,8 @@ function fakeEnv(opts: {
     runAgent: async (ctx) => {
       agentCalls.push(ctx);
       const r = opts.runs?.[agentCalls.length - 1] ?? { ok: true };
-      if (r.log && ctx.logFile) writeFileSync(ctx.logFile, r.log, "utf8");
+      // Append, exactly like spawnLogged: a retry in the same round shares the same log file.
+      if (r.log && ctx.logFile) appendFileSync(ctx.logFile, r.log, "utf8");
       return { ok: r.ok ?? true, code: r.code ?? (r.ok === false ? 1 : 0), durationMs: 5, timedOut: r.timedOut ?? false, sessionId: r.sessionId };
     },
     git: async (args) => {
@@ -312,6 +313,48 @@ describe("step executors", () => {
       const { env } = fakeEnv({ runs: [{ ok: false, code: 2 }, { ok: false, code: 2 }] });
       const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
       expect(result).toEqual({ signal: "step.failed", detail: "'codex' exited 2" });
+    });
+  });
+
+  describe("a retry in the same round shares its log file with the earlier attempt", () => {
+    const clearCooldown = () => rmSync(availabilityPath(cwd), { force: true });
+
+    it("does not re-pause the harness for a new, non-quota failure after the cooldown expired (fix)", async () => {
+      writeSession(38, { agent: "codex", sessionId: "thread" }, cwd);
+      const first = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
+      expect((await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, first.env)).signal).toBe("agent.unavailable");
+      expect(unavailableUntil("codex", cwd)).not.toBeNull();
+
+      clearCooldown(); // the limit has reset; the very same round is retried
+      const second = fakeEnv({ runs: [{ ok: false, code: 1 }, { ok: false, code: 2 }] });
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, second.env);
+
+      expect(result).toEqual({ signal: "step.failed", detail: "'codex' exited 2" }); // counts toward escalation
+      expect(unavailableUntil("codex", cwd)).toBeNull();
+      expect(second.agentCalls).toHaveLength(2); // the cold-session fallback was NOT suppressed
+      expect(second.agentCalls[1].resumeSession).toBeUndefined();
+    });
+
+    it("still pauses the harness when the retry itself hits a usage limit", async () => {
+      const first = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
+      await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, first.env);
+      clearCooldown();
+
+      const second = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
+      expect((await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, second.env)).signal).toBe("agent.unavailable");
+      expect(unavailableUntil("codex", cwd)).not.toBeNull();
+    });
+
+    it("does not re-pause the harness for a new, non-quota failure after the cooldown expired (conflict)", async () => {
+      const first = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
+      expect((await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, first.env)).signal).toBe("agent.unavailable");
+      clearCooldown();
+
+      const second = fakeEnv({ runs: [{ ok: false, code: 2 }] });
+      const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, second.env);
+
+      expect(result).toEqual({ signal: "step.failed", detail: "'claude' exited 2" });
+      expect(unavailableUntil("claude", cwd)).toBeNull();
     });
   });
 

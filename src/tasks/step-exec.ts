@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RunContext, RunResult } from "../adapters/types.js";
 import { makeAdapter } from "../adapters/index.js";
@@ -13,6 +13,7 @@ import { commentOnPr, editIssue, failingChecks } from "../github/github.js";
 import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS } from "../github/labels.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
+import { logSize, readLogSince } from "../util/log-file.js";
 import type { TaskObservation } from "./observe.js";
 import { formatConflictPrompt, formatFixPrompt } from "./step-prompts.js";
 import { readSession, writeSession } from "./sessions.js";
@@ -51,18 +52,24 @@ function failure(detail: string): StepResult {
   return { signal: "step.failed", detail };
 }
 
-function readLog(file: string): string {
-  try {
-    return readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
+/** One agent run plus the log text that run itself produced (see `util/log-file.ts`). */
+interface TrackedRun {
+  run: RunResult;
+  /** Only what this invocation appended: an earlier attempt's events must never be mistaken for it. */
+  logText: string;
+}
+
+async function runTracked(env: StepEnv, ctx: RunContext): Promise<TrackedRun> {
+  const since = ctx.logFile ? logSize(ctx.logFile) : 0;
+  const run = await env.runAgent(ctx);
+  return { run, logText: ctx.logFile ? readLogSince(ctx.logFile, since) : "" };
 }
 
 /** A harness failure that was really a usage limit pauses that harness instead of failing the task. */
-function afterAgentFailure(agent: string, logFile: string, cwd: string, run: RunResult): StepResult {
-  const until = noteUsageLimitFromLog(agent, readLog(logFile), cwd);
+function afterAgentFailure(agent: string, attempt: TrackedRun, cwd: string): StepResult {
+  const until = noteUsageLimitFromLog(agent, attempt.logText, cwd);
   if (until) return { signal: "agent.unavailable", detail: `'${agent}' is out of usage until ${until.toISOString()}` };
+  const { run } = attempt;
   return failure(run.timedOut ? `'${agent}' timed out` : `'${agent}' exited ${run.code}`);
 }
 
@@ -192,21 +199,22 @@ export async function executeFix(
   let resume = session && session.agent === agent ? session.sessionId : undefined;
   let logFile = followUpLog(cwd, n, `fix${round}`);
   const started = Date.now();
-  let run = await env.runAgent({
+  let attempt = await runTracked(env, {
     issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile,
     timeoutMs: cfg.taskTimeoutMs, resumeSession: resume,
   });
-  if (!run.ok && resume !== undefined && !noteUsageLimitFromLog(agent, readLog(logFile), cwd)) {
+  if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(agent, attempt.logText, cwd)) {
     // The harness could not resume (expired/foreign session): continue from durable facts instead.
-    log.warn(`#${n}: resuming '${agent}' session failed (exit ${run.code}); retrying with a fresh session`);
+    log.warn(`#${n}: resuming '${agent}' session failed (exit ${attempt.run.code}); retrying with a fresh session`);
     resume = undefined;
-    logFile = followUpLog(cwd, n, `fix${round}-cold`); // judge the retry by its own log
-    run = await env.runAgent({
+    logFile = followUpLog(cwd, n, `fix${round}-cold`);
+    attempt = await runTracked(env, {
       issue: n, agent, worktree, prompt: prompt(false), model, logFile, timeoutMs: cfg.taskTimeoutMs,
     });
   }
+  const run = attempt.run;
   const outcome = async (): Promise<StepResult> => {
-    if (!run.ok) return afterAgentFailure(agent, logFile, cwd, run);
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
     return (await pushAndRequeueReview(obs, env, cwd, worktree)) ?? { signal: "fix.pushed", detail: `round ${round} (${reason})` };
   };
@@ -244,16 +252,17 @@ export async function executeResolveConflict(
   const model = resolveTaskModel(agent, obs.issue, cfg);
   const logFile = followUpLog(cwd, n, `resolve${round}`);
   const started = Date.now();
-  const run = await env.runAgent({
+  const attempt = await runTracked(env, {
     issue: n, agent, worktree, model, logFile, timeoutMs: cfg.taskTimeoutMs,
     prompt: formatConflictPrompt({ issue: obs.issue, pr: obs.pr, worktree, baseName: base.name }),
   });
+  const run = attempt.run;
   const result = run.ok
     ? ((await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
         const merged = await env.git(["merge-base", "--is-ancestor", `origin/${base.name}`, "HEAD"], worktree);
         return merged.code === 0 ? null : `the branch still does not contain origin/${base.name}`;
       })) ?? ({ signal: "conflict.resolved", detail: `resolved by '${agent}'` } satisfies StepResult))
-    : afterAgentFailure(agent, logFile, cwd, run);
+    : afterAgentFailure(agent, attempt, cwd);
   recordRun(n, agent, model, result.signal === "conflict.resolved" ? "resolve-pushed" : "resolve-failed",
     Date.now() - started, logFile, cwd, cfg, { phase: "resolve-conflict", round });
   return result;

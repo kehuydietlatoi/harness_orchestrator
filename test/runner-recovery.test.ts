@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     costUsd: null,
   })),
   projectId: vi.fn(() => "project"),
+  projectStateDir: vi.fn(),
   resolveBaseBranch: vi.fn(),
   countCommitsAhead: vi.fn(),
 }));
@@ -48,6 +49,7 @@ vi.mock("../src/board/telemetry.js", () => ({
   appendRun: mocks.appendRun,
   parseUsage: mocks.parseUsage,
   projectId: mocks.projectId,
+  projectStateDir: mocks.projectStateDir,
 }));
 vi.mock("../src/git/git.js", () => ({
   resolveBaseBranch: mocks.resolveBaseBranch,
@@ -55,6 +57,7 @@ vi.mock("../src/git/git.js", () => ({
 }));
 
 const { processNext, runLoop } = await import("../src/tasks/runner.js");
+const { unavailableUntil } = await import("../src/board/availability.js");
 
 const issue = {
   number: 35,
@@ -74,6 +77,7 @@ describe("processNext recovery", () => {
     cwd = mkdtempSync(join(tmpdir(), "orch-runner-recovery-"));
     worktree = join(cwd, "worktree");
     mkdirSync(worktree);
+    mocks.projectStateDir.mockReturnValue(join(cwd, ".state")); // real availability store, isolated per test
     mocks.claimNext.mockResolvedValue({ issue, worktree: { path: worktree, branch: "task/35" } });
     mocks.makeAdapter.mockReturnValue({ id: "codex", runTask: mocks.runTask });
     mocks.editIssue.mockResolvedValue(undefined);
@@ -97,6 +101,48 @@ describe("processNext recovery", () => {
 
     await processNext("codex", DEFAULT_CONFIG, cwd);
     expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, {});
+  });
+
+  describe("judging a failed run by its own log (the issue log is shared by every retry)", () => {
+    const LIMIT =
+      '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}\n';
+    const failed = { ok: false, code: 1, durationMs: 1, timedOut: false };
+
+    it("does not pause the harness for a new failure just because an earlier attempt hit a usage limit", async () => {
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      appendFileSync(join(cwd, "logs", "issue-35.jsonl"), LIMIT, "utf8"); // an earlier attempt, long since reset
+      mocks.runTask.mockResolvedValue(failed); // this attempt fails for an unrelated reason
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(unavailableUntil("codex", cwd)).toBeNull();
+    });
+
+    it("does pause the harness when this run's own output shows the limit", async () => {
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      appendFileSync(join(cwd, "logs", "issue-35.jsonl"), "earlier attempt, no limit event\n", "utf8");
+      mocks.runTask.mockImplementation(async (ctx: { logFile: string }) => {
+        appendFileSync(ctx.logFile, LIMIT, "utf8");
+        return failed;
+      });
+
+      await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(unavailableUntil("codex", cwd)).not.toBeNull();
+    });
+  });
+
+  it("reports the claimed issue before the harness runs, so a caller can leave its PR alone meanwhile", async () => {
+    const order: string[] = [];
+    mocks.runTask.mockImplementation(async () => {
+      order.push("run");
+      return { ok: false, code: 1, durationMs: 1, timedOut: false };
+    });
+
+    await processNext("codex", DEFAULT_CONFIG, cwd, { onClaimed: (n) => order.push(`claimed:${n}`) });
+
+    expect(order).toEqual(["claimed:35", "run"]);
   });
 
   it("returns one failed outcome and records it once when adapter execution rejects", async () => {
