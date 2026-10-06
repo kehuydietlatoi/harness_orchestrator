@@ -5,10 +5,12 @@ import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
 import {
   addWorktree,
+  blockingStatusEntries,
   discardWorktree,
   observeWorktree,
   removeWorktree,
   worktreePath,
+  worktreeRemovalSafety,
 } from "../src/git/worktree.js";
 
 async function makeRepo(): Promise<{ base: string; repo: string }> {
@@ -17,7 +19,7 @@ async function makeRepo(): Promise<{ base: string; repo: string }> {
   mkdirSync(repo);
   await exec("git", ["init", "-q", "-b", "main"], { cwd: repo });
   writeFileSync(join(repo, "README.md"), "# test\n");
-  writeFileSync(join(repo, ".gitignore"), "ignored.txt\n");
+  writeFileSync(join(repo, ".gitignore"), "ignored.txt\nnode_modules/\n");
   await exec("git", ["add", "-A"], { cwd: repo });
   await exec(
     "git",
@@ -163,5 +165,73 @@ describe("task worktrees", () => {
 
     expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
     expect(existsSync(worktree.path)).toBe(false);
+  });
+
+  it("removes a worktree whose only extra files are disposable ignored output", async () => {
+    const worktree = await addWorktree(29, "Identity safe", "../wt", options(repo));
+    mkdirSync(join(worktree.path, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(worktree.path, "node_modules", "pkg", "index.js"), "regenerable\n");
+
+    expect(await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`)).toEqual({ removable: true });
+    expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
+    expect(existsSync(worktree.path)).toBe(false);
+  });
+
+  it("keeps a worktree with disposable output plus a non-disposable ignored file, naming it", async () => {
+    const worktree = await addWorktree(29, "Identity safe", "../wt", options(repo));
+    mkdirSync(join(worktree.path, "node_modules"));
+    writeFileSync(join(worktree.path, "node_modules", "x.js"), "regenerable\n");
+    writeFileSync(join(worktree.path, "ignored.txt"), "local secret\n");
+
+    const safety = await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`);
+    expect(safety.removable).toBe(false);
+    expect(safety.reason).toContain("ignored.txt");
+    expect(safety.reason).not.toContain("node_modules");
+    expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(false);
+    expect(existsSync(join(worktree.path, "ignored.txt"))).toBe(true);
+  });
+
+  it("honours a configured allowlist instead of the defaults", async () => {
+    const worktree = await addWorktree(29, "Identity safe", "../wt", options(repo));
+    writeFileSync(join(worktree.path, "ignored.txt"), "build stamp\n");
+    mkdirSync(join(worktree.path, "node_modules"));
+    writeFileSync(join(worktree.path, "node_modules", "x.js"), "regenerable\n");
+
+    // node_modules/ is no longer disposable, ignored.txt now is.
+    expect(await removeWorktree(worktree.path, { cwd: repo, disposableIgnored: ["ignored.txt"] })).toBe(false);
+    rmSync(join(worktree.path, "node_modules"), { recursive: true, force: true });
+    expect(await removeWorktree(worktree.path, { cwd: repo, disposableIgnored: ["ignored.txt"] })).toBe(true);
+  });
+});
+
+describe("blockingStatusEntries", () => {
+  const disposable = ["node_modules/", "dist/", "build.stamp"];
+
+  it("treats allowlisted ignored paths as disposable", () => {
+    expect(blockingStatusEntries("!! node_modules/\n!! dist/\n!! build.stamp\n", disposable)).toEqual([]);
+  });
+
+  it("blocks dirty, untracked, non-allowlisted, nested, and quoted entries", () => {
+    const porcelain = [
+      " M src/a.ts",
+      "?? notes.txt",
+      "!! .env",
+      "!! packages/app/node_modules/",
+      "!! node_modules_backup/",
+      '!! "we\\303\\251ird/"',
+      "!! dist/",
+    ].join("\n");
+    expect(blockingStatusEntries(porcelain, disposable)).toEqual([
+      " M src/a.ts",
+      "?? notes.txt",
+      "!! .env",
+      "!! packages/app/node_modules/",
+      "!! node_modules_backup/",
+      '!! "we\\303\\251ird/"',
+    ]);
+  });
+
+  it("does not let a directory allowlist entry match a same-prefix file", () => {
+    expect(blockingStatusEntries("!! dist.txt\n", ["dist/"])).toEqual(["!! dist.txt"]);
   });
 });

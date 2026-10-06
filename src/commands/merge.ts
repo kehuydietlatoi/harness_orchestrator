@@ -14,9 +14,13 @@ export async function mergeCommand(prArg: string, opts: { human?: boolean }): Pr
   const cfg = loadConfig(cwd);
   const prNum = parsePr(prArg);
 
-  const { issue } = await merge(prNum, cfg, cwd, opts.human ?? false);
+  const { issue, worktree } = await merge(prNum, cfg, cwd, opts.human ?? false);
   console.log(pc.green(`Merged PR #${prNum}.`) + (issue !== null ? ` Closed issue #${issue}.` : ""));
-  console.log(pc.dim("Lock released, worktree pruned."));
+  if (worktree === "retained") {
+    console.log(pc.yellow(`Lock released; worktree retained (it holds work safe cleanup will not delete). Inspect it, then run \`orch repair ${issue}\`.`));
+  } else {
+    console.log(pc.dim(`Lock released${worktree === "removed" ? ", worktree removed" : ""}.`));
+  }
 }
 
 export async function integrateCommand(opts: { human?: boolean }): Promise<void> {

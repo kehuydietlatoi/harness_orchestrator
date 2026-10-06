@@ -34,11 +34,15 @@ import {
   addWorktree,
   branchName,
   removeWorktree,
+  worktreeRemovalSafety,
   slugify,
   worktreePath,
 } from "../git/worktree.js";
 import {
+  commitExists,
   compareBranchToBase,
+  compareCommitToBase,
+  relateBranchToCommit,
   resolveBaseBranch,
   type RepositoryBase,
 } from "../git/git.js";
@@ -56,6 +60,15 @@ export type RepairWorktree =
   | { kind: "stale-registration"; path: string }
   | { kind: "conflict" | "error"; path: string; detail: string };
 
+/**
+ * How an existing local task branch relates to the open PR head it should track.
+ * `tracking` (equal, or a stale ancestor) means the branch fact was taken from the
+ * PR head; anything else is preserved for a human and never rewritten.
+ */
+export type PrHeadRelation =
+  | { kind: "tracking" }
+  | { kind: "diverged" | "unavailable"; detail: string };
+
 export interface RepairObservation {
   number: number;
   issue: Issue | null;
@@ -66,6 +79,8 @@ export interface RepairObservation {
   prs: Pr[];
   reviews: PrReview[];
   telemetry: TaskFacts["telemetry"];
+  /** Set only when an open PR targets an existing local expected branch. */
+  prHead?: PrHeadRelation;
 }
 
 export type RepairAction =
@@ -149,41 +164,6 @@ async function branchFact(
   return compareBranchToBase(branch, base, cwd);
 }
 
-async function removalSafety(
-  path: string,
-  registeredBranch: string,
-): Promise<{ removable: boolean; reason?: string }> {
-  const status = await exec(
-    "git",
-    ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"],
-    { cwd: path },
-  );
-  if (status.code !== 0) return { removable: false, reason: "worktree status is unreadable" };
-  if (status.stdout.length > 0) {
-    return { removable: false, reason: "worktree has dirty, untracked, or ignored files" };
-  }
-
-  const refs = await exec(
-    "git",
-    [
-      "for-each-ref",
-      "--contains=HEAD",
-      "--format=%(refname)",
-      "refs/heads",
-      "refs/remotes",
-      "refs/tags",
-    ],
-    { cwd: path },
-  );
-  if (refs.code !== 0) return { removable: false, reason: "commit reachability is unreadable" };
-  const preserved = refs.stdout
-    .split(/\r?\n/)
-    .some((ref) => ref.length > 0 && ref !== registeredBranch);
-  return preserved
-    ? { removable: true }
-    : { removable: false, reason: "HEAD is not preserved by another branch, remote, or tag" };
-}
-
 async function observeWorktreeForRepair(
   number: number,
   expectedBranch: string,
@@ -217,7 +197,7 @@ async function observeWorktreeForRepair(
       detail: `path is attached to '${actual}', expected '${expectedBranch}'`,
     };
   }
-  const safety = await removalSafety(path, expectedRef);
+  const safety = await worktreeRemovalSafety(path, expectedRef, cfg.disposableIgnored);
   return {
     kind: "usable",
     path,
@@ -264,6 +244,28 @@ function effectivePr(observation: RepairObservation, state: TaskFacts["pr"]): Pr
 export function planRepairs(observation: RepairObservation): RepairPlan {
   const initialFacts = factsFromObservation(observation);
   const initialState = deriveTaskState(initialFacts);
+
+  // A local branch that diverged from (or cannot be compared with) its open PR
+  // may hold unpushed work. Report it and plan nothing: no reset, no relabel.
+  if (observation.prHead && observation.prHead.kind !== "tracking") {
+    const state: TaskState = {
+      kind: "inconsistent",
+      recovery: "reconcile-facts",
+      violations: [
+        ...(initialState.kind === "inconsistent" ? initialState.violations : []),
+        { invariant: "local-branch-matches-pr-head", detail: observation.prHead.detail },
+      ],
+    };
+    return {
+      issue: observation.number,
+      observation,
+      state,
+      projectedState: state,
+      actions: [],
+      blocked: [observation.prHead.detail],
+    };
+  }
+
   const facts: TaskFacts = { ...initialFacts };
   const actions: RepairAction[] = [];
   const blocked: string[] = [];
@@ -490,7 +492,13 @@ async function observeRepair(
     listPrs({ cwd, state: "all" }).then((all) => all.filter((pr) => prIssueNumber(pr) === number)),
     Promise.resolve(readRuns(cwd)),
   ]);
-  const branch = expectedBranch ? await branchFact(expectedBranch, base, cwd) : "absent";
+  let branch = expectedBranch ? await branchFact(expectedBranch, base, cwd) : "absent";
+  let prHead: PrHeadRelation | undefined;
+  const openPr = prs.find((pr) => pr.state === "OPEN");
+  if (expectedBranch && branch !== "absent" && openPr?.headSha && openPr.headRefName === expectedBranch) {
+    prHead = await observePrHead(expectedBranch, openPr, cwd);
+    if (prHead.kind === "tracking") branch = await compareCommitToBase(openPr.headSha, base, cwd);
+  }
   // Repair re-observes before every mutation; never reuse the dashboard's cached decisions.
   const reviews = (await Promise.all(prs.filter((pr) => pr.state === "OPEN")
     .map((pr) => listPrReviews(pr.number, { cwd })))).flat();
@@ -507,6 +515,30 @@ async function observeRepair(
     prs,
     reviews,
     telemetry: telemetryFact(records, number),
+    ...(prHead ? { prHead } : {}),
+  };
+}
+
+/**
+ * Judge an open PR by its head, not by a possibly stale local branch. Fetching
+ * only updates remote-tracking refs; the local branch is never moved here.
+ */
+async function observePrHead(branch: string, pr: Pr, cwd: string): Promise<PrHeadRelation> {
+  const head = pr.headSha.slice(0, 7);
+  if (!(await commitExists(pr.headSha, cwd))) {
+    await exec("git", ["fetch", "--quiet", "origin", pr.headRefName], { cwd });
+  }
+  if (!(await commitExists(pr.headSha, cwd))) {
+    return {
+      kind: "unavailable",
+      detail: `PR #${pr.number} head ${head} is not available locally; fetch it before repairing`,
+    };
+  }
+  const relation = await relateBranchToCommit(branch, pr.headSha, cwd);
+  if (relation === "equal" || relation === "behind") return { kind: "tracking" };
+  return {
+    kind: "diverged",
+    detail: `local branch diverged from PR head: ${branch} ${relation === "ahead" ? "has commits not pushed to" : "has a different history than"} PR #${pr.number} head ${head}; inspect before resetting`,
   };
 }
 
@@ -544,7 +576,7 @@ async function executeRepair(
       return;
     }
     case "safe-remove-worktree": {
-      await removeWorktree(action.path, { cwd });
+      await removeWorktree(action.path, { cwd, disposableIgnored: cfg.disposableIgnored });
       return;
     }
     case "release-lock":

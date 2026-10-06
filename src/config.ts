@@ -27,9 +27,17 @@ export interface OrchConfig {
    * cost fallback when a harness log reports none. Subscription-billed agents
    * (e.g. Codex) simply have no entry, so their cost stays null. */
   pricing: Record<string, ModelPricing>;
+  /** Top-level ignored paths (a trailing `/` matches a directory and its contents)
+   * that are regenerable build/install output, so a worktree holding only these
+   * may still be removed safely. Any other ignored, untracked, or dirty path
+   * keeps the worktree. */
+  disposableIgnored: string[];
 }
 
 export const CONFIG_FILE = "orch.config.json";
+
+/** Regenerable output that never makes a task worktree worth preserving. */
+export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/"];
 
 export const DEFAULT_CONFIG: OrchConfig = {
   agents: ["claude", "codex"],
@@ -45,6 +53,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
     codex: { cmd: "codex", models: { easy: "low", hard: "high" } },
   },
   pricing: DEFAULT_PRICING,
+  disposableIgnored: [...DEFAULT_DISPOSABLE_IGNORED],
 };
 
 export function configPath(cwd: string = process.cwd()): string {
@@ -67,6 +76,13 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     (typeof raw.baseBranch !== "string" || raw.baseBranch.trim().length === 0)
   ) {
     throw new Error("baseBranch must be a non-empty string when configured");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "disposableIgnored") &&
+    (!Array.isArray(raw.disposableIgnored) ||
+      !raw.disposableIgnored.every((p) => typeof p === "string" && p.trim().length > 0))
+  ) {
+    throw new Error("disposableIgnored must be an array of non-empty path strings when configured");
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {

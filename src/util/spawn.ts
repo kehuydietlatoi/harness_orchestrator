@@ -63,8 +63,12 @@ export function spawnLogged(
 
     const finish = (code: number): void => {
       if (timer) clearTimeout(timer);
-      if (log) log.end();
-      resolve({ code: timedOut ? 124 : code, durationMs: Date.now() - start, timedOut });
+      const done = (): void =>
+        resolve({ code: timedOut ? 124 : code, durationMs: Date.now() - start, timedOut });
+      if (!log) return done();
+      // Resolve only once the log is flushed so callers never read a partial file.
+      log.once("close", done);
+      log.end();
     };
 
     child.on("error", () => finish(127));
