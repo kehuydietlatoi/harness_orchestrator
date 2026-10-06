@@ -34,6 +34,7 @@ import {
   addWorktree,
   branchName,
   removeWorktree,
+  worktreeRemovalSafety,
   slugify,
   worktreePath,
 } from "../git/worktree.js";
@@ -163,41 +164,6 @@ async function branchFact(
   return compareBranchToBase(branch, base, cwd);
 }
 
-async function removalSafety(
-  path: string,
-  registeredBranch: string,
-): Promise<{ removable: boolean; reason?: string }> {
-  const status = await exec(
-    "git",
-    ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"],
-    { cwd: path },
-  );
-  if (status.code !== 0) return { removable: false, reason: "worktree status is unreadable" };
-  if (status.stdout.length > 0) {
-    return { removable: false, reason: "worktree has dirty, untracked, or ignored files" };
-  }
-
-  const refs = await exec(
-    "git",
-    [
-      "for-each-ref",
-      "--contains=HEAD",
-      "--format=%(refname)",
-      "refs/heads",
-      "refs/remotes",
-      "refs/tags",
-    ],
-    { cwd: path },
-  );
-  if (refs.code !== 0) return { removable: false, reason: "commit reachability is unreadable" };
-  const preserved = refs.stdout
-    .split(/\r?\n/)
-    .some((ref) => ref.length > 0 && ref !== registeredBranch);
-  return preserved
-    ? { removable: true }
-    : { removable: false, reason: "HEAD is not preserved by another branch, remote, or tag" };
-}
-
 async function observeWorktreeForRepair(
   number: number,
   expectedBranch: string,
@@ -231,7 +197,7 @@ async function observeWorktreeForRepair(
       detail: `path is attached to '${actual}', expected '${expectedBranch}'`,
     };
   }
-  const safety = await removalSafety(path, expectedRef);
+  const safety = await worktreeRemovalSafety(path, expectedRef, cfg.disposableIgnored);
   return {
     kind: "usable",
     path,
@@ -610,7 +576,7 @@ async function executeRepair(
       return;
     }
     case "safe-remove-worktree": {
-      await removeWorktree(action.path, { cwd });
+      await removeWorktree(action.path, { cwd, disposableIgnored: cfg.disposableIgnored });
       return;
     }
     case "release-lock":

@@ -171,7 +171,7 @@ async function processClaimed(
     harnessDurationMs = result.durationMs;
 
     if (!result.ok) {
-      await recoverClaim(n, task.worktree.path, cwd);
+      await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
       console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
       summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
       telemetryOutcome = "failed";
@@ -192,7 +192,7 @@ async function processClaimed(
         summary = { issue: n, outcome: "submitted", prUrl: url, durationMs: result.durationMs };
         telemetryOutcome = "auto-submitted";
       } else {
-        await recoverClaim(n, task.worktree.path, cwd);
+        await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
         console.log(pc.yellow(`⚠ #${n} produced no commits — flagged needs-attention`));
         summary = { issue: n, outcome: "needs-attention", durationMs: result.durationMs };
         telemetryOutcome = "needs-attention";
@@ -200,7 +200,7 @@ async function processClaimed(
     }
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
-    await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree });
+    await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree, disposableIgnored: cfg.disposableIgnored });
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
     summary = { issue: n, outcome: "failed", durationMs };
     telemetryOutcome = "failed";
@@ -219,7 +219,7 @@ async function recoverClaim(
   n: number,
   worktree: string,
   cwd: string,
-  opts: { preserveWorktree?: boolean } = {},
+  opts: { preserveWorktree?: boolean; disposableIgnored?: readonly string[] } = {},
 ): Promise<void> {
   try {
     await editIssue(n, {
@@ -236,7 +236,7 @@ async function recoverClaim(
 
   let removed = false;
   try {
-    removed = await removeWorktree(worktree, { cwd });
+    removed = await removeWorktree(worktree, { cwd, disposableIgnored: opts.disposableIgnored });
   } catch (error) {
     warnRecovery(n, "safe worktree cleanup failed", error);
     return;
