@@ -74,6 +74,12 @@ export interface OrchConfig {
   requireHumanMerge: boolean;
   /** Fix/conflict rounds the autonomous loop may spend on one task before handing it to a human. */
   maxReviewRounds: number;
+  /**
+   * Lead triages per task before a stuck task goes to a human (ADR-0010). When the round budget
+   * is spent, the lead may grant one more guided round (optionally on the hard tier) or escalate
+   * with a diagnosis. `0` escalates straight to a human, as before.
+   */
+  maxLeadTriage: number;
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
@@ -108,6 +114,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
   reviewPolicy: "cross-or-self",
   requireHumanMerge: false,
   maxReviewRounds: 3,
+  maxLeadTriage: 1,
   worktreeRoot: "../wt",
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
@@ -172,6 +179,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     (!Number.isInteger(raw.maxReviewRounds) || (raw.maxReviewRounds as number) < 1)
   ) {
     throw new Error("maxReviewRounds must be a positive integer");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "maxLeadTriage") &&
+    (!Number.isInteger(raw.maxLeadTriage) || (raw.maxLeadTriage as number) < 0)
+  ) {
+    throw new Error("maxLeadTriage must be a non-negative integer");
   }
   if (
     Object.prototype.hasOwnProperty.call(raw, "disposableIgnored") &&

@@ -20,6 +20,9 @@ interface SimPr {
   rounds: number;
   attention: boolean;
   merged: boolean;
+  /** Lead triages recorded on the PR, and the rounds they granted. */
+  triages: number;
+  extraRounds: number;
   /** Verdicts the reviewer will return in order; "approve" once exhausted. */
   verdicts: Array<"approve" | "changes">;
   /** Scripted results that override the normal outcome of the next executions of a step kind. */
@@ -29,7 +32,7 @@ interface SimPr {
 function pr(issue: number, over: Partial<SimPr> = {}): SimPr {
   return {
     issue, author: "codex", version: 1, checks: "pass", mergeable: "clean", approved: false, changes: false,
-    rounds: 0, attention: false, merged: false, verdicts: [], overrides: {}, ...over,
+    rounds: 0, attention: false, merged: false, triages: 0, extraRounds: 0, verdicts: [], overrides: {}, ...over,
   };
 }
 
@@ -43,6 +46,10 @@ class World {
   active = 0;
   peak = 0;
   maxRounds = 3;
+  /** Lead triages allowed per task (0: escalate straight away, the pre-triage behaviour). */
+  maxTriages = 0;
+  /** What the fake lead decides when it triages. */
+  triageDecision: "retry" | "escalate" = "retry";
   requireHumanMerge = false;
   observeFailures = 0;
   /** The next N polls cannot read any PR (they are reported as unobserved). */
@@ -71,6 +78,7 @@ class World {
         pr: { number: 1000 + p.issue, head: `h${p.version}`, checks: p.checks, mergeable: p.mergeable },
         review: { approved: p.approved, changesRequested: p.changes },
         rounds: p.rounds, maxRounds: this.maxRounds, requireHumanMerge: this.requireHumanMerge,
+        triages: p.triages, maxTriages: this.maxTriages, extraRounds: p.extraRounds,
       };
       return {
         issue: { number: p.issue, title: `t${p.issue}`, body: "", state: "OPEN", labels: [], assignees: [] },
@@ -106,6 +114,11 @@ class World {
       case "merge":
         p.merged = true;
         return { signal: "task.merged" };
+      case "triage":
+        p.triages += 1;
+        if (this.triageDecision === "retry") { p.extraRounds += 1; return { signal: "triage.retry" }; }
+        p.attention = true;
+        return { signal: "task.escalated", detail: `${step.reason}. Lead triage: needs a human` };
       case "escalate":
         p.attention = true;
         return { signal: "task.escalated", detail: step.reason };
@@ -1192,5 +1205,64 @@ describe("runAutopilot scoped to one plan", () => {
     const summary = await driveScoped(w, new Set([5]), async () => { throw new Error("gh down"); });
 
     expect(summary).toMatchObject({ merged: [5], stopped: "drained", remaining: null });
+  });
+});
+
+describe("runAutopilot with lead triage", () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("lets the lead grant one more round when the budget is spent, then merges", async () => {
+    const w = new World();
+    w.maxRounds = 1;
+    w.maxTriages = 1;
+    w.add(pr(38, { verdicts: ["changes", "changes", "approve"] }));
+
+    const summary = await drive(w);
+
+    expect(w.calls).toEqual(["review:38", "fix:review:38", "review:38", "triage:38", "fix:review:38", "review:38", "merge:38"]);
+    expect(summary).toMatchObject({ merged: [38], triaged: [38], escalated: [] });
+  });
+
+  it("escalates once the granted round is spent too, never triaging the same task twice", async () => {
+    const w = new World();
+    w.maxRounds = 1;
+    w.maxTriages = 1;
+    w.add(pr(38, { verdicts: ["changes", "changes", "changes"] }));
+
+    const summary = await drive(w);
+
+    expect(w.calls.filter((c) => c === "triage:38")).toHaveLength(1);
+    expect(w.calls.at(-1)).toBe("escalate:38");
+    expect(summary).toMatchObject({ merged: [], triaged: [38], escalated: [38] });
+  });
+
+  it("hands the task to a human when the lead says so", async () => {
+    const w = new World();
+    w.maxRounds = 1;
+    w.maxTriages = 1;
+    w.triageDecision = "escalate";
+    w.add(pr(38, { verdicts: ["changes", "changes"] }));
+
+    const summary = await drive(w);
+
+    expect(w.calls).toEqual(["review:38", "fix:review:38", "review:38", "triage:38"]);
+    expect(summary).toMatchObject({ triaged: [], escalated: [38] });
+  });
+
+  it("escalates a triage that keeps failing instead of retrying it forever", async () => {
+    const w = new World();
+    w.maxRounds = 1;
+    w.maxTriages = 1;
+    w.add(pr(38, {
+      verdicts: ["changes", "changes"],
+      overrides: { triage: [{ signal: "step.failed", detail: "gh down" }, { signal: "step.failed", detail: "gh down" }] },
+    }));
+
+    const summary = await drive(w);
+
+    expect(w.calls.filter((c) => c === "triage:38")).toHaveLength(MAX_STEP_FAILURES);
+    expect(w.calls.at(-1)).toBe("escalate:38");
+    expect(summary.escalated).toEqual([38]);
   });
 });

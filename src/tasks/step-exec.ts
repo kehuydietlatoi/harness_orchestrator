@@ -1,16 +1,21 @@
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RunContext, RunResult } from "../adapters/types.js";
+import { runHeadlessAgent, type HeadlessResult } from "../adapters/headless.js";
 import { makeAdapter } from "../adapters/index.js";
-import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { detectUsageLimit } from "../adapters/usage-limit.js";
+import { markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { issueEffort } from "../board/board.js";
 import { merge } from "../board/review.js";
-import { NoReviewerError, runAutomatedReview } from "../board/review-run.js";
+import {
+  NoReviewerError, listChangedFiles, prepareReviewCheckout, runAutomatedReview, type ChangedFile,
+} from "../board/review-run.js";
 import type { RunPhase } from "../board/telemetry.js";
-import type { OrchConfig } from "../config.js";
+import { resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
 import { observeWorktree } from "../git/worktree.js";
-import { commentOnPr, editIssue, failingChecks } from "../github/github.js";
-import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS } from "../github/labels.js";
+import { commentOnPr, editIssue, failingChecks, getPr, prDiff, type Pr } from "../github/github.js";
+import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS, effortLabel } from "../github/labels.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize, readLogSince } from "../util/log-file.js";
@@ -18,6 +23,7 @@ import type { TaskObservation } from "./observe.js";
 import { formatConflictPrompt, formatFixPrompt } from "./step-prompts.js";
 import { readSession, writeSession } from "./sessions.js";
 import { recordRun, resolveTaskModel } from "./runner.js";
+import { formatTriageComment, formatTriagePrompt, parseTriageDecision, type TriageRecord } from "./triage.js";
 
 /** The outcome of one step. The coordinator logs it and re-observes; it never trusts it as state. */
 export type Signal =
@@ -27,6 +33,7 @@ export type Signal =
   | "conflict.resolved"
   | "task.merged"
   | "task.escalated"
+  | "triage.retry"
   | "agent.unavailable"
   | "step.failed";
 
@@ -226,7 +233,7 @@ export async function executeFix(
   const prompt = (resumed: boolean): string =>
     formatFixPrompt({
       issue: obs.issue, pr: obs.pr, worktree, reason, notes: obs.feedback, failingChecks: failing,
-      resumed, baseName: base.name,
+      resumed, baseName: base.name, leadGuidance: obs.guidance,
     });
 
   const session = readSession(n, cwd);
@@ -326,6 +333,150 @@ export async function executeMerge(obs: TaskObservation, cfg: OrchConfig, cwd: s
   } catch (error) {
     return failure(error instanceof Error ? error.message : String(error));
   }
+}
+
+/** The I/O a lead triage needs, injected so every outcome is testable without a harness or GitHub. */
+export interface TriageEnv {
+  /** Run the lead read-only in an exact checkout of the PR head (fails closed if none can be made). */
+  runLead(args: {
+    prompt: string;
+    model: ModelSpec | undefined;
+    pr: Pick<Pr, "number" | "headSha">;
+    logName: string;
+  }): Promise<HeadlessResult>;
+  /** Best-effort list of the PR's changed files for the prompt. */
+  changedFiles(pr: number): Promise<ChangedFile[]>;
+  /** The PR's current head, to refuse recording a decision made on an older one. */
+  headOf(pr: number): Promise<string>;
+  comment(pr: number, body: string): Promise<void>;
+  /** Move the task to the hard tier (removing `from`, its current effort label). */
+  setHardEffort(issue: number, from: "easy" | "hard" | null): Promise<void>;
+  escalate(obs: TaskObservation, reason: string): Promise<StepResult>;
+  now(): Date;
+}
+
+export function defaultTriageEnv(cfg: OrchConfig, cwd: string): TriageEnv {
+  return {
+    runLead: async ({ prompt, model, pr, logName }) => {
+      const checkout = await prepareReviewCheckout(pr, cwd);
+      try {
+        return await runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, logName, cfg.reviewTimeoutMs, {
+          readOnly: true,
+          runCwd: checkout.path,
+        });
+      } finally {
+        await checkout.release().catch((error: unknown) =>
+          log.warn(`could not remove triage checkout ${checkout.path}: ${error instanceof Error ? error.message : String(error)}`));
+      }
+    },
+    changedFiles: async (pr) => listChangedFiles(await prDiff(pr, { cwd })),
+    headOf: async (pr) => (await getPr(pr, { cwd })).headSha,
+    comment: (pr, body) => commentOnPr(pr, body, { cwd }),
+    setHardEffort: (issue, from) =>
+      editIssue(issue, { cwd, addLabels: [effortLabel("hard")], removeLabels: from === "easy" ? [effortLabel("easy")] : [] }),
+    escalate: (obs, reason) => executeEscalate(obs, reason, cwd),
+    now: () => new Date(),
+  };
+}
+
+/**
+ * Ask the lead what to do with a task whose round budget is spent (ADR-0010). The lead reads an
+ * exact, read-only checkout of the PR head and returns one decision: `retry` (one more fix round
+ * with its guidance, optionally on the hard tier) or `escalate` (a human decides, with the lead's
+ * diagnosis). Every decision is recorded as an `orch-triage:v1` PR comment, so the loop counts it
+ * from GitHub and never triages the same task twice. Fail-closed: a paused lead, a failed run, or a
+ * reply that is not one valid decision escalates to a human exactly as before triage existed.
+ */
+export async function executeTriage(
+  obs: TaskObservation,
+  reason: string,
+  cfg: OrchConfig,
+  cwd: string,
+  env: TriageEnv = defaultTriageEnv(cfg, cwd),
+): Promise<StepResult> {
+  const n = obs.issue.number;
+  const lead = cfg.lead;
+  const pausedUntil = unavailableUntil(lead, cwd);
+  if (pausedUntil) {
+    return env.escalate(obs, `${reason}; lead triage was unavailable ('${lead}' is paused until ${pausedUntil.toISOString()})`);
+  }
+
+  const model = resolveLeadModel(cfg);
+  const effort = issueEffort(obs.issue);
+  const logName = `triage-${n}-pr${obs.pr.number}`;
+  const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
+  const since = logSize(logFile);
+  const started = Date.now();
+  let unavailable = "";
+  let failed = "";
+  let decision: ReturnType<typeof parseTriageDecision> = null;
+  try {
+    const files = await env.changedFiles(obs.pr.number).catch((): ChangedFile[] => []);
+    const prompt = formatTriagePrompt({
+      issue: obs.issue, pr: obs.pr, author: obs.author, effort, reason,
+      checks: obs.facts.pr?.checks ?? "unknown", mergeable: obs.facts.pr?.mergeable ?? "unknown",
+      reviews: obs.reviews, files,
+    });
+    const run = await env.runLead({ prompt, model, pr: obs.pr, logName });
+    decision = run.code === 0 && !run.timedOut ? parseTriageDecision(run.text) : null;
+    if (!decision) {
+      const limit = detectUsageLimit(run.raw, env.now());
+      if (limit) {
+        const until = markUnavailable(lead, { resetAt: limit.resetAt, reason: limit.message }, cwd, env.now());
+        unavailable = `'${lead}' hit its usage limit (until ${until.toISOString()})`;
+      } else {
+        failed = run.aborted !== undefined ? `aborted: ${run.aborted}`
+          : run.timedOut ? "timed out" : run.code !== 0 ? `exited ${run.code}` : "gave no valid decision";
+      }
+    }
+  } catch (error) {
+    failed = error instanceof Error ? error.message : String(error);
+  }
+  // Effort only moves up: from the easy tier, or from no label (which runs on `defaultEffort`).
+  const upgrade = decision?.decision === "retry" && decision.effort === "hard" && effort !== "hard";
+  recordRun(n, lead, model, decision ? `triage-${decision.decision}` : "triage-failed", Date.now() - started, logFile, cwd, cfg,
+    { phase: "triage" satisfies RunPhase, since });
+
+  const record = (d: "retry" | "escalate"): TriageRecord => ({
+    pr: obs.pr.number, head: obs.pr.headSha, timestamp: env.now().toISOString(), decision: d,
+    extraRounds: d === "retry" ? 1 : 0, ...(d === "retry" && upgrade ? { effort: "hard" as const } : {}),
+  });
+
+  if (decision?.decision === "retry") {
+    // The decision is bound to the head the lead read; a newer head deserves a fresh look.
+    const head = await env.headOf(obs.pr.number).catch(() => null);
+    if (head !== obs.pr.headSha) return failure(`PR #${obs.pr.number} changed during triage; it will be observed again`);
+    try {
+      await env.comment(obs.pr.number, formatTriageComment(record("retry"), { issue: n, reason, text: decision.guidance }));
+    } catch (error) {
+      return failure(`could not record the triage decision: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    let warning = "";
+    if (upgrade) {
+      try {
+        await env.setHardEffort(n, effort);
+      } catch (error) {
+        warning = `; could not move #${n} to the hard tier (${error instanceof Error ? error.message : String(error)})`;
+        log.warn(`#${n}: triage granted a round on the hard tier, but the effort label was not updated${warning}`);
+      }
+    }
+    return { signal: "triage.retry", detail: `one more round${upgrade ? " on the hard tier" : ""}${warning}` };
+  }
+
+  // Escalate: the lead's call, or no usable decision. Record it so the task is not triaged again.
+  const noDecision = unavailable ? `was unavailable: ${unavailable}` : `failed (${failed || "no decision"})`;
+  const why = decision?.decision === "escalate"
+    ? `${reason}. Lead triage: ${decision.diagnosis}${decision.question ? ` Question for you: ${decision.question}` : ""}`
+    : `${reason}; lead triage ${noDecision}`;
+  const diagnosis = decision?.decision === "escalate"
+    ? `${decision.diagnosis}${decision.question ? `\n\n**Question for you:** ${decision.question}` : ""}`
+    : `No decision: the lead triage ${noDecision}.`;
+  try {
+    await env.comment(obs.pr.number, formatTriageComment(record("escalate"), { issue: n, reason, text: diagnosis }));
+  } catch (error) {
+    log.warn(`#${n}: could not record the triage decision: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return env.escalate(obs, why);
 }
 
 /** Hand the task to a human: label it and say why on the PR. The loop then leaves it alone. */

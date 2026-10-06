@@ -4,11 +4,13 @@ import { answeredChangeRequestRounds, formatReview, latestChangeRequestNotes } f
 
 vi.mock("../src/github/github.js", () => ({
   listIssues: vi.fn(), listOpenPrs: vi.fn(), listPrReviews: vi.fn(), prChecksState: vi.fn(), prMergeability: vi.fn(),
+  listPrComments: vi.fn(),
 }));
 vi.mock("../src/tasks/events.js", () => ({ readEvents: () => [], fixRoundsFor: () => 0 }));
 
 import * as gh from "../src/github/github.js";
 import { assembleFacts, observeTasks } from "../src/tasks/observe.js";
+import { formatTriageComment } from "../src/tasks/triage.js";
 
 const HEAD = "a".repeat(40);
 const OLD = "c".repeat(40);
@@ -249,8 +251,58 @@ describe("observeTasks", () => {
     });
   });
 
+  describe("lead triage through the real observation-to-decision pipeline", () => {
+    const spentReviews = () => [
+      review("codex", "request-changes", { head: OLD }),
+      review("codex", "request-changes"),
+    ];
+    const cfg: OrchConfig = { ...DEFAULT_CONFIG, maxReviewRounds: 1, maxLeadTriage: 1 };
+    const triage = (decision: "retry" | "escalate", id: number, head = HEAD) => ({
+      id, created_at: "", body: formatTriageComment(
+        { pr: 62, head, timestamp: "2026-10-07T00:00:00Z", decision, extraRounds: decision === "retry" ? 1 : 0 },
+        { issue: 38, reason: "stuck", text: decision === "retry" ? "Decline the rename; fix the null check." : "Spec is ambiguous." },
+      ),
+    });
+
+    it("asks the lead to triage once the budget is spent, reading comments only then", async () => {
+      vi.mocked(gh.listPrComments).mockResolvedValue([]);
+      vi.mocked(gh.listPrReviews).mockResolvedValue([review("codex", "request-changes")]);
+      const { tasks: [fresh] } = await observeTasks(cfg, "/repo");
+      expect(fresh.step.kind).toBe("fix");
+      expect(gh.listPrComments).not.toHaveBeenCalled();
+
+      vi.mocked(gh.listPrReviews).mockResolvedValue(spentReviews());
+      const { tasks: [task] } = await observeTasks(cfg, "/repo");
+      expect(task.step).toMatchObject({ kind: "triage" });
+      expect(task.facts).toMatchObject({ rounds: 1, triages: 0, maxTriages: 1, extraRounds: 0 });
+    });
+
+    it("runs the granted round with the lead's guidance after a retry triage", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(spentReviews());
+      vi.mocked(gh.listPrComments).mockResolvedValue([{ id: 1, created_at: "", body: "unrelated chatter" }, triage("retry", 2, OLD)]);
+      const { tasks: [task] } = await observeTasks(cfg, "/repo");
+      expect(task.step).toEqual({ kind: "fix", reason: "review" });
+      expect(task.facts).toMatchObject({ triages: 1, extraRounds: 1 });
+      expect(task.guidance).toBe("Decline the rename; fix the null check.");
+    });
+
+    it("escalates when the triage budget is spent", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(spentReviews());
+      vi.mocked(gh.listPrComments).mockResolvedValue([triage("escalate", 3)]);
+      const { tasks: [task] } = await observeTasks(cfg, "/repo");
+      expect(task.step.kind).toBe("escalate");
+    });
+
+    it("treats an unreadable comment list as unobserved, never as no triage", async () => {
+      vi.mocked(gh.listPrReviews).mockResolvedValue(spentReviews());
+      vi.mocked(gh.listPrComments).mockRejectedValue(new Error("gh api failed"));
+      expect(await observeTasks(cfg, "/repo")).toEqual({ tasks: [], unobserved: [62], ambiguous: [] });
+    });
+  });
+
   describe("round budget through the real observation-to-decision pipeline", () => {
-    const withBudget = (maxReviewRounds: number): OrchConfig => ({ ...DEFAULT_CONFIG, maxReviewRounds });
+    // Without lead triage, so a spent budget goes straight to a human (triage is covered below).
+    const withBudget = (maxReviewRounds: number): OrchConfig => ({ ...DEFAULT_CONFIG, maxReviewRounds, maxLeadTriage: 0 });
     /** `answered` change requests on earlier heads (each answered by a fix), plus one pending on the current head. */
     const history = (answered: number, pending: boolean) => [
       ...Array.from({ length: answered }, (_, i) => review("codex", "request-changes", { head: String(i).repeat(40) })),
@@ -276,7 +328,7 @@ describe("observeTasks", () => {
     it("allows the full default budget of three fixes, and escalates on the fourth request", async () => {
       for (const [answered, expected] of [[0, "fix"], [1, "fix"], [2, "fix"], [3, "escalate"]] as const) {
         vi.mocked(gh.listPrReviews).mockResolvedValue(history(answered, true));
-        const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo");
+        const { tasks: [task] } = await observeTasks(withBudget(3), "/repo");
         expect(task.facts.rounds, `${answered} answered`).toBe(answered);
         expect(task.step.kind, `${answered} answered`).toBe(expected);
       }

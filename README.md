@@ -115,7 +115,10 @@ to process at most one eligible task.
 harness review each PR (read-only), sends feedback or a red CI back to the author's **resumed**
 session, has Claude resolve merge conflicts, and squash-merges through the normal gate. It
 escalates to you (`needs-attention` plus a PR comment) after `maxReviewRounds` fix rounds or two
-failed attempts at a step. `orch autopilot --dry-run` shows the next step for every open PR without
+failed attempts at a step. Before escalating a task whose rounds ran out, the **lead triages it**
+(`maxLeadTriage`, default 1; `0` disables): it reads the PR head read-only and either grants one more
+round with concrete guidance for the author (optionally moving an easy task to the hard tier) or
+escalates with a diagnosis and the question you need to answer. `orch autopilot --dry-run` shows the next step for every open PR without
 doing anything (it also lists what it would claim and what it would skip); set `requireHumanMerge: true`
 to stop at an approved, green PR. Autopilot **only starts issues that carry an `agent:` label**: unrouted
 backlog is left alone (route it with `orch assign`), and `--no-claim` makes it drive existing PRs only.
@@ -221,6 +224,7 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "reviewPolicy": "cross-or-self",
   "requireHumanMerge": false,
   "maxReviewRounds": 3,
+  "maxLeadTriage": 1,
   "worktreeRoot": "../wt",
   "maxConcurrent": 2,
   "taskTimeoutMs": 1800000,

@@ -117,3 +117,39 @@ describe("reviewSatisfied", () => {
     expect(reviewSatisfied({ ...base, author: "claude", reviewers: ["ghost"] })).toBe(false);
   });
 });
+
+describe("decideStep: lead triage before human escalation", () => {
+  const spent = (over: Partial<StepFacts> = {}): StepFacts => ({
+    ...facts({ review: { changesRequested: true }, rounds: 3, maxRounds: 3 }),
+    ...over,
+  });
+
+  it("asks the lead to triage instead of escalating while its triage budget lasts", () => {
+    expect(decideStep(spent({ triages: 0, maxTriages: 1 }))).toEqual({
+      kind: "triage",
+      reason: "review feedback is still unresolved after 3 fix rounds (limit 3)",
+    });
+    expect(decideStep({ ...spent({ triages: 0, maxTriages: 1 }), review: { approved: false, changesRequested: false }, pr: { number: 9, head: "a".repeat(40), checks: "fail", mergeable: "clean" } }).kind)
+      .toBe("triage");
+    expect(decideStep({ ...spent({ triages: 0, maxTriages: 1 }), review: { approved: false, changesRequested: false }, pr: { number: 9, head: "a".repeat(40), checks: "pass", mergeable: "conflicting" } }).kind)
+      .toBe("triage");
+  });
+
+  it("escalates once the triage budget is spent, or when triage is disabled or unset", () => {
+    expect(decideStep(spent({ triages: 1, maxTriages: 1, extraRounds: 1, rounds: 4 }))).toEqual({
+      kind: "escalate",
+      reason: "review feedback is still unresolved after 4 fix rounds (limit 3 + 1 granted by triage)",
+    });
+    expect(decideStep(spent({ triages: 0, maxTriages: 0 })).kind).toBe("escalate");
+    expect(decideStep(spent()).kind).toBe("escalate"); // facts without triage fields behave as before
+  });
+
+  it("lets rounds granted by a triage extend the budget: the next fix runs", () => {
+    expect(decideStep(spent({ triages: 1, maxTriages: 1, extraRounds: 1 }))).toEqual({ kind: "fix", reason: "review" });
+  });
+
+  it("never triages a task that is not stuck", () => {
+    expect(decideStep(facts({ review: { changesRequested: true }, rounds: 2, maxRounds: 3 })).kind).toBe("fix");
+    expect(decideStep({ ...facts({ review: { approved: true }, rounds: 5 }), triages: 0, maxTriages: 1 }).kind).toBe("merge");
+  });
+});
