@@ -71,7 +71,7 @@ orch plan                                         # interactive planning (curren
 # Or generate a headless draft:
 orch plan --draft "add SSO login" > tickets.json
 orch plan --dry-run tickets.json                   # validate and preview; no writes
-orch plan tickets.json                             # create issues with dependency links
+orch plan tickets.json --brief plan-brief.md      # create issues with dependency links, routing, and plan context
 
 orch assign --judge > assignments.json             # propose routing with the configured lead
 # inspect/edit assignments.json, then:
@@ -168,7 +168,7 @@ request checks. Off-machine access would require additional authentication.
 | Command | Purpose |
 |---|---|
 | `orch init` / `orch doctor` | scaffold project setup / verify environment, labels, and dependencies |
-| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example]` | interactive planning without args; headless draft; file preview or issue creation; example ticket format |
+| `orch plan [file] [--draft "<goal>"] [--dry-run] [--example] [--brief <file>]` | interactive planning without args; headless draft; file preview or issue creation; example ticket format |
 | `orch assign` | emit a whole-graph routing brief with telemetry |
 | `orch assign --judge` | propose routing as JSON |
 | `orch assign --auto [--dry-run]` | judge and apply routing, or preview changes |

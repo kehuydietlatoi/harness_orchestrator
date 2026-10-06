@@ -65,6 +65,16 @@ describe("interactive planning builders", () => {
     expect(seed).not.toContain("`");
   });
 
+  it("formatInteractiveSeed asks for the brief and routing over the configured agents, still one safe line", () => {
+    const seed = formatInteractiveSeed("/abs/tickets.json", "/abs/plan-brief.md", ["claude", "codex"]);
+    expect(seed).toContain("/abs/plan-brief.md");
+    expect(seed).toContain("one of claude, codex");
+    expect(seed).toContain("effort (easy or hard)");
+    expect(seed).not.toContain("\n");
+    expect(seed).not.toContain('"');
+    expect(seed).not.toContain("`");
+  });
+
   it("dispatches through an adapter's interactive-planning capability", async () => {
     const adapter = makeAdapter("claude", cfg);
     let seenSeed = "";

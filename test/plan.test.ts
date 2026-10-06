@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseTickets, resolvePlan } from "../src/tasks/plan.js";
+import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
 import { renderTicketBody } from "../src/tasks/plan-create.js";
 
 describe("renderTicketBody", () => {
@@ -133,5 +133,53 @@ describe("resolvePlan", () => {
       { title: "B", files: ["src/x.ts"] },
     ]);
     expect(r.warnings.some((w) => /file "src\/x\.ts" is claimed by tickets 1, 2/.test(w))).toBe(true);
+  });
+});
+
+describe("plan routing and brief", () => {
+  it("parses agent/effort and rejects non-string routing", () => {
+    const [t] = parseTickets('[{"title":"x","agent":"codex","effort":"hard"}]');
+    expect(t).toMatchObject({ agent: "codex", effort: "hard" });
+    expect(() => parseTickets('[{"title":"x","agent":1,"effort":["hard"]}]')).toThrow(
+      /ticket 1: agent must be a string; ticket 1: effort must be a string/,
+    );
+  });
+
+  it("keeps valid routing and drops unknown agents, unknown efforts, and an effort without an agent", () => {
+    const plan = resolvePlan(
+      [
+        { title: "ok", agent: "codex", effort: "hard" },
+        { title: "agent only", agent: "claude" },
+        { title: "stranger", agent: "gemini", effort: "easy" },
+        { title: "bad tier", agent: "claude", effort: "medium" },
+        { title: "orphan effort", effort: "easy" },
+      ],
+      { agents: ["claude", "codex"] },
+    );
+    expect(plan.tickets.map((t) => [t.agent, t.effort])).toEqual([
+      ["codex", "hard"],
+      ["claude", undefined],
+      [undefined, undefined],
+      ["claude", undefined],
+      [undefined, undefined],
+    ]);
+    expect(plan.errors).toEqual([]);
+    expect(plan.warnings).toEqual([
+      expect.stringMatching(/ticket 3 is routed to unknown agent "gemini"/),
+      expect.stringMatching(/ticket 3 has an effort but no agent/),
+      expect.stringMatching(/ticket 4 has unknown effort "medium"/),
+      expect.stringMatching(/ticket 5 has an effort but no agent/),
+    ]);
+  });
+
+  it("does not judge agents when none are configured (a bare dry run)", () => {
+    expect(resolvePlan([{ title: "x", agent: "gemini" }]).tickets[0].agent).toBe("gemini");
+  });
+
+  it("blocks an over-long brief instead of truncating it", () => {
+    expect(resolvePlan([{ title: "x" }], { brief: "a".repeat(MAX_BRIEF_CHARS) }).errors).toEqual([]);
+    expect(resolvePlan([{ title: "x" }], { brief: "a".repeat(MAX_BRIEF_CHARS + 1) }).errors).toEqual([
+      expect.stringMatching(/plan brief is 4001 characters \(limit 4000\)/),
+    ]);
   });
 });

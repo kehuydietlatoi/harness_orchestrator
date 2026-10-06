@@ -20,6 +20,8 @@ Each ticket is a JSON object:
 | `dependsOn` | no | `id`s of **earlier** tickets that must land first |
 | `after` | no | `id`s of **earlier** tickets preferred first, without blocking runnable work |
 | `files` | no | file/dir ownership hints that minimise overlap between parallel agents |
+| `agent` | no | which harness implements it (a configured agent, e.g. `claude` or `codex`) — becomes the `agent:` label |
+| `effort` | no | `easy` or `hard` model tier — becomes the `effort:` label; only used together with `agent` |
 
 ## How to decompose
 
@@ -30,6 +32,19 @@ Each ticket is a JSON object:
 - File ownership is a hint, not proof of independence: check the actual interfaces and required results before choosing `after` instead of `dependsOn`.
 - Write each `body` so an agent with no extra context can act: scope, constraints, and a one-line acceptance check.
 - Base scope and `files` on the **actual repository structure** you are given, not on assumptions.
+- **Route** a ticket (`agent` + `effort`) when you are confident who should build it: `hard` for design-heavy, cross-cutting, or risky work, `easy` for mechanical changes. Omit both when unsure — orch's routing judge fills in unrouted tickets. An `effort` without an `agent` is dropped.
+
+## The plan brief (interactive sessions)
+
+When the session asks for one, also save a short markdown **plan brief** (under 4000 characters) next to `tickets.json`. orch embeds it in every created issue as a collapsed "Plan context" block, so implementers, reviewers, and the lead's later decisions keep the reasons behind the plan. Cover:
+
+- **Goal** — what the whole plan achieves and for whom.
+- **Key decisions** — the choices made while brainstorming, with one-line reasons.
+- **Constraints** — what must not change, compatibility, performance or security limits.
+- **Rejected alternatives** — what was considered and why not, so nobody re-litigates it.
+- **Acceptance** — how to tell the whole plan is done.
+
+Do not write `Depends-on:`/`After:` lines in the brief — ticket ordering belongs in `dependsOn`/`after`.
 
 ## Output contract
 
@@ -38,7 +53,7 @@ Reply with **exactly one** fenced code block tagged `json` and nothing after it 
 ```json
 [
   { "id": "auth-config", "title": "Add OAuth provider config", "body": "Load client id/secret + issuer from env; fail fast on invalid config.", "files": ["src/auth/config.ts"] },
-  { "id": "session-mw", "title": "Add session middleware", "body": "Verify the session cookie and attach the user; 401 on protected routes.", "dependsOn": ["auth-config"], "files": ["src/mw/session.ts"] }
+  { "id": "session-mw", "title": "Add session middleware", "body": "Verify the session cookie and attach the user; 401 on protected routes.", "dependsOn": ["auth-config"], "files": ["src/mw/session.ts"], "agent": "claude", "effort": "hard" }
 ]
 ```
 

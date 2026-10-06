@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { loadConfig, resolveLeadModel } from "../config.js";
+import { configExists, loadConfig, resolveLeadModel } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
 import { parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
 import { createFromPlan, type Created, type Failed } from "../tasks/plan-create.js";
@@ -18,6 +18,16 @@ export interface PlanOptions {
   draft?: string;
   dryRun?: boolean;
   example?: boolean;
+  /** Path to a plan brief (markdown) embedded in every created issue as "Plan context". */
+  brief?: string;
+}
+
+/** File the interactive session writes the brainstorm's reasoning to, next to tickets.json. */
+export const BRIEF_FILE = "plan-brief.md";
+
+function readBrief(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  return readFileSync(path, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
 }
 
 /** Shallow repo context (tracked files) so the planner produces realistic file hints. */
@@ -29,11 +39,12 @@ async function repoContext(cwd: string): Promise<string> {
 }
 
 /** Render a resolved plan for humans: the issues that would be created, plus warnings/errors. */
-function printPreview(plan: ResolvedPlan): void {
+function printPreview(plan: ResolvedPlan, brief?: string): void {
   console.log(pc.bold(`Would create ${plan.tickets.length} issue(s):`));
   for (const t of plan.tickets) {
     const meta = [
       t.id && `id:${t.id}`,
+      t.agent && `route:${t.agent}${t.effort ? `/${t.effort}` : ""}`,
       t.knownDeps.length && `deps:${t.knownDeps.join(",")}`,
       t.knownAfter.length && `after (advisory):${t.knownAfter.join(",")}`,
       t.files.length && `files:${t.files.join(", ")}`,
@@ -42,6 +53,10 @@ function printPreview(plan: ResolvedPlan): void {
       .join("  ");
     console.log(`  ${t.index}. ${t.title}${meta ? pc.dim(`  (${meta})`) : ""}`);
   }
+  const unrouted = plan.tickets.filter((t) => !t.agent).length;
+  if (unrouted) console.log(pc.dim(`  ${unrouted} ticket(s) unrouted: \`orch assign --auto\` routes them after creation`));
+  const words = brief?.trim() ? brief.trim().split(/\s+/).length : 0;
+  console.log(pc.dim(words ? `  plan brief: ${words} words, embedded in every issue` : "  plan brief: none"));
   plan.warnings.forEach((w) => console.log(pc.yellow(`  warning: ${w}`)));
   plan.errors.forEach((e) => console.log(pc.red(`  error: ${e}`)));
   if (!plan.errors.length) console.log(pc.dim("  (dry run — no issues created)"));
@@ -82,20 +97,22 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   // A tickets file was given: preview (--dry-run) or create the issues.
   if (file) {
     const tickets = parseTickets(readFileSync(file, "utf8"));
-    const plan = resolvePlan(tickets);
+    const brief = readBrief(opts.brief);
+    // Agents come from config when there is one; a bare --dry-run needs no repo.
+    const agents = opts.dryRun && !configExists(cwd) ? undefined : loadConfig(cwd).agents;
+    const plan = resolvePlan(tickets, { agents, brief });
 
     // --dry-run: pure validate + preview, write nothing (no repo/config needed).
     if (opts.dryRun) {
-      printPreview(plan);
+      printPreview(plan, brief);
       return;
     }
     // Refuse (with the preview) if there are blocking errors.
     if (plan.errors.length) {
-      printPreview(plan);
+      printPreview(plan, brief);
       throw new Error(`refusing to create: ${plan.errors.length} error(s) in ${file}`);
     }
-    loadConfig(cwd); // ensure an initialised orch repo before writing
-    const result = await createFromPlan(tickets, cwd);
+    const result = await createFromPlan(tickets, cwd, undefined, { agents, brief });
     printIssueResults("Created", result.created, pc.green);
     printIssueResults("Reused", result.reused, pc.cyan);
     printFailures(result.failed);
@@ -117,13 +134,15 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   ensurePlanSkill(cwd);
 
   const outputPath = resolve(cwd, "tickets.json");
+  const briefPath = resolve(cwd, BRIEF_FILE);
   const before = existsSync(outputPath) ? statSync(outputPath).mtimeMs : 0;
+  const started = Date.now();
   console.log(pc.bold(`Launching an interactive ${adapter.id} planning session…`));
   console.log(
     pc.dim(`Tell ${adapter.id} what to build; when the plan looks right, ask it to save, then exit. Target: ${outputPath}`),
   );
 
-  const seed = formatInteractiveSeed(outputPath);
+  const seed = formatInteractiveSeed(outputPath, briefPath, cfg.agents);
   const { code } = await runInteractivePlanner(adapter, {
     cwd,
     seed,
@@ -137,11 +156,15 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
     return;
   }
 
-  const plan = resolvePlan(parseTickets(readFileSync(outputPath, "utf8")));
+  // Only a brief this session wrote belongs to this plan; an older file is a previous plan's.
+  const briefWritten = existsSync(briefPath) && statSync(briefPath).mtimeMs >= started;
+  const brief = briefWritten ? readBrief(briefPath) : undefined;
+  const plan = resolvePlan(parseTickets(readFileSync(outputPath, "utf8")), { agents: cfg.agents, brief });
   console.log("");
-  printPreview(plan);
-  console.log(pc.green(`\nSaved ${plan.tickets.length} ticket(s) to ${outputPath}.`));
+  printPreview(plan, brief);
+  console.log(pc.green(`\nSaved ${plan.tickets.length} ticket(s) to ${outputPath}${briefWritten ? ` and the brief to ${briefPath}` : ""}.`));
+  const briefArg = briefWritten ? ` --brief ${BRIEF_FILE}` : "";
   console.log(
-    pc.dim("Next: `orch plan --dry-run tickets.json` (or the dashboard) to review, then `orch plan tickets.json` to create."),
+    pc.dim(`Next: \`orch plan --dry-run tickets.json${briefArg}\` (or the dashboard) to review, then \`orch plan tickets.json${briefArg}\` to create.`),
   );
 }

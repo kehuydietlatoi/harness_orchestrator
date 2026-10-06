@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createIssue, listIssues, type Issue } from "../github/github.js";
-import { STATUS } from "../github/labels.js";
-import { parseTickets, resolvePlan, type Ticket } from "./plan.js";
+import { createIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
+import { STATUS, agentLabel, effortLabel, labelDefs } from "../github/labels.js";
+import { parseTickets, resolvePlan, type ResolvedTicket, type Ticket } from "./plan.js";
 
 const MARKER_VERSION = "v1";
 
@@ -37,9 +37,18 @@ export interface TicketMarkers {
 export interface PlanCreateDeps {
   listIssues: typeof listIssues;
   createIssue: typeof createIssue;
+  /** Creates missing routing labels before the first routed create; omitted, nothing is ensured. */
+  ensureLabels?: typeof ensureLabels;
 }
 
-const defaultDeps: PlanCreateDeps = { listIssues, createIssue };
+export interface PlanCreateOptions {
+  /** Plan brief (the brainstorm's goal, decisions, constraints) embedded in every created issue. */
+  brief?: string;
+  /** Configured agents: a ticket routed to any other agent is created unrouted. */
+  agents?: readonly string[];
+}
+
+const defaultDeps: PlanCreateDeps = { listIssues, createIssue, ensureLabels };
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -69,12 +78,41 @@ export function buildPlanMarkers(tickets: readonly Ticket[]): PlanMarkers {
   return { plan, tickets: ticketMarkers };
 }
 
+/**
+ * Rewrite issue references that `parseDeps`/`parseAfter` would read as structure
+ * ("depends on #12", a line starting "After: #3") to plain prose ("issue 12"). The
+ * brief is shared prose copied into every ticket, so a sentence in it must never
+ * turn into a dependency of the whole plan. Pure.
+ */
+export function neutralizeReferences(text: string): string {
+  const prose = (_match: string, lead: string, refs: string): string => lead + refs.replace(/#(\d+)/g, "issue $1");
+  return text
+    .replace(/(depends[-\s]?on:?\s*)((?:#\d+[\s,]*)+)/gi, prose)
+    .replace(/^(\s*after:[ \t]*)((?:#\d+[ \t,]*)+)/gim, prose);
+}
+
+/** The collapsed "Plan context" block carrying the brief, or "" when there is none. Pure. */
+export function renderPlanContext(brief: string | undefined): string {
+  const text = brief?.trim();
+  if (!text) return "";
+  return `<details>\n<summary>Plan context</summary>\n\n${neutralizeReferences(text)}\n\n</details>`;
+}
+
+/** Labels a new issue is created with: todo, plus the plan's validated routing. Pure. */
+export function creationLabels(ticket: Pick<ResolvedTicket, "agent" | "effort">): string[] {
+  const labels: string[] = [STATUS.todo];
+  if (ticket.agent) labels.push(agentLabel(ticket.agent));
+  if (ticket.agent && ticket.effort) labels.push(effortLabel(ticket.effort));
+  return labels;
+}
+
 /** Pure: render the GitHub issue body from a ticket + resolved dependency numbers. */
 export function renderTicketBody(
   ticket: Ticket,
   depNumbers: number[],
   markers?: TicketMarkers,
   afterNumbers: number[] = [],
+  brief?: string,
 ): string {
   const parts: string[] = [];
   if (ticket.body) parts.push(ticket.body.trim());
@@ -87,6 +125,8 @@ export function renderTicketBody(
   if (afterNumbers.length) {
     parts.push(`After: ${afterNumbers.map((n) => `#${n}`).join(", ")}`);
   }
+  const context = renderPlanContext(brief);
+  if (context) parts.push(context);
   if (markers) parts.push(`${markers.plan}\n${markers.ticket}`);
   return parts.join("\n\n") || "_(no description)_";
 }
@@ -128,13 +168,19 @@ function reusedResult(ticket: Ticket, issue: Issue): Created {
  * discovery before it is reported as failed. The function never retries an
  * ambiguous create blindly: a later invocation either reuses the issue GitHub
  * did create or safely creates the still-missing ticket.
+ *
+ * A created issue carries the plan brief (`opts.brief`) as a collapsed "Plan
+ * context" block and the ticket's validated routing as `agent:`/`effort:` labels.
+ * Neither is part of the plan identity, so re-routing or editing the brief never
+ * duplicates issues, and a reused issue is never relabelled or rewritten.
  */
 export async function createFromPlan(
   tickets: readonly Ticket[],
   cwd: string,
   deps: PlanCreateDeps = defaultDeps,
+  opts: PlanCreateOptions = {},
 ): Promise<PlanCreateResult> {
-  const plan = resolvePlan(tickets);
+  const plan = resolvePlan(tickets, { agents: opts.agents, brief: opts.brief });
   if (plan.errors.length) throw new Error(`invalid tickets: ${plan.errors.join("; ")}`);
 
   const result: PlanCreateResult = { created: [], reused: [], failed: [] };
@@ -148,6 +194,24 @@ export async function createFromPlan(
     const detail = error instanceof Error ? error.message : String(error);
     result.failed.push(...tickets.map((ticket) => failure(ticket, `discovery failed: ${detail}`)));
     return result;
+  }
+
+  // Routing labels must exist before `gh issue create --label` (a repo initialised
+  // before the label set grew would fail the create). Only tickets still to be
+  // created need them; a reused issue is never relabelled.
+  const routing = new Set<string>();
+  tickets.forEach((_, index) => {
+    if (existing.has(markers.tickets[index])) return;
+    for (const label of creationLabels(plan.tickets[index])) if (label !== STATUS.todo) routing.add(label);
+  });
+  if (routing.size && deps.ensureLabels) {
+    try {
+      await deps.ensureLabels(labelDefs([...routing]), cwd);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      result.failed.push(...tickets.map((ticket) => failure(ticket, `could not ensure routing labels: ${detail}`)));
+      return result;
+    }
   }
 
   const idToNumber = new Map<string, number>();
@@ -184,9 +248,9 @@ export async function createFromPlan(
 
     const depNumbers = plan.tickets[index].knownDeps.map((id) => idToNumber.get(id) as number);
     const afterNumbers = plan.tickets[index].knownAfter.map((id) => idToNumber.get(id) as number);
-    const body = renderTicketBody(ticket, depNumbers, { plan: markers.plan, ticket: marker }, afterNumbers);
+    const body = renderTicketBody(ticket, depNumbers, { plan: markers.plan, ticket: marker }, afterNumbers, opts.brief);
     try {
-      const number = await deps.createIssue(ticket.title, body, [STATUS.todo], { cwd });
+      const number = await deps.createIssue(ticket.title, body, creationLabels(plan.tickets[index]), { cwd });
       const created = { id: ticket.id, number, title: ticket.title };
       result.created.push(created);
       if (ticket.id) idToNumber.set(ticket.id, number);
@@ -225,6 +289,6 @@ export async function createFromPlan(
 }
 
 /** Read a JSON tickets file and create or reuse its issues. */
-export function planFromFile(file: string, cwd: string): Promise<PlanCreateResult> {
-  return createFromPlan(parseTickets(readFileSync(file, "utf8")), cwd);
+export function planFromFile(file: string, cwd: string, opts: PlanCreateOptions = {}): Promise<PlanCreateResult> {
+  return createFromPlan(parseTickets(readFileSync(file, "utf8")), cwd, defaultDeps, opts);
 }

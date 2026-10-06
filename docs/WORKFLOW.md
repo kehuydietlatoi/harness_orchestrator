@@ -27,9 +27,9 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `status:in-review` | `1d76db` | PR open, awaiting cross-review | `submit`; `repair` projection | `requestChanges`; `merge`; `abandon`; `repair` projection |
 | `status:done` | `5319e7` | Merged | `merge`; `repair` projection | `repair` projection only if observed facts no longer derive `done` |
 | `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | `repair` (stale lifecycle projection) |
-| `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `claimSpecific` | `abandon` only (**sticky**) |
-| `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign` | — (**sticky**; no path removes it) |
-| `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign` | — (**sticky**) |
+| `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `plan` (ticket `agent`); `claimSpecific` | `abandon` only (**sticky**) |
+| `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign`; `plan` (ticket `effort`) | — (**sticky**; no path removes it) |
+| `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign`; `plan` (ticket `effort`) | — (**sticky**) |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open task PR without current approval or current-head changes requested | `approve`; `requestChanges`; `repair` after current approval, current-head changes requested, or PR closure |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve`; `repair` from current review records | `requestChanges`; `repair` removes stale or revoked approvals |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
@@ -63,6 +63,7 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 
 | Event | Fn | `+` | `−` | Side effects |
 |---|---|---|---|---|
+| Create from a plan | `plan <tickets>` / `/actions/plan-create` | `status:todo`, plus `agent:X`/`effort:Y` when the ticket routes it | — | only on *newly created* issues (a reused issue is never relabelled); an unconfigured agent or unknown effort is dropped, and an effort without an agent is dropped so the judge routes the issue whole; routing labels are ensured first. No `assigned-by:brain`: the routing was approved with the plan |
 | Route (human) | `assign --apply` | `agent:X`, `effort:Y` | — | fill-blanks-only; skips already-pinned |
 | Route (judge) | `assign --auto` / `/actions/assign` | `agent:X`, `effort:Y`, `assigned-by:brain` | — | judge-authored; same fill-blanks-only writer |
 | Claim | `claimSpecific` | `status:claimed`, `agent:X` | `status:todo` | owner-token lock, assign `@me`, cut worktree; compensate on incomplete setup |
