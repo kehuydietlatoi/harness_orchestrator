@@ -1,7 +1,7 @@
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
-import type { OrchConfig } from "../config.js";
+import type { EffortTier, OrchConfig } from "../config.js";
 
 export interface Ticket {
   id?: string; // local id other tickets reference in dependsOn or after
@@ -10,11 +10,18 @@ export interface Ticket {
   dependsOn?: string[]; // local ids of earlier tickets
   after?: string[]; // earlier ticket ids: ordering preferences only
   files?: string[]; // file-ownership hints (to minimise overlap)
+  agent?: string; // routing chosen while planning: becomes the `agent:` label
+  effort?: string; // routing tier (`easy` | `hard`): becomes the `effort:` label
 }
+
+/** Longest plan brief embedded in every issue; longer is a blocking error, never truncated. */
+export const MAX_BRIEF_CHARS = 4000;
+
+const EFFORT_TIERS: readonly string[] = ["easy", "hard"];
 
 /** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
  * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
- * `body` must be a string and any present `dependsOn`/`after`/`files` must be an array of
+ * `body`/`agent`/`effort` must be a string and any present `dependsOn`/`after`/`files` must be an array of
  * strings. Malformed field values are reported (ticket-indexed, all at once) rather
  * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
  * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
@@ -40,6 +47,8 @@ export function parseTickets(raw: string): Ticket[] {
     if (o.id !== undefined && typeof o.id !== "string") errors.push(`ticket ${index}: id must be a string`);
     if (o.title !== undefined && typeof o.title !== "string") errors.push(`ticket ${index}: title must be a string`);
     if (o.body !== undefined && typeof o.body !== "string") errors.push(`ticket ${index}: body must be a string`);
+    if (o.agent !== undefined && typeof o.agent !== "string") errors.push(`ticket ${index}: agent must be a string`);
+    if (o.effort !== undefined && typeof o.effort !== "string") errors.push(`ticket ${index}: effort must be a string`);
 
     return {
       id: typeof o.id === "string" ? o.id : undefined,
@@ -48,6 +57,8 @@ export function parseTickets(raw: string): Ticket[] {
       dependsOn: stringArray(o.dependsOn, "dependsOn"),
       after: stringArray(o.after, "after"),
       files: stringArray(o.files, "files"),
+      ...(typeof o.agent === "string" ? { agent: o.agent } : {}),
+      ...(typeof o.effort === "string" ? { effort: o.effort } : {}),
     };
   });
   if (errors.length) throw new Error(errors.join("; "));
@@ -69,6 +80,16 @@ export interface ResolvedTicket {
   after: string[];
   /** Advisory ids resolving to earlier tickets (will become After: #refs). */
   knownAfter: string[];
+  /** Validated routing (labels at creation); absent means the judge routes the ticket. */
+  agent?: string;
+  effort?: EffortTier;
+}
+
+export interface ResolveOptions {
+  /** Configured agents. When given, a ticket routed to any other agent is dropped (warning). */
+  agents?: readonly string[];
+  /** The plan brief embedded in every issue; an over-long brief is a blocking error. */
+  brief?: string;
 }
 
 export interface ResolvedPlan {
@@ -83,13 +104,15 @@ export interface ResolvedPlan {
  * Validate + annotate a ticket list without any IO \u2014 the single source of truth
  * behind `orch plan --dry-run`, the dashboard preview, and the create gate.
  *
- * Errors (missing title, duplicate id) block creation; warnings (a dependency on
- * an unknown/later/self id \u2014 which is dropped \u2014 or a file claimed by two tickets)
- * are advisory. Dependency resolution mirrors creation order: a dep counts as
- * "known" only if it names an *earlier* ticket, since that is the one whose issue
- * number will exist by the time this ticket is created. Pure.
+ * Errors (missing title, duplicate id, an over-long brief) block creation; warnings
+ * (a dependency on an unknown/later/self id, an unknown agent or effort \u2014 each
+ * dropped \u2014 or a file claimed by two tickets) are advisory. Dependency resolution
+ * mirrors creation order: a dep counts as "known" only if it names an *earlier*
+ * ticket, since that is the one whose issue number will exist by the time this
+ * ticket is created. Routing is whole-or-nothing for the judge, which fills only
+ * issues with neither label: an `effort` without an `agent` is dropped. Pure.
  */
-export function resolvePlan(tickets: readonly Ticket[]): ResolvedPlan {
+export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {}): ResolvedPlan {
   const errors: string[] = [];
   const warnings: string[] = [];
   const seen = new Set<string>();
@@ -120,12 +143,36 @@ export function resolvePlan(tickets: readonly Ticket[]): ResolvedPlan {
     const files = t.files ?? [];
     for (const f of files) fileOwners.set(f, [...(fileOwners.get(f) ?? []), index]);
 
+    let agent = t.agent?.trim() || undefined;
+    if (agent && opts.agents && !opts.agents.includes(agent)) {
+      warnings.push(`ticket ${index} is routed to unknown agent "${agent}"; dropped (the judge will route it)`);
+      agent = undefined;
+    }
+    let effort = t.effort?.trim() || undefined;
+    if (effort && !EFFORT_TIERS.includes(effort)) {
+      warnings.push(`ticket ${index} has unknown effort "${effort}" (use easy or hard); dropped`);
+      effort = undefined;
+    }
+    if (effort && !agent) {
+      warnings.push(`ticket ${index} has an effort but no agent; dropped so the judge routes it whole`);
+      effort = undefined;
+    }
+
     if (t.id) seen.add(t.id);
-    resolved.push({ index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps, after, knownAfter });
+    resolved.push({
+      index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps, after, knownAfter,
+      ...(agent ? { agent } : {}),
+      ...(effort ? { effort: effort as EffortTier } : {}),
+    });
   });
 
   for (const [file, owners] of fileOwners) {
     if (owners.length > 1) warnings.push(`file "${file}" is claimed by tickets ${owners.join(", ")}`);
+  }
+
+  const brief = opts.brief?.trim() ?? "";
+  if (brief.length > MAX_BRIEF_CHARS) {
+    errors.push(`plan brief is ${brief.length} characters (limit ${MAX_BRIEF_CHARS}); shorten it rather than lose part of it`);
   }
 
   return { tickets: resolved, errors, warnings };

@@ -5,9 +5,13 @@ import type { Ticket } from "../src/tasks/plan.js";
 import {
   buildPlanMarkers,
   createFromPlan,
+  creationLabels,
+  neutralizeReferences,
+  renderPlanContext,
   renderTicketBody,
   type PlanCreateDeps,
 } from "../src/tasks/plan-create.js";
+import { parseAfter, parseDeps } from "../src/board/board.js";
 
 const CWD = "/repo";
 const tickets: Ticket[] = [
@@ -232,5 +236,112 @@ describe("createFromPlan recovery", () => {
 
     expect(result.failed[0].error).toContain("#7, #9");
     expect(h.creates).toEqual([]);
+  });
+});
+
+describe("plan brief and routing at creation", () => {
+  const routed: Ticket[] = [
+    { id: "a", title: "First", body: "one", agent: "codex", effort: "hard" },
+    { id: "b", title: "Second", body: "two", dependsOn: ["a"], agent: "claude" },
+    { id: "c", title: "Third", body: "three", dependsOn: ["b"] },
+  ];
+  const brief = "## Goal\nShip SSO.\n\nThis depends on #12 and #13 landing first.\nAfter: #14\n";
+
+  function routingHarness(initial: Issue[] = [], ensureError?: Error) {
+    const issues = [...initial];
+    const creates: Array<{ title: string; body: string; labels: string[] }> = [];
+    const ensured: string[][] = [];
+    let next = Math.max(0, ...issues.map((item) => item.number)) + 1;
+    const deps: PlanCreateDeps = {
+      listIssues: async () => [...issues],
+      createIssue: async (title, body, labels) => {
+        creates.push({ title, body, labels });
+        const number = next++;
+        issues.push({ ...issue(number, title, body), labels });
+        return number;
+      },
+      ensureLabels: async (labels) => {
+        ensured.push(labels.map((l) => l.name));
+        if (ensureError) throw ensureError;
+      },
+    };
+    return { issues, creates, ensured, deps };
+  }
+
+  it("keeps plan identity independent of routing and the brief", () => {
+    expect(buildPlanMarkers(routed)).toEqual(
+      buildPlanMarkers(routed.map(({ agent: _agent, effort: _effort, ...rest }) => rest)),
+    );
+  });
+
+  it("creates routed issues with agent/effort labels after ensuring exactly those labels exist", async () => {
+    const h = routingHarness();
+    const result = await createFromPlan(routed, CWD, h.deps, { agents: ["claude", "codex"], brief });
+
+    expect(result.failed).toEqual([]);
+    expect(h.ensured).toEqual([["agent:codex", "effort:hard", "agent:claude"]]);
+    expect(h.creates.map((c) => c.labels)).toEqual([
+      ["status:todo", "agent:codex", "effort:hard"],
+      ["status:todo", "agent:claude"],
+      ["status:todo"],
+    ]);
+  });
+
+  it("drops routing to an unconfigured agent, creating that issue unrouted", async () => {
+    const h = routingHarness();
+    await createFromPlan([{ title: "x", agent: "gemini", effort: "easy" }], CWD, h.deps, { agents: ["claude"] });
+    expect(h.creates[0].labels).toEqual(["status:todo"]);
+    expect(h.ensured).toEqual([]);
+  });
+
+  it("embeds the brief as collapsed plan context whose references never become dependencies", async () => {
+    const h = routingHarness();
+    await createFromPlan(routed, CWD, h.deps, { agents: ["claude", "codex"], brief });
+
+    const second = h.creates[1].body;
+    expect(second).toContain("<details>\n<summary>Plan context</summary>");
+    expect(second).toContain("Ship SSO.");
+    expect(second).toContain("depends on issue 12 and #13"); // "and" ends a parseable reference list
+    expect(second).toContain("After: issue 14");
+    expect(parseDeps(second)).toEqual([1]);
+    expect(parseAfter(second)).toEqual([]);
+    // The context sits before the identity markers.
+    expect(second.indexOf("Plan context")).toBeLessThan(second.indexOf("<!-- orch-plan:"));
+  });
+
+  it("never relabels or rewrites a reused issue, and ensures only labels still needed", async () => {
+    const markers = buildPlanMarkers(routed);
+    const first = issue(42, "First", renderTicketBody(routed[0], [], { plan: markers.plan, ticket: markers.tickets[0] }));
+    const h = routingHarness([first]);
+
+    const result = await createFromPlan(routed, CWD, h.deps, { agents: ["claude", "codex"], brief });
+
+    expect(result.reused).toEqual([{ id: "a", number: 42, title: "First" }]);
+    expect(h.ensured).toEqual([["agent:claude"]]);
+    expect(h.creates.map((c) => c.title)).toEqual(["Second", "Third"]);
+    expect(h.issues.find((i) => i.number === 42)?.labels).toEqual(["status:todo"]);
+  });
+
+  it("fails closed without writes when routing labels cannot be ensured", async () => {
+    const h = routingHarness([], new Error("label API down"));
+    const result = await createFromPlan(routed, CWD, h.deps, { agents: ["claude", "codex"] });
+    expect(h.creates).toEqual([]);
+    expect(result.failed).toHaveLength(3);
+    expect(result.failed[0].error).toMatch(/could not ensure routing labels: label API down/);
+  });
+
+  it("refuses an over-long brief before any read or write", async () => {
+    const h = routingHarness();
+    await expect(createFromPlan(routed, CWD, h.deps, { brief: "x".repeat(4001) })).rejects.toThrow(/plan brief/);
+    expect(h.creates).toEqual([]);
+  });
+
+  it("renders nothing extra without a brief and neutralizes only parseable references", () => {
+    expect(renderPlanContext(undefined)).toBe("");
+    expect(renderPlanContext("   ")).toBe("");
+    expect(neutralizeReferences("see #5; Depends-on: #6, #7\n  after: #8\nfinish after #9")).toBe(
+      "see #5; Depends-on: issue 6, issue 7\n  after: issue 8\nfinish after #9",
+    );
+    expect(creationLabels({ effort: "hard" })).toEqual(["status:todo"]);
   });
 });

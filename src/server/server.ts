@@ -8,7 +8,7 @@ import { agentLabel, effortLabel, labelDefs, ASSIGNED_BY_BRAIN } from "../github
 import { buildSnapshot, type Snapshot } from "../board/snapshot.js";
 import { readRuns } from "../board/telemetry.js";
 import { parseTickets, resolvePlan, type Ticket } from "../tasks/plan.js";
-import { createFromPlan, type PlanCreateResult } from "../tasks/plan-create.js";
+import { createFromPlan, type PlanCreateOptions, type PlanCreateResult } from "../tasks/plan-create.js";
 import { dispatchSpecific } from "../tasks/runner.js";
 import { log } from "../util/log.js";
 
@@ -31,7 +31,7 @@ export interface ServerDeps {
   runJudge: (brief: string, cfg: OrchConfig, cwd: string) => Promise<PlanEntry[]>;
   editIssue: (n: number, labels: string[], cwd: string) => Promise<void>;
   /** Create issues from a ticket draft (`POST /actions/plan-create`); overridable for --demo/tests. */
-  createIssues: (tickets: Ticket[], cwd: string) => Promise<PlanCreateResult>;
+  createIssues: (tickets: Ticket[], cwd: string, opts?: PlanCreateOptions) => Promise<PlanCreateResult>;
   /** Board projection for `GET /status`; overridable so `--demo` can serve a fixture. */
   snapshot: (cwd: string) => Promise<Snapshot>;
   /** Claim and run one routed todo; invoked after the dispatch response has ended. */
@@ -47,7 +47,7 @@ const defaultDeps: ServerDeps = {
     ensureLabels(labelDefs(labels), cwd) // self-heal: create routing labels a stale repo lacks
       .then(() => editIssue(n, { cwd, addLabels: labels }))
       .then(() => undefined),
-  createIssues: createFromPlan,
+  createIssues: (tickets, cwd, opts) => createFromPlan(tickets, cwd, undefined, opts),
   snapshot: buildSnapshot,
   dispatchIssue: (issue, cwd) => dispatchSpecific(issue, loadConfig(cwd), cwd),
 };
@@ -249,12 +249,13 @@ async function handlePlanCreate(
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     return;
   }
-  const { errors } = resolvePlan(tickets);
+  const agents = deps.loadConfig(cwd).agents; // a ticket routed to an unknown agent is created unrouted
+  const { errors } = resolvePlan(tickets, { agents });
   if (errors.length) {
     sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
     return;
   }
-  const result = await deps.createIssues(tickets, cwd);
+  const result = await deps.createIssues(tickets, cwd, { agents });
   sendJson(response, 200, result);
 }
 

@@ -29,8 +29,10 @@ const OUTPUT_REMINDER = [
   "Output ONLY one fenced code block tagged json and nothing after it — a JSON array",
   "of ticket objects. Each ticket:",
   '  { "id": "short-slug", "title": "…", "body": "…",',
-  '    "dependsOn": ["earlier-id", …], "after": ["earlier-id", …], "files": ["path/hint", …] }',
+  '    "dependsOn": ["earlier-id", …], "after": ["earlier-id", …], "files": ["path/hint", …],',
+  '    "agent": "claude|codex", "effort": "easy|hard" }',
   "- `title` is required; the others are optional.",
+  "- `agent`/`effort` route the ticket; omit both when unsure and the routing judge decides.",
   "- `dependsOn` and `after` may only reference the `id` of an EARLIER ticket in the array.",
   "- `dependsOn` is a hard prerequisite; use `after` for advisory ordering that never blocks dispatch.",
   "- `files` are ownership hints, not proof that tickets are independent.",
@@ -122,14 +124,21 @@ export function ensurePlanSkill(cwd: string): { path: string; created: boolean }
 /** Single-line system-prompt seed for the interactive session. No newlines,
  * double-quotes, or backticks, so it survives argv shell-quoting; the schema
  * comes from the installed orch-plan skill, so only session framing + the output
- * path live here. Pure. */
-export function formatInteractiveSeed(outputPath: string): string {
+ * paths live here. Pure. */
+export function formatInteractiveSeed(outputPath: string, briefPath?: string, agents: readonly string[] = []): string {
+  const route = agents.length
+    ? `Route a ticket with agent (one of ${agents.join(", ")}) and effort (easy or hard) when you are confident; omit both to let the routing judge decide.`
+    : "Route a ticket with agent and effort (easy or hard) when you are confident; omit both to let the routing judge decide.";
   return [
     "You are in an interactive orch plan session: help the user break a goal into a tickets.json for the orch orchestrator.",
-    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files).",
+    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files, agent, effort) and the plan brief.",
     "Explore the repository with Read/Grep/Glob to ground file-ownership hints in the real structure.",
     "Refine the plan conversationally with the user.",
-    `When the user is satisfied, use the Write tool to save the final tickets as a JSON array to the absolute path ${outputPath}, then tell the user it is saved.`,
+    route,
+    `When the user is satisfied, use the Write tool to save the final tickets as a JSON array to the absolute path ${outputPath}`,
+    briefPath
+      ? `and save the plan brief (goal, key decisions, constraints, rejected alternatives, acceptance; under 4000 characters) as markdown to the absolute path ${briefPath}, then tell the user both are saved.`
+      : "then tell the user it is saved.",
   ].join(" ");
 }
 

@@ -10,7 +10,9 @@
     "title": "Add session middleware",
     "body": "Verify the session cookie on each request and attach the user.\n\nAcceptance: unauthenticated requests to protected routes get 401.",
     "dependsOn": ["auth-config"],
-    "files": ["src/mw/session.ts"]
+    "files": ["src/mw/session.ts"],
+    "agent": "claude",
+    "effort": "hard"
   },
   {
     "id": "login-route",

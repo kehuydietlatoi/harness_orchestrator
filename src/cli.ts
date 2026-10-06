@@ -218,6 +218,7 @@ program
   .option("--draft <goal>", "one-shot: draft a tickets.json from a goal headlessly (LLM; prints JSON)")
   .option("--dry-run", "validate a tickets file and preview the issues without creating them")
   .option("--example", "print an annotated example tickets.json")
+  .option("--brief <file>", "plan brief (markdown) embedded in every created issue as collapsed plan context")
   .action(wrap(planCommand));
 
 program
