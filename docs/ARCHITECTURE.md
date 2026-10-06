@@ -90,3 +90,7 @@ plan ──> issue(status:todo) ──assign──> agent hint
                  │
         issue closed · lock released · worktree pruned · dependents unblock
 ```
+
+## Operator lifecycle health
+
+`buildSnapshot` lists open issues and PRs, claim locks, registered worktrees, and run outcomes. It fetches individual issues only for retained locks/worktrees absent from the open set and compares only branches belonging to open, locked, or worktree-backed tasks. Active tasks without open PRs use bounded branch-specific and issue-reference PR history lookups (including the expected branch when the local ref is absent); a full result page fails explicitly rather than silently truncating. Old task branches alone trigger no comparisons or GitHub history reads. Its pure assemble helper derives TaskState for open issues plus closed or missing issues with retained resources. Shared prFact and telemetryFact interpretations also feed repair. Board, status, snapshot JSON/table, doctor, and the dashboard consume the same health and safe repair-preview command. Labels remain routing/projection metadata. Global observation failures surface as errors; per-task comparison and registration failures surface as inconsistent. CI badges expire after 10 seconds, including on unchanged heads, and cache keys include the repository.

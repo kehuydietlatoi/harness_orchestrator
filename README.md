@@ -109,6 +109,11 @@ ticket-file preview and issue creation, Suggest → edit → Apply routing, and
 dispatch after confirmation. It shows dependencies, cycles, review CI status,
 and recent run information.
 
+Operator views derive task health from GitHub, Git, and run facts. They display needs-attention and inconsistent tasks with an `orch repair <issue>` preview command, including retained resources belonging to closed or missing issues. CI badges refresh within 10 seconds even when the PR head has not changed.
+
+The board shows open tasks and retained resources for closed or missing issues.
+Completed issues with no retained claim or worktree are omitted.
+
 ## Recover interrupted work
 
 ```bash
@@ -211,6 +216,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 
 ## Design
 
+- [Convergent design note](docs/convergent-design.md) — how `orch`'s delegate → parallelize → review → assemble workflow (first committed Aug 2026) maps to Anthropic's "Projects, redesigned" announcement (Sep 2026), and where it deliberately differs
 - [Architecture](docs/ARCHITECTURE.md) — modules and core mechanisms
 - [Workflow](docs/WORKFLOW.md) — labels and issue lifecycle
 - [Routing judge](docs/judge.md) — prompt contract, parsing, and evaluation

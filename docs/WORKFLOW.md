@@ -123,3 +123,6 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`.
 
+## Observed health in operator views
+
+Board, status, snapshot, doctor, and dashboard now show the same derived lifecycle health. ready is represented as status:todo for existing routing clients; inconsistent remains distinct from needs-attention in the view even though both project to the needs-attention issue label. Every attention state offers orch repair <issue>, which is preview-only. Closed-issue residue and missing-issue claim resources remain visible until reconciled. Completed issues with no retained claim or worktree are omitted from the board. Doctor lists only lifecycle tasks needing attention. These read paths do not repair or mutate labels.
