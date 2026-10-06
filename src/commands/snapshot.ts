@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { basename } from "node:path";
 import { loadConfig } from "../config.js";
-import { buildSnapshot, type Snapshot, type TaskView } from "../board/snapshot.js";
+import { buildSnapshot, healthDetail, type Snapshot, type TaskView } from "../board/snapshot.js";
 
 function latestRun(task: TaskView): string {
   if (!task.latestRun) return "-";
@@ -17,17 +17,18 @@ function pad(value: string, width: number): string {
 export function formatSnapshotTable(snapshot: Snapshot): string {
   if (snapshot.tasks.length === 0) return pc.dim("  (no open tasks)");
 
-  const headers = ["TASK", "STATUS", "AGENT", "DEPS", "PR", "REVIEWED", "LOCK", "WORKTREE", "LATEST RUN"];
+  const headers = ["TASK", "STATUS", "AGENT", "BLOCKERS", "PR", "REVIEWED", "LOCK", "WORKTREE", "LATEST RUN", "RECOVERY"];
   const rows = snapshot.tasks.map((task) => [
     `#${task.number} ${task.title}`,
-    task.status.replace(/^status:/, ""),
+    task.health.kind,
     task.agent ?? "-",
-    task.deps.length > 0 ? task.deps.map((dep) => `#${dep}`).join(",") : "-",
+    task.blockers.length > 0 ? task.blockers.map((dep) => `#${dep}`).join(",") : "-",
     task.prNumber === null ? "-" : `#${task.prNumber}`,
     task.reviewedBy.join(",") || "-",
     task.locked ? "yes" : "-",
     task.worktree ? basename(task.worktree) : "-",
     latestRun(task),
+    healthDetail(task) || "-",
   ]);
   const widths = headers.map((header, index) =>
     Math.max(header.length, ...rows.map((row) => row[index].length)),

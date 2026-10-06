@@ -1,7 +1,8 @@
+import { prFact, telemetryFact } from "./facts.js";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import type { OrchConfig } from "../config.js";
-import { readRuns, appendRun, projectId, type RunRecord } from "../board/telemetry.js";
+import { readRuns, appendRun, projectId } from "../board/telemetry.js";
 import { prIssueNumber } from "../board/review.js";
 import {
   closeIssue,
@@ -219,29 +220,6 @@ async function observeWorktreeForRepair(
     removable: safety.removable,
     retentionReason: safety.reason,
   };
-}
-
-function prFact(prs: readonly Pr[]): TaskFacts["pr"] {
-  if (prs.some((pr) => pr.state === "OPEN")) return "open";
-  if (prs.some((pr) => pr.state === "MERGED")) return "merged";
-  if (prs.some((pr) => pr.state === "CLOSED")) return "closed";
-  return "none";
-}
-
-function telemetryFact(records: readonly RunRecord[], issue: number): TaskFacts["telemetry"] {
-  const latest = records.filter((record) => record.issue === issue).at(-1);
-  switch (latest?.outcome) {
-    case "submitted":
-    case "auto-submitted":
-      return "submitted";
-    case "failed":
-      return "failed";
-    case "needs-attention":
-    case "no-commits":
-      return "no-commits";
-    default:
-      return "none";
-  }
 }
 
 export function factsFromObservation(observation: RepairObservation): TaskFacts {
@@ -683,3 +661,4 @@ export async function discoverRepairIssues(cwd: string): Promise<number[]> {
   }
   return [...numbers].sort((a, b) => a - b);
 }
+

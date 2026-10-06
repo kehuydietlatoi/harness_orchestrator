@@ -109,6 +109,11 @@ ticket-file preview and issue creation, Suggest → edit → Apply routing, and
 dispatch after confirmation. It shows dependencies, cycles, review CI status,
 and recent run information.
 
+Operator views derive task health from GitHub, Git, and run facts. They display needs-attention and inconsistent tasks with an `orch repair <issue>` preview command, including retained resources belonging to closed or missing issues. CI badges refresh within 10 seconds even when the PR head has not changed.
+
+The board shows open tasks and retained resources for closed or missing issues.
+Completed issues with no retained claim or worktree are omitted.
+
 ## Recover interrupted work
 
 ```bash

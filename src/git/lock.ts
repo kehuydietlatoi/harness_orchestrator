@@ -104,9 +104,12 @@ export async function isLocked(issue: number, opts: { cwd?: string } = {}): Prom
 }
 
 /** List currently-claimed issue numbers. */
-export async function listLocks(opts: { cwd?: string } = {}): Promise<number[]> {
+export async function listLocks(opts: { cwd?: string; strict?: boolean } = {}): Promise<number[]> {
   const r = await exec("git", ["for-each-ref", "--format=%(refname)", "refs/orch/lock/"], { cwd: opts.cwd });
-  if (r.code !== 0) return [];
+  if (r.code !== 0) {
+    if (opts.strict) throw new Error(`cannot observe claim locks: ${r.stderr.trim()}`);
+    return [];
+  }
   return r.stdout
     .split("\n")
     .map((line) => line.trim())
