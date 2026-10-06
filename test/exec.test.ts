@@ -40,6 +40,22 @@ describe("exec", () => {
     expect(r.stdout).toBe("y".repeat(90));
     expect(r.stderr).toBe("");
   });
+
+  it("reassembles multi-byte UTF-8 characters split across stream chunks", async () => {
+    // Emit a large payload of 3-byte CJK characters, forcing writes that cross
+    // the ~64 KiB stream highWaterMark mid-character (64 KiB is not a multiple
+    // of 3, so a boundary must land inside a sequence). Decoding each chunk in
+    // isolation would inject U+FFFD; the result must round-trip losslessly.
+    const script =
+      "const s = '\\u4e2d'.repeat(100000);" +
+      "process.stdout.write(Buffer.from(s, 'utf8'));";
+    const expected = "中".repeat(100000);
+    const r = await exec(node, ["-e", script], { maxBuffer: 64 * 1024 * 1024 });
+    expect(r.code).toBe(0);
+    expect(r.stdout).toBe(expected);
+    expect(r.stdout).not.toContain("�");
+    expect(JSON.parse(JSON.stringify(r.stdout))).toBe(expected);
+  });
 });
 
 describe("commandExists", () => {
