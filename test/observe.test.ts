@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
-import { countChangeRequests, formatReview, latestChangeRequestNotes } from "../src/board/approval.js";
+import { answeredChangeRequestRounds, formatReview, latestChangeRequestNotes } from "../src/board/approval.js";
 
 vi.mock("../src/github/github.js", () => ({
   listIssues: vi.fn(), listOpenPrs: vi.fn(), listPrReviews: vi.fn(), prChecksState: vi.fn(), prMergeability: vi.fn(),
@@ -25,11 +25,28 @@ function review(reviewer: string, decision: "approve" | "request-changes", opts:
 }
 
 describe("review history helpers", () => {
-  it("counts every change request across heads, and nothing else", () => {
+  it("counts the distinct earlier heads that drew a change request, and nothing else", () => {
     const reviews = [review("codex", "request-changes", { head: OLD }), review("codex", "approve"), review("codex", "request-changes")];
-    expect(countChangeRequests(reviews, 62)).toBe(2);
-    expect(countChangeRequests(reviews, 99)).toBe(0);
-    expect(countChangeRequests([{ id: 1, state: "COMMENTED", commit_id: HEAD, body: "hand-written" }], 62)).toBe(0);
+    expect(answeredChangeRequestRounds(reviews, 62, HEAD)).toBe(1); // OLD was answered; HEAD is still pending
+    expect(answeredChangeRequestRounds(reviews, 62, OLD)).toBe(1); // ...from OLD's side, HEAD is the later one
+    expect(answeredChangeRequestRounds(reviews, 99, HEAD)).toBe(0);
+    expect(answeredChangeRequestRounds([{ id: 1, state: "COMMENTED", commit_id: HEAD, body: "hand-written" }], 62, HEAD)).toBe(0);
+  });
+
+  it("counts several requests on one unchanged head once: they ask for a single fix", () => {
+    const sameHead = [
+      review("codex", "request-changes", { head: OLD }),
+      review("claude", "request-changes", { head: OLD }),
+      review("codex", "request-changes", { head: OLD }),
+    ];
+    expect(answeredChangeRequestRounds(sameHead, 62, HEAD)).toBe(1);
+    expect(answeredChangeRequestRounds(sameHead, 62, OLD)).toBe(0); // all of it is still pending on OLD
+  });
+
+  it("does not count a request on the current head even after an approval on that same head", () => {
+    // The reviewer changed their mind without any fix being pushed: no round was spent.
+    const reviews = [review("codex", "request-changes"), review("codex", "approve")];
+    expect(answeredChangeRequestRounds(reviews, 62, HEAD)).toBe(0);
   });
 
   it("returns the newest request-changes notes only for the current head", () => {
@@ -177,6 +194,17 @@ describe("observeTasks", () => {
         expect(task.facts.rounds, `${answered} answered`).toBe(answered);
         expect(task.step.kind, `${answered} answered`).toBe(expected);
       }
+    });
+
+    it("treats repeated requests on one unchanged head as a single pending fix, not spent rounds", async () => {
+      // Two reviewers (or one repeated review) ask for changes on the same head before any fix happens.
+      vi.mocked(gh.listPrReviews).mockResolvedValue([
+        review("codex", "request-changes"), review("claude", "request-changes"), review("codex", "request-changes"),
+      ]);
+      const { tasks: [task] } = await observeTasks(withBudget(1), "/repo");
+
+      expect(task.facts.rounds).toBe(0);
+      expect(task.step).toEqual({ kind: "fix", reason: "review" }); // NOT escalated before the first fix
     });
 
     it("counts answered requests as spent once the head moved on (no pending request)", async () => {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { logSize, readLogSince } from "../util/log-file.js";
 import { commandExists } from "../util/exec.js";
 import { spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig, ModelSpec } from "../config.js";
@@ -80,6 +80,7 @@ export class CodexAdapter implements HarnessAdapter {
     // `--approve-for-me` = non-interactive, workspace-write sandbox (the modern
     // replacement for the removed `--full-auto`, codex-cli >= 0.14x).
     const args = buildCodexTaskArgs(ctx.model, ctx.resumeSession);
+    const logMark = ctx.logFile ? logSize(ctx.logFile) : 0; // the log is shared by every retry
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -87,15 +88,10 @@ export class CodexAdapter implements HarnessAdapter {
       timeoutMs: ctx.timeoutMs,
       shell: WIN,
     });
-    // Codex picks its own thread id, so read it back from the run's log.
-    let sessionId: string | undefined = ctx.resumeSession;
-    if (ctx.logFile) {
-      try {
-        sessionId = sessionIdFromCodexJson(readFileSync(ctx.logFile, "utf8")) ?? sessionId;
-      } catch {
-        // no readable log -> no session to remember
-      }
-    }
+    // Codex picks its own thread id, so read it back from what this run appended. A run that failed
+    // before announcing one must not inherit an older run's id from the shared log.
+    const sessionId =
+      (ctx.logFile ? sessionIdFromCodexJson(readLogSince(ctx.logFile, logMark)) : undefined) ?? ctx.resumeSession;
     return {
       ok: r.code === 0,
       code: r.code,

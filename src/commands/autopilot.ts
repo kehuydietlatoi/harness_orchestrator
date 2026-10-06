@@ -92,6 +92,9 @@ export async function autopilotCommand(opts: {
   if (summary.awaitingHuman.length) {
     console.log(pc.yellow(`  awaiting your merge: ${summary.awaitingHuman.map((n) => `#${n}`).join(", ")}  (orch merge <pr> --human)`));
   }
+  if (summary.ambiguous.length) {
+    console.log(pc.yellow(`  ambiguous (several open PRs for one issue): ${summary.ambiguous.map((n) => `#${n}`).join(", ")}  (left alone)`));
+  }
   if (summary.escalated.length) {
     console.log(pc.red(`  escalated to you:    ${summary.escalated.map((n) => `#${n}`).join(", ")}  (needs-attention)`));
   }

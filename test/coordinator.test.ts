@@ -434,6 +434,49 @@ describe("runAutopilot", () => {
     });
   });
 
+  it("leaves an issue with two open PRs alone instead of driving either, and does not block the loop", async () => {
+    const w = new World();
+    w.add(pr(38, { approved: true })); // would merge if it were unambiguous
+    const deps = w.deps();
+    // Live, not static: if a step did run, the world would change and the loop could end, so a
+    // regression fails on the assertions below rather than spinning forever.
+    deps.observe = async () => {
+      const [only] = (await w.observe()).tasks;
+      return {
+        tasks: only ? [only, { ...only, pr: { ...only.pr, number: 2000, headRefName: "task/38-duplicate" } }] : [],
+        unobserved: [],
+      };
+    };
+
+    let done = false;
+    const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+    for (let i = 0; i < 100 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+    expect(done).toBe(true);
+    expect(w.calls).toEqual([]);
+    expect(await run).toMatchObject({ ambiguous: [38], merged: [], stopped: "drained" });
+    expect(w.said.filter((l) => l.includes("2 open PRs map to this issue"))).toHaveLength(1); // reported once
+  });
+
+  it("still drives other issues while one is ambiguous", async () => {
+    const w = new World();
+    w.add(pr(38, { approved: true }));
+    w.add(pr(40, { approved: true }));
+    const deps = w.deps();
+    deps.observe = async () => {
+      const live = await w.observe();
+      const t38 = live.tasks.find((t) => t.issue.number === 38); // the duplicate exists only while #38 is open
+      return { tasks: t38 ? [...live.tasks, { ...t38, pr: { ...t38.pr, number: 2000 } }] : live.tasks, unobserved: [] };
+    };
+
+    let done = false;
+    const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+    for (let i = 0; i < 100 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+    expect(w.calls).toEqual(["merge:40"]);
+    expect(await run).toMatchObject({ ambiguous: [38], merged: [40] });
+  });
+
   it("never runs more steps at once than its slot limit", async () => {
     const w = new World();
     for (const n of [1, 2, 3, 4]) w.add(pr(n));

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
@@ -56,7 +56,7 @@ vi.mock("../src/git/git.js", () => ({
   countCommitsAhead: mocks.countCommitsAhead,
 }));
 
-const { processNext, runLoop } = await import("../src/tasks/runner.js");
+const { processNext, recordRun, runLoop } = await import("../src/tasks/runner.js");
 const { unavailableUntil } = await import("../src/board/availability.js");
 
 const issue = {
@@ -130,6 +130,48 @@ describe("processNext recovery", () => {
       await processNext("codex", DEFAULT_CONFIG, cwd);
 
       expect(unavailableUntil("codex", cwd)).not.toBeNull();
+    });
+  });
+
+  describe("usage telemetry reads only the run's own log range", () => {
+    it("recordRun parses just the bytes after `since`, never an earlier attempt's usage", () => {
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      const logFile = join(cwd, "logs", "issue-35-fix1.jsonl");
+      appendFileSync(logFile, "EARLIER ATTEMPT USAGE\n", "utf8");
+      const since = statSync(logFile).size;
+      appendFileSync(logFile, "THIS RUN ONLY\n", "utf8");
+      mocks.parseUsage.mockClear();
+
+      recordRun(35, "codex", undefined, "fix-pushed", 1, logFile, cwd, DEFAULT_CONFIG, { since });
+
+      expect(mocks.parseUsage).toHaveBeenCalledWith("THIS RUN ONLY\n", "codex");
+    });
+
+    it("recordRun without a range still reads the whole log (compatible default)", () => {
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      const logFile = join(cwd, "logs", "whole.jsonl");
+      appendFileSync(logFile, "ALL OF IT\n", "utf8");
+      mocks.parseUsage.mockClear();
+
+      recordRun(35, "codex", undefined, "submitted", 1, logFile, cwd, DEFAULT_CONFIG);
+
+      expect(mocks.parseUsage).toHaveBeenCalledWith("ALL OF IT\n", "codex");
+    });
+
+    it("a retry that reports no usage does not inherit the earlier attempt's usage (implement path)", async () => {
+      mkdirSync(join(cwd, "logs"), { recursive: true });
+      appendFileSync(join(cwd, "logs", "issue-35.jsonl"), '{"type":"turn.completed","usage":{"input_tokens":999}}\n', "utf8");
+      mocks.runTask.mockImplementation(async (ctx: { logFile: string }) => {
+        appendFileSync(ctx.logFile, '{"type":"turn.started"}\n', "utf8"); // this attempt reports no usage at all
+        return { ok: false, code: 1, durationMs: 1, timedOut: false };
+      });
+      mocks.parseUsage.mockClear();
+
+      await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      const parsed = mocks.parseUsage.mock.calls.at(-1)?.[0] as string;
+      expect(parsed).toBe('{"type":"turn.started"}\n');
+      expect(parsed).not.toContain("999");
     });
   });
 

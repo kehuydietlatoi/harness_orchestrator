@@ -9,7 +9,7 @@ import {
   type PrReview,
 } from "../github/github.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
-import { countChangeRequests, latestChangeRequestNotes, reviewState } from "../board/approval.js";
+import { answeredChangeRequestRounds, latestChangeRequestNotes, reviewState } from "../board/approval.js";
 import { byNumber, issueAgent } from "../board/board.js";
 import { prIssueNumber, reviewSatisfied } from "../board/review.js";
 import type { OrchConfig } from "../config.js";
@@ -59,11 +59,11 @@ export function assembleFacts(params: {
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },
-    // Rounds already *spent*. Every change request on the PR's own (durable) history asks for one fix,
-    // but one that is still pending on the current head has not been answered yet, so it is not a
-    // spent round: otherwise maxReviewRounds=1 would escalate before the author ever got to fix, and
-    // the default of 3 would allow only two fixes. The local event log can only add to this.
-    rounds: Math.max(countChangeRequests(reviews, pr.number) - (rs.changesRequested ? 1 : 0), localRounds),
+    // Rounds already *spent*: the distinct earlier heads that drew a change request (each was answered by
+    // a fix, since the head moved on). Whatever is pending on the current head is not spent, and several
+    // requests on one unchanged head are still a single fix, so a budget of N allows exactly N fixes.
+    // The local event log can only add to this.
+    rounds: Math.max(answeredChangeRequestRounds(reviews, pr.number, pr.headSha), localRounds),
     maxRounds: cfg.maxReviewRounds,
     requireHumanMerge: cfg.requireHumanMerge,
   };

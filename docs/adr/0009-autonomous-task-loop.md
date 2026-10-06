@@ -50,9 +50,10 @@ rather than pushed from, since its commits would land on the PR.
 
 **3. It must converge or hand off.**
 Each task has a round budget (`maxReviewRounds`, default 3) of *spent* rounds: the larger of the
-change requests on the PR's own history that have since been answered, and the fixes recorded in the
-local event log. A request that is still pending on the current head has not been answered, so it is
-not spent: a budget of N allows N fixes, and the N+1th request escalates. Exhausting it, or failing the
+number of distinct earlier heads that drew a change request (each was answered by a fix, since the head
+moved on) and the fixes recorded in the local event log. A request pending on the current head has not
+been answered, and several requests on one unchanged head (a second reviewer, a repeated review) still
+ask for a single fix, so neither is spent: a budget of N allows N fixes, and the N+1th request escalates. Exhausting it, or failing the
 same step twice in a row, escalates: `needs-attention` plus a comment explaining why. A PR that cannot
 be read on a pass is reported as unobserved and the loop keeps polling; it is never mistaken for
 "nothing left to do". Time spent waiting on a paused harness does not count as progress, so
@@ -64,7 +65,12 @@ before its process has finished: the loop records the issue as *implementing* fr
 claimed (`processNext`'s `onClaimed`) and takes no step on it until implementation has finalised. And
 harness logs are append-only and shared by every retry of a round, so a run is judged only by the text
 it appended itself (`logSize`/`readLogSince`); otherwise an earlier attempt's usage-limit event would
-re-pause a harness for an unrelated failure, suppress the cold-session fallback, and bypass escalation. Failures back off; a paused harness
+re-pause a harness for an unrelated failure, suppress the cold-session fallback, and bypass escalation.
+Telemetry follows the same rule: `recordRun` reads usage from the run's own byte range, a failed resume
+that falls back to a fresh session is recorded as its own run, and the Codex adapter reads its thread id
+from what it appended, so a retry that reports nothing never inherits an earlier attempt's tokens or id.
+If two open PRs map to one issue, which is "the" task PR is a human decision: the loop drives neither,
+reports the issue as ambiguous once, and does not let it block the loop. Failures back off; a paused harness
 (usage limit, ADR-0008) is waited out and never counted as a failure. Merge still goes through the
 full gate (`checkMergeGate`: approval bound to the head, CI, SHA-guarded squash), and conflicts are
 resolved by merging the base into the branch (Claude preferred), never by rewriting history.

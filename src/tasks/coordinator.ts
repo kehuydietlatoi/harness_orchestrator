@@ -35,6 +35,8 @@ export interface AutopilotSummary {
   submitted: number[];
   /** Approved and green but waiting for a human because `requireHumanMerge` is on. */
   awaitingHuman: number[];
+  /** Issues with more than one open PR: which one is "the" task PR is a human decision, so none is driven. */
+  ambiguous: number[];
   failures: number;
   stopped: "drained" | "idle-timeout" | "aborted";
 }
@@ -123,7 +125,7 @@ function describe(step: ActionableStep): string {
  */
 export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps): Promise<AutopilotSummary> {
   const max = Math.max(1, opts.max);
-  const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], failures: 0, stopped: "drained" };
+  const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], ambiguous: [], failures: 0, stopped: "drained" };
   const inflight = new Map<string, Promise<void>>();
   const failing = new Map<number, { count: number; detail: string }>();
   const retryAt = new Map<number, number>();
@@ -168,6 +170,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const launchStep = (obs: TaskObservation, step: ActionableStep): void => {
     const n = obs.issue.number;
     const key = `issue:${n}`;
+    if (inflight.has(key)) return; // never overwrite a running step's entry: its completion would clear ours
     const startedAt = deps.now();
     deps.record({ type: "step.started", issue: n, step: step.kind, pr: obs.pr.number, agent: obs.author });
     deps.say(`#${n} PR #${obs.pr.number}: ${describe(step)}`);
@@ -243,8 +246,20 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
 
     const actionable: Array<{ obs: TaskObservation; step: ActionableStep }> = [];
     let waiting = !observed || unobserved.length > 0;
+    const prsPerIssue = new Map<number, number[]>();
+    for (const t of tasks) prsPerIssue.set(t.issue.number, [...(prsPerIssue.get(t.issue.number) ?? []), t.pr.number]);
     for (const obs of tasks) {
       const n = obs.issue.number;
+      const prs = prsPerIssue.get(n) ?? [];
+      if (prs.length > 1) {
+        // Two open PRs for one issue: driving either could merge the wrong one, and both would contend for
+        // the same issue slot. Leave them to a human, once, and do not let them block the loop.
+        if (!summary.ambiguous.includes(n)) {
+          summary.ambiguous.push(n);
+          deps.say(`#${n}: ${prs.length} open PRs map to this issue (${prs.map((p) => `#${p}`).join(", ")}); not driving any of them`);
+        }
+        continue;
+      }
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
       const fails = failing.get(n);

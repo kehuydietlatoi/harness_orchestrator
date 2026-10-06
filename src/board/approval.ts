@@ -63,14 +63,19 @@ export function reviewState(reviews: readonly PrReview[], pr: number, head: stri
   };
 }
 
-/** How many times changes were requested on this PR, across every head. Durable round evidence. */
-export function countChangeRequests(reviews: readonly PrReview[], pr: number): number {
-  let n = 0;
+/**
+ * Fix rounds already *answered*, from the PR's own durable history: the number of distinct earlier heads
+ * that drew a change request. A request on `currentHead` has not been answered yet, so it is not counted,
+ * and several requests on one unchanged head (a second reviewer, a repeated review) still ask for a single
+ * fix, so they are counted once. A head only stops being "current" when a fix was pushed.
+ */
+export function answeredChangeRequestRounds(reviews: readonly PrReview[], pr: number, currentHead: string): number {
+  const heads = new Set<string>();
   for (const review of reviews) {
     const r = parseReview(review);
-    if (r && r.pr === pr && r.decision === "request-changes") n += 1;
+    if (r && r.pr === pr && r.decision === "request-changes" && r.head !== currentHead) heads.add(r.head);
   }
-  return n;
+  return heads.size;
 }
 
 /**

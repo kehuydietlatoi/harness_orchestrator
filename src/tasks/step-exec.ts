@@ -57,12 +57,16 @@ interface TrackedRun {
   run: RunResult;
   /** Only what this invocation appended: an earlier attempt's events must never be mistaken for it. */
   logText: string;
+  logFile: string;
+  /** Log size just before the run, so telemetry can read this run's range and nothing else. */
+  since: number;
 }
 
 async function runTracked(env: StepEnv, ctx: RunContext): Promise<TrackedRun> {
-  const since = ctx.logFile ? logSize(ctx.logFile) : 0;
+  const logFile = ctx.logFile ?? "";
+  const since = logFile ? logSize(logFile) : 0;
   const run = await env.runAgent(ctx);
-  return { run, logText: ctx.logFile ? readLogSince(ctx.logFile, since) : "" };
+  return { run, logText: logFile ? readLogSince(logFile, since) : "", logFile, since };
 }
 
 /** A harness failure that was really a usage limit pauses that harness instead of failing the task. */
@@ -197,19 +201,22 @@ export async function executeFix(
 
   const session = readSession(n, cwd);
   let resume = session && session.agent === agent ? session.sessionId : undefined;
-  let logFile = followUpLog(cwd, n, `fix${round}`);
-  const started = Date.now();
+  let started = Date.now();
   let attempt = await runTracked(env, {
-    issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile,
+    issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile: followUpLog(cwd, n, `fix${round}`),
     timeoutMs: cfg.taskTimeoutMs, resumeSession: resume,
   });
   if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(agent, attempt.logText, cwd)) {
     // The harness could not resume (expired/foreign session): continue from durable facts instead.
     log.warn(`#${n}: resuming '${agent}' session failed (exit ${attempt.run.code}); retrying with a fresh session`);
     resume = undefined;
-    logFile = followUpLog(cwd, n, `fix${round}-cold`);
+    // The failed resume still cost something: record it as its own run before the fresh attempt.
+    recordRun(n, agent, model, "fix-resume-failed", Date.now() - started, attempt.logFile, cwd, cfg,
+      { phase: "fix" satisfies RunPhase, round, since: attempt.since });
+    started = Date.now();
     attempt = await runTracked(env, {
-      issue: n, agent, worktree, prompt: prompt(false), model, logFile, timeoutMs: cfg.taskTimeoutMs,
+      issue: n, agent, worktree, prompt: prompt(false), model, logFile: followUpLog(cwd, n, `fix${round}-cold`),
+      timeoutMs: cfg.taskTimeoutMs,
     });
   }
   const run = attempt.run;
@@ -220,7 +227,7 @@ export async function executeFix(
   };
   const result = await outcome();
   recordRun(n, agent, model, result.signal === "fix.pushed" ? "fix-pushed" : "fix-failed", Date.now() - started,
-    logFile, cwd, cfg, { phase: "fix" satisfies RunPhase, round });
+    attempt.logFile, cwd, cfg, { phase: "fix" satisfies RunPhase, round, since: attempt.since });
   return result;
 }
 
@@ -264,7 +271,7 @@ export async function executeResolveConflict(
       })) ?? ({ signal: "conflict.resolved", detail: `resolved by '${agent}'` } satisfies StepResult))
     : afterAgentFailure(agent, attempt, cwd);
   recordRun(n, agent, model, result.signal === "conflict.resolved" ? "resolve-pushed" : "resolve-failed",
-    Date.now() - started, logFile, cwd, cfg, { phase: "resolve-conflict", round });
+    Date.now() - started, attempt.logFile, cwd, cfg, { phase: "resolve-conflict", round, since: attempt.since });
   return result;
 }
 

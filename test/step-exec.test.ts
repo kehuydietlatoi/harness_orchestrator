@@ -133,7 +133,7 @@ describe("step executors", () => {
         addLabels: ["status:in-review", "review:needed"], removeLabels: ["status:in-progress"],
       }));
       expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-pushed", expect.any(Number),
-        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1 });
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1, since: expect.any(Number) });
     });
 
     it("clears stale approval projections when the new head is requeued for review", async () => {
@@ -175,6 +175,10 @@ describe("step executors", () => {
       expect(agentCalls[1].resumeSession).toBeUndefined();
       expect(agentCalls[1].prompt).toContain("memory is gone");
       expect(readSession(38, cwd)?.sessionId).toBe("new-thread");
+      // Both attempts cost something, and each is accounted for on its own log.
+      expect(vi.mocked(recordRun).mock.calls.map((c) => c[3])).toEqual(["fix-resume-failed", "fix-pushed"]);
+      expect(String(vi.mocked(recordRun).mock.calls[0][5])).toContain("fix1.jsonl");
+      expect(String(vi.mocked(recordRun).mock.calls[1][5])).toContain("fix1-cold.jsonl");
     });
 
     it("names the failing checks for a CI fix", async () => {
@@ -213,7 +217,7 @@ describe("step executors", () => {
       expect(result).toEqual({ signal: "step.failed", detail: "the agent made no new commits" });
       expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
       expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-failed", expect.any(Number),
-        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1 });
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1, since: expect.any(Number) });
     });
 
     it("fails without pushing when uncommitted changes were left behind", async () => {
@@ -335,6 +339,20 @@ describe("step executors", () => {
       expect(second.agentCalls[1].resumeSession).toBeUndefined();
     });
 
+    it("reads telemetry from this run's own range: usage followed by a retry without usage", async () => {
+      const first = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
+      await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, first.env);
+      const sinceFirst = vi.mocked(recordRun).mock.calls.at(-1)?.[8] as { since: number };
+      expect(sinceFirst.since).toBe(0); // the first attempt started on an empty log
+      clearCooldown();
+
+      const second = fakeEnv({ runs: [{ ok: true }] }); // the retry reports no usage of its own
+      await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, second.env);
+
+      const meta = vi.mocked(recordRun).mock.calls.at(-1)?.[8] as { since: number };
+      expect(meta.since).toBe(Buffer.byteLength(LIMIT_LOG)); // everything the first attempt wrote is excluded
+    });
+
     it("still pauses the harness when the retry itself hits a usage limit", async () => {
       const first = fakeEnv({ runs: [{ ok: false, code: 1, log: LIMIT_LOG }] });
       await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, first.env);
@@ -381,7 +399,7 @@ describe("step executors", () => {
       expect(gitCalls.some((a) => a[0] === "merge-base" && a.includes("origin/main"))).toBe(true);
       expect(gitCalls.some((a) => a[0] === "push")).toBe(true);
       expect(recordRun).toHaveBeenCalledWith(38, "claude", expect.anything(), "resolve-pushed", expect.any(Number),
-        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "resolve-conflict", round: 1 });
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "resolve-conflict", round: 1, since: expect.any(Number) });
     });
 
     it("refuses to push a branch that still lacks the base", async () => {

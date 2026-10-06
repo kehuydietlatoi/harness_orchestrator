@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
@@ -75,7 +75,12 @@ export function resolveDispatchAgent(
   return agent;
 }
 
-/** Append one best-effort telemetry record for a finished agent run. */
+/**
+ * Append one best-effort telemetry record for a finished agent run. `meta.since` is the log size just
+ * before the run: logs are append-only and shared by every retry of a round, so usage must be read from
+ * that run's own range, or a later attempt that reported none would inherit (and re-record) an earlier
+ * attempt's tokens and cost.
+ */
 export function recordRun(
   issue: number,
   agent: string,
@@ -85,17 +90,11 @@ export function recordRun(
   logFile: string,
   cwd: string,
   cfg: OrchConfig,
-  meta: { phase?: RunPhase; round?: number } = {},
+  meta: { phase?: RunPhase; round?: number; since?: number } = {},
 ): void {
   try {
-    let logText = "";
-    try {
-      logText = readFileSync(logFile, "utf8");
-    } catch {
-      // Preserve one record per completed run even when its log is unavailable.
-    }
-
-    const usage = parseUsage(logText, agent);
+    // A missing log reads as empty text: one record per completed run is preserved regardless.
+    const usage = parseUsage(readLogSince(logFile, meta.since ?? 0), agent);
     // Prefer the harness-reported cost; fall back to a per-token estimate only
     // when pricing exists for this model (subscription agents have none → null).
     const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
@@ -192,6 +191,7 @@ async function processClaimed(
   let telemetryOutcome: string;
   let harnessDurationMs: number | undefined;
   let preserveWorktree = false;
+  let logMark = 0; // log size just before the harness ran (the log is shared by every retry)
 
   try {
     mkdirSync(logDir, { recursive: true });
@@ -201,7 +201,7 @@ async function processClaimed(
 
     const adapter = makeAdapter(agent, cfg);
     const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
-    const logMark = logSize(logFile); // judge this run only by what it appends to the shared log
+    logMark = logSize(logFile); // judge this run only by what it appends to the shared log
     const result = await adapter.runTask({
       issue: n,
       agent,
@@ -251,7 +251,7 @@ async function processClaimed(
     telemetryOutcome = "failed";
   }
 
-  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement" });
+  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark });
   return summary;
 }
 
