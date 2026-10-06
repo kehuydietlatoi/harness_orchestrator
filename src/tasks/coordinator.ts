@@ -149,11 +149,19 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const drained = new Set<string>();
   /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
   const implementing = new Set<number>();
+  /**
+   * Issues whose step (or implementation) finished while the board was being read. `deps.observe()` makes several
+   * GitHub calls and a running step can finish in the middle of them, so what it returns may describe the world
+   * *before* that step: old head, old review feedback, old round count. Acting on it would, for example, launch a
+   * second fix for feedback the first fix already addressed. Such tasks are dropped for this pass and re-observed.
+   */
+  const settledDuringObserve = new Set<number>();
   /** When a step last finished or a task was last implemented. Idle time is measured from here,
    * not from "nothing in flight", because probing a harness for new work is not progress. */
   let lastProgress = deps.now();
 
   const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step): void => {
+    settledDuringObserve.add(issue);
     if (result.signal === "agent.unavailable") lastUnavailable.set(issue, identity);
     else lastUnavailable.delete(issue);
     // Neither a refusal because a harness is paused nor a failed escalation is progress: counting them would
@@ -257,7 +265,10 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       });
       deps.say(`  #${result.issue} implement (${agent}) -> ${result.outcome}${result.prUrl ? ` ${result.prUrl}` : ""}`);
     })().finally(() => {
-      if (claim.issue !== null) implementing.delete(claim.issue); // finalised: the PR is now ours to drive
+      if (claim.issue !== null) {
+        implementing.delete(claim.issue); // finalised: the PR is now ours to drive
+        settledDuringObserve.add(claim.issue); // ...but an observation already in progress predates that
+      }
       inflight.delete(key);
     });
     inflight.set(key, run);
@@ -275,11 +286,23 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     let unobserved: number[] = [];
     let ambiguous: Observation["ambiguous"] = [];
     let observed = true;
+    settledDuringObserve.clear();
     try {
       ({ tasks, unobserved, ambiguous } = await deps.observe());
     } catch (error) {
       observed = false; // GitHub unreachable: say so and retry rather than concluding "nothing to do"
       deps.say(`  could not observe the board: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // Drop what a step that finished mid-observation has outdated; the next pass sees it fresh.
+    let staleDropped = false;
+    if (settledDuringObserve.size > 0 && tasks.length > 0) {
+      const fresh = tasks.filter((t) => !settledDuringObserve.has(t.issue.number));
+      staleDropped = fresh.length < tasks.length;
+      if (staleDropped) {
+        const stale = tasks.filter((t) => settledDuringObserve.has(t.issue.number)).map((t) => `#${t.issue.number}`);
+        deps.say(`  ${stale.join(", ")} changed while the board was being read; observing again`);
+        tasks = fresh;
+      }
     }
     if (unobserved.length > 0) {
       // A PR we could not read is unknown, not finished: keep polling instead of reporting "drained".
@@ -381,8 +404,9 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     }
 
     if (inflight.size === 0) {
-      if (!waiting) return summary; // nothing running, nothing left that could change by itself
-      await deps.sleep(opts.pollMs);
+      // A task dropped as stale is not finished: look again at once instead of concluding there is nothing left.
+      if (!waiting && !staleDropped) return summary; // nothing running, nothing left that could change by itself
+      if (!staleDropped) await deps.sleep(opts.pollMs);
       drained.clear(); // new work may have appeared while we waited
     } else {
       await Promise.race([...inflight.values(), deps.sleep(opts.pollMs, { unref: true })]);

@@ -68,6 +68,13 @@ be read on a pass is reported as unobserved and the loop keeps polling; it is ne
 `--max-idle` still ends a wait that outlasts it. Routed todos owned by a paused harness are likewise
 waited for (bounded by `--max-idle`) rather than reported as a drained queue.
 
+Reading the board takes several GitHub calls, and a running step can finish in the middle of them, so an
+observation may describe the world *before* that step: the old head, the feedback it just addressed, the
+old round count. The loop remembers which issues settled while it was observing, drops exactly those tasks
+for that pass (rather than launching, say, a second fix for already-addressed feedback), and observes again
+immediately; a dropped task is never mistaken for "nothing left to do", and unaffected tasks are acted on
+from the same pass.
+
 Two races are closed explicitly. An implementing agent runs `orch submit` itself, so its PR can exist
 before its process has finished: the loop records the issue as *implementing* from the moment it is
 claimed (`processNext`'s `onClaimed`) and takes no step on it until implementation has finalised. And

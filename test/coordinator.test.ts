@@ -635,6 +635,140 @@ describe("runAutopilot", () => {
     });
   });
 
+  describe("an observation that predates a step finishing", () => {
+    /** Hold the Nth observation open after it has read the board, so a step can finish before it returns. */
+    function gatedObserve(w: World, which: number) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const deps = w.deps();
+      const inner = deps.observe;
+      const state = { calls: 0 };
+      deps.observe = async () => {
+        const snapshot = await inner(); // reads the world NOW...
+        state.calls += 1;
+        if (state.calls === which) await gate; // ...and only returns after a step has finished
+        return snapshot;
+      };
+      return { deps, state, release };
+    }
+    const tick = async (n: number) => { for (let i = 0; i < n; i += 1) await vi.advanceTimersByTimeAsync(1000); };
+
+    it("does not launch a second fix from feedback the first fix already addressed", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true }));
+      let releaseFix!: () => void;
+      const fixGate = new Promise<void>((resolve) => { releaseFix = resolve; });
+      const { deps, state, release: releaseObserve } = gatedObserve(w, 2);
+      const innerExecute = deps.execute;
+      let firstFix = true;
+      deps.execute = async (obs, step) => {
+        if (step.kind === "fix" && firstFix) { firstFix = false; await fixGate; } // the fix is "running"
+        return innerExecute(obs, step);
+      };
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 20 && state.calls < 2; i += 1) await tick(1);
+      expect(state.calls).toBe(2); // the 2nd observation has captured the world (feedback outstanding, old head)...
+      expect(w.calls).toEqual([]); // ...while the first fix is still running
+
+      releaseFix(); // the fix finishes: new head, feedback addressed
+      await vi.advanceTimersByTimeAsync(10);
+      releaseObserve(); // only now does the stale observation come back
+      for (let i = 0; i < 500 && !done; i += 1) await tick(1);
+
+      expect(done).toBe(true);
+      // One fix, then a review of the NEW head, then the merge. A stale observation would have launched fix #2.
+      expect(w.calls).toEqual(["fix:review:38", "review:38", "merge:38"]);
+      expect(await run).toMatchObject({ merged: [38], stopped: "drained" });
+      expect(w.said.some((l) => l.includes("#38 changed while the board was being read; observing again"))).toBe(true);
+    });
+
+    it("is not mistaken for 'nothing left to do': the loop observes again instead of reporting drained", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true }));
+      let releaseFix!: () => void;
+      const fixGate = new Promise<void>((resolve) => { releaseFix = resolve; });
+      const { deps, state, release: releaseObserve } = gatedObserve(w, 2);
+      const innerExecute = deps.execute;
+      let firstFix = true;
+      deps.execute = async (obs, step) => {
+        if (step.kind === "fix" && firstFix) { firstFix = false; await fixGate; }
+        return innerExecute(obs, step);
+      };
+
+      let done = false;
+      const run = runAutopilot({ ...OPTS, claim: "none" }, deps).finally(() => { done = true; });
+      for (let i = 0; i < 20 && state.calls < 2; i += 1) await tick(1);
+      releaseFix();
+      await vi.advanceTimersByTimeAsync(10);
+      releaseObserve();
+      for (let i = 0; i < 500 && !done; i += 1) await tick(1);
+
+      // The stale task was dropped and nothing else was running; returning here would strand the PR unmerged.
+      expect((await run).merged).toEqual([38]);
+    });
+
+    it("also drops a task whose implementation finalised mid-observation (it may still have been pushing)", async () => {
+      const w = new World();
+      let releaseImplement!: () => void;
+      w.implementGate = new Promise<void>((resolve) => { releaseImplement = resolve; });
+      w.todo.push({ issue: 7, agent: "claude", pr: { author: "claude", approved: true } });
+      const { deps, state, release: releaseObserve } = gatedObserve(w, 2);
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 20 && state.calls < 2; i += 1) await tick(1);
+      expect(state.calls).toBe(2); // observed while the agent was still implementing (and had already opened its PR)
+
+      releaseImplement(); // the implementation finalises
+      await vi.advanceTimersByTimeAsync(10);
+      releaseObserve();
+      for (let i = 0; i < 500 && !done; i += 1) await tick(1);
+
+      expect(done).toBe(true);
+      expect(w.said.some((l) => l.includes("#7 changed while the board was being read"))).toBe(true);
+      expect(await run).toMatchObject({ submitted: [7], merged: [7] });
+    });
+
+    it("leaves tasks that did not change alone, so unrelated work is not delayed", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true }));
+      w.add(pr(40, { approved: true, checks: "pending" })); // not mergeable yet at the first observation
+      let releaseFix!: () => void;
+      const fixGate = new Promise<void>((resolve) => { releaseFix = resolve; });
+      const { deps, state, release: releaseObserve } = gatedObserve(w, 2);
+      const gated = deps.observe;
+      deps.observe = async () => {
+        const seen = await gated();
+        if (state.calls === 1) w.prs.get(40)!.checks = "pass"; // CI goes green after the 1st observation, before the 2nd
+        return seen;
+      };
+      const innerExecute = deps.execute;
+      let firstFix = true;
+      let observationsWhenMerging40 = -1;
+      deps.execute = async (obs, step) => {
+        if (step.kind === "fix" && firstFix) { firstFix = false; await fixGate; }
+        if (step.kind === "merge" && obs.issue.number === 40) observationsWhenMerging40 = state.calls;
+        return innerExecute(obs, step);
+      };
+
+      let done = false;
+      const run = runAutopilot({ ...OPTS, max: 3 }, deps).finally(() => { done = true; });
+      for (let i = 0; i < 20 && state.calls < 2; i += 1) await tick(1);
+      releaseFix();
+      await vi.advanceTimersByTimeAsync(10);
+      releaseObserve();
+      for (let i = 0; i < 500 && !done; i += 1) await tick(1);
+
+      expect(w.calls.filter((c) => c === "fix:review:38")).toHaveLength(1);
+      expect(await run).toMatchObject({ merged: expect.arrayContaining([38, 40]) });
+      // #40 became ready exactly at the stale (2nd) observation and did not change during it, so it is merged
+      // from that very pass instead of being dropped and held back for a third observation.
+      expect(observationsWhenMerging40).toBe(2);
+    });
+  });
+
   describe("a human hands an escalated task back while the loop is still running", () => {
     const failed: StepResult = { signal: "step.failed", detail: "no new commits" };
 
