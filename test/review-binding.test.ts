@@ -98,7 +98,7 @@ describe("review and merge boundary", () => {
   it("passes the validated SHA to merge and preserves work when the server rejects a race", async () => {
     vi.mocked(gh.mergePr).mockRejectedValue(new Error("head changed"));
     await expect(merge(62, DEFAULT_CONFIG, "/repo")).rejects.toThrow("head changed");
-    expect(gh.mergePr).toHaveBeenCalledWith(62, { cwd: "/repo", method: "squash", expectedHead: head });
+    expect(gh.mergePr).toHaveBeenCalledWith(62, { cwd: "/repo", method: "squash", expectedHead: head, title: "task" });
     expect(removeWorktree).not.toHaveBeenCalled();
   });
   it("rejects approval of a different head before writing", async () => {
