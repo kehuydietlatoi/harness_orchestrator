@@ -63,9 +63,9 @@ reasons — and is unit-tested in isolation.
 
 ### 3. Harness adapters + dispatcher (`adapters/`, `tasks/runner.ts`)
 
-`HarnessAdapter` abstracts harness execution behind `runTask` / `runReview` /
-`healthCheck`, plus optional `runHeadless` (planner/judge) and
-`runInteractivePlan` capabilities. Each adapter owns its CLI arguments and
+`HarnessAdapter` abstracts harness execution behind `runTask` / `healthCheck`,
+plus optional `runHeadless` (planner/judge/reviewer; `readOnly` selects the
+reviewer sandbox) and `runInteractivePlan` capabilities. Each adapter owns its CLI arguments and
 structured-output reduction; the shared headless module owns only log capture,
 timeouts, and capability dispatch. Prompts are delivered on **stdin** and the
 worktree is the process **cwd**, so nothing untrusted touches argv. `orch run`

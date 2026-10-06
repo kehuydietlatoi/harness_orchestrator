@@ -7,7 +7,6 @@ import type {
   HeadlessContext,
   HeadlessResult,
   RunContext,
-  ReviewContext,
   RunResult,
 } from "./types.js";
 
@@ -15,6 +14,14 @@ const WIN = process.platform === "win32";
 
 export function buildCodexTaskArgs(spec?: ModelSpec): string[] {
   const args = ["exec", "--approve-for-me", "--json"];
+  if (spec?.model !== undefined) args.push("-m", spec.model);
+  if (spec?.effort !== undefined) args.push("-c", `model_reasoning_effort=${spec.effort}`);
+  return args;
+}
+
+/** Codex argv for a read-only reviewer session: the read-only sandbox, no auto-approval. Pure. */
+export function buildCodexReviewArgs(spec?: ModelSpec): string[] {
+  const args = ["exec", "--json", "-s", "read-only"];
   if (spec?.model !== undefined) args.push("-m", spec.model);
   if (spec?.effort !== undefined) args.push("-c", `model_reasoning_effort=${spec.effort}`);
   return args;
@@ -62,19 +69,8 @@ export class CodexAdapter implements HarnessAdapter {
     return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
   }
 
-  async runReview(ctx: ReviewContext): Promise<RunResult> {
-    const args = ["exec", "--approve-for-me", "--json"];
-    const r = await spawnLogged(this.cfg.cmd, args, {
-      cwd: ctx.cwd,
-      input: ctx.prompt,
-      logFile: ctx.logFile,
-      timeoutMs: ctx.timeoutMs,
-      shell: WIN,
-    });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
-  }
-
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
-    return runStructuredHeadless(this.cfg.cmd, buildCodexTaskArgs(ctx.model), ctx, resultTextFromCodexJson);
+    const args = ctx.readOnly ? buildCodexReviewArgs(ctx.model) : buildCodexTaskArgs(ctx.model);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromCodexJson);
   }
 }

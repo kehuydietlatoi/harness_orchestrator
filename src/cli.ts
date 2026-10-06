@@ -15,6 +15,7 @@ import {
   reviewCommand,
   reviewApproveCommand,
   reviewChangesCommand,
+  reviewRunCommand,
 } from "./commands/review.js";
 import { mergeCommand, integrateCommand } from "./commands/merge.js";
 import { briefCommand } from "./commands/brief.js";
@@ -152,11 +153,18 @@ program
   .action(wrap(reviewCommand));
 
 program
+  .command("review-run <pr>")
+  .description("Review a PR headlessly (read-only) and record the verdict; falls back to a fresh self-review when the other harness is out of usage")
+  .option("--agent <agent>", "pin the reviewer (disables the self-review fallback)")
+  .action(wrap(reviewRunCommand));
+
+program
   .command("review-approve <pr>")
   .description("Record a cross-review approval (satisfies the merge gate)")
   .requiredOption("--head <sha>", "full commit OID printed by orch review")
   .option(agentOpt, agentDesc)
   .option("-n, --notes <text>", "optional approval note")
+  .option("--self", "record a fallback self-review (only while every other harness is out of usage)")
   .action(wrap(reviewApproveCommand));
 
 program
@@ -164,6 +172,7 @@ program
   .description("Request changes and bounce the issue back to its author")
   .option(agentOpt, agentDesc)
   .option("-n, --notes <text>", "what needs to change (required)")
+  .option("--self", "record a fallback self-review (only while every other harness is out of usage)")
   .action(wrap(reviewChangesCommand));
 
 program

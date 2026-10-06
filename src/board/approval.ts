@@ -1,11 +1,15 @@
 import type { PrReview } from "../github/github.js";
 
+export type ReviewMode = "cross" | "self";
+
 export interface ReviewRecord {
   reviewer: string;
   pr: number;
   head: string;
   timestamp: string;
   decision: "approve" | "request-changes";
+  /** Absent on cross-reviews (and every record written before self-review existed). */
+  mode?: ReviewMode;
 }
 
 export function formatReview(record: ReviewRecord, note: string): string {
@@ -23,7 +27,8 @@ export function parseReview(review: PrReview): ReviewRecord | null {
       Number.isSafeInteger(r.pr) && r.pr > 0 && typeof r.head === "string" &&
       /^[a-f0-9]{40,64}$/.test(r.head) && r.head === review.commit_id &&
       typeof r.timestamp === "string" && Number.isFinite(Date.parse(r.timestamp)) &&
-      (r.decision === "approve" || r.decision === "request-changes") ? r : null;
+      (r.decision === "approve" || r.decision === "request-changes") &&
+      (r.mode === undefined || r.mode === "cross" || r.mode === "self") ? r : null;
   } catch { return null; }
 }
 
@@ -35,21 +40,25 @@ export function currentReviewers(reviews: readonly PrReview[], pr: number, head:
 /** Shared head-bound review facts for the gate, queue, repair, and board. */
 export function reviewState(reviews: readonly PrReview[], pr: number, head: string): {
   reviewers: string[];
+  /** Subset of `reviewers` whose current approval was a fallback self-review. */
+  selfReviewers: string[];
   changesRequested: boolean;
   staleApproval: boolean;
 } {
-  const approved = new Map<string, string>();
+  const approved = new Map<string, { head: string; mode?: ReviewMode }>();
   let latest: ReviewRecord | null = null;
   for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
     const r = parseReview(review);
     if (!r || r.pr !== pr) continue;
     latest = r;
     if (r.decision === "request-changes") approved.clear();
-    else approved.set(r.reviewer, r.head);
+    else approved.set(r.reviewer, { head: r.head, mode: r.mode });
   }
+  const current = [...approved].filter(([, a]) => a.head === head);
   return {
-    reviewers: [...approved].filter(([, sha]) => sha === head).map(([reviewer]) => reviewer),
+    reviewers: current.map(([reviewer]) => reviewer),
+    selfReviewers: current.filter(([, a]) => a.mode === "self").map(([reviewer]) => reviewer),
     changesRequested: latest?.decision === "request-changes" && latest.head === head,
-    staleApproval: [...approved.values()].some((sha) => sha !== head),
+    staleApproval: [...approved.values()].some((a) => a.head !== head),
   };
 }

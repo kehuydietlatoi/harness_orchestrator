@@ -15,8 +15,9 @@ import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "../g
 import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
-import type { OrchConfig } from "../config.js";
-import { currentReviewers, formatReview, reviewState } from "./approval.js";
+import type { OrchConfig, ReviewPolicy } from "../config.js";
+import { formatReview, reviewState, type ReviewMode } from "./approval.js";
+import { assertSelfReviewAllowed } from "./reviewer.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
 export function prIssueNumber(pr: Pick<Pr, "headRefName" | "body">): number | null {
@@ -56,17 +57,30 @@ export async function reviewQueue(agent: string, cwd: string): Promise<ReviewIte
   return items;
 }
 
+/** How a review is being recorded; `self` needs the config to prove the fallback applies. */
+export interface ReviewOpts {
+  mode?: ReviewMode;
+  cfg?: OrchConfig;
+  /** Head the decision was made against; the write is refused if the PR has moved. */
+  head?: string;
+}
+
 async function resolvePrIssue(
   prNum: number,
   agent: string,
   cwd: string,
+  opts: ReviewOpts = {},
 ): Promise<{ issue: Issue; author: string | null; pr: Pr }> {
   const pr = await getPr(prNum, { cwd });
   const n = prIssueNumber(pr);
   if (n === null) throw new Error(`cannot map PR #${prNum} to an issue`);
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
-  if (author === agent) {
+  if (opts.mode === "self") {
+    if (author !== agent) throw new Error(`self-review must be recorded by the author '${author ?? "?"}', not '${agent}'.`);
+    if (!opts.cfg) throw new Error("self-review requires the orch config to verify the fallback applies.");
+    assertSelfReviewAllowed(agent, opts.cfg, cwd);
+  } else if (author === agent) {
     throw new Error(`agent '${agent}' cannot review its own PR (authored by '${author}').`);
   }
   if (pr.state !== "OPEN" || !pr.headSha) throw new Error("review requires an open PR with a known head");
@@ -80,13 +94,15 @@ export async function approve(
   cwd: string,
   note = "",
   reviewedHead?: string,
+  opts: ReviewOpts = {},
 ): Promise<{ issue: number; author: string | null }> {
-  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd);
+  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd, opts);
   if (!reviewedHead || reviewedHead !== pr.headSha) {
     throw new Error("pass --head with the full commit reviewed; the PR head must still match");
   }
   await recordPrReview(prNum, reviewedHead, formatReview({
     reviewer: agent, pr: prNum, head: reviewedHead, timestamp: new Date().toISOString(), decision: "approve",
+    ...(opts.mode === "self" ? { mode: "self" as const } : {}),
   }, note || `Approved by ${agent} via orch.`), { cwd });
   await editIssue(issue.number, {
     cwd,
@@ -102,10 +118,13 @@ export async function requestChanges(
   agent: string,
   cwd: string,
   note: string,
+  opts: ReviewOpts = {},
 ): Promise<{ issue: number; author: string | null }> {
-  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd);
+  const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd, opts);
+  if (opts.head && opts.head !== pr.headSha) throw new Error("the PR head changed since it was reviewed; review it again");
   await recordPrReview(prNum, pr.headSha, formatReview({
     reviewer: agent, pr: prNum, head: pr.headSha, timestamp: new Date().toISOString(), decision: "request-changes",
+    ...(opts.mode === "self" ? { mode: "self" as const } : {}),
   }, note), { cwd });
   await editIssue(issue.number, {
     cwd,
@@ -130,6 +149,9 @@ export interface GateResult {
 export function evaluateGate(params: {
   author: string | null;
   reviewers: string[];
+  /** Reviewers whose current approval was a fallback self-review. */
+  selfReviewers?: string[];
+  reviewPolicy?: ReviewPolicy;
   agents: string[];
   requireCrossReview: boolean;
   checksPass: boolean;
@@ -140,7 +162,14 @@ export function evaluateGate(params: {
   const reasons: string[] = [];
   if (params.requireCrossReview) {
     const cross = params.reviewers.find((r) => r !== params.author && params.agents.includes(r));
-    if (!cross) {
+    // A fallback self-review counts only under a policy that allows it, and only when the
+    // approval record itself is marked `self` (an unmarked author approval never counts).
+    const self =
+      params.reviewPolicy === "cross-or-self" &&
+      params.author !== null &&
+      params.agents.includes(params.author) &&
+      (params.selfReviewers ?? []).includes(params.author);
+    if (!cross && !self) {
       reasons.push(
         `needs approval from the other harness (author='${params.author ?? "?"}', reviewers=[${params.reviewers.join(", ") || "none"}])`,
       );
@@ -168,8 +197,8 @@ export async function checkMergeGate(
   }
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
-  const reviewers = cfg.requireCrossReview
-    ? currentReviewers(await listPrReviews(prNum, { cwd }), prNum, pr.headSha) : [];
+  const approvals = cfg.requireCrossReview
+    ? reviewState(await listPrReviews(prNum, { cwd }), prNum, pr.headSha) : null;
   if (pr.state !== "OPEN" || !pr.headSha) reasons.push("PR must be open with a known head");
   if (cfg.requireCrossReview && (!author || !cfg.agents.includes(author))) reasons.push("PR author must be a configured harness");
   const checks = await prChecksPass(prNum, { cwd });
@@ -177,7 +206,9 @@ export async function checkMergeGate(
   reasons.push(
     ...evaluateGate({
       author,
-      reviewers,
+      reviewers: approvals?.reviewers ?? [],
+      selfReviewers: approvals?.selfReviewers ?? [],
+      reviewPolicy: cfg.reviewPolicy,
       agents: cfg.agents,
       requireCrossReview: cfg.requireCrossReview,
       checksPass: checks.pass,

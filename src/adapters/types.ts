@@ -10,15 +10,6 @@ export interface RunContext {
   timeoutMs?: number;
 }
 
-export interface ReviewContext {
-  pr: number;
-  agent: string;
-  cwd: string; // where to run the review (repo or worktree)
-  prompt: string;
-  logFile?: string;
-  timeoutMs?: number;
-}
-
 export interface RunResult {
   ok: boolean;
   code: number;
@@ -34,6 +25,8 @@ export interface HeadlessContext {
   model?: ModelSpec;
   logFile: string;
   timeoutMs?: number;
+  /** Run without any ability to modify the workspace (reviewers). */
+  readOnly?: boolean;
 }
 
 export interface HeadlessResult {
@@ -62,8 +55,6 @@ export interface HarnessAdapter {
   healthCheck(): Promise<boolean>;
   /** Run a task to completion in an isolated worktree. */
   runTask(ctx: RunContext): Promise<RunResult>;
-  /** Review a PR (read-mostly). */
-  runReview(ctx: ReviewContext): Promise<RunResult>;
   /** Run a structured prompt for planner/judge use. Optional adapter capability. */
   runHeadless?(ctx: HeadlessContext): Promise<HeadlessResult>;
   /** Hand an interactive planning session to the human. Optional adapter capability. */

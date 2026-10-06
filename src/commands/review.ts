@@ -1,5 +1,6 @@
 import pc from "picocolors";
 import { loadConfig } from "../config.js";
+import { runAutomatedReview } from "../board/review-run.js";
 import { resolveAgent } from "../tasks/service.js";
 import { prDiff } from "../github/github.js";
 import {
@@ -58,20 +59,39 @@ export async function reviewCommand(prArg: string, opts: { agent?: string }): Pr
   );
 }
 
-export async function reviewApproveCommand(prArg: string, opts: { agent?: string; notes?: string; head?: string }): Promise<void> {
+/** Run a read-only headless review end to end (reviewer auto-picked, with self-review fallback). */
+export async function reviewRunCommand(prArg: string, opts: { agent?: string }): Promise<void> {
+  const cwd = process.cwd();
+  const cfg = loadConfig(cwd);
+  const prNum = parsePr(prArg);
+
+  const out = await runAutomatedReview(prNum, cfg, cwd, { reviewer: opts.agent });
+  const how = out.mode === "self" ? "self-review fallback in a fresh session" : "cross-review";
+  if (out.decision === "approve") {
+    console.log(pc.green(`PR #${prNum} approved by '${out.reviewer}' (${how}, issue #${out.issue}).`));
+    console.log(pc.dim("`orch merge` will accept it once CI is green."));
+  } else {
+    console.log(pc.yellow(`PR #${prNum}: changes requested by '${out.reviewer}' (${how}).`));
+    console.log(pc.dim(`Issue #${out.issue} bounced back to '${out.author}' (status:in-progress).
+${out.notes}`));
+  }
+}
+
+export async function reviewApproveCommand(prArg: string, opts: { agent?: string; notes?: string; head?: string; self?: boolean }): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
   const agent = resolveAgent(opts.agent, cfg);
   const prNum = parsePr(prArg);
 
-  const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "", opts.head);
+  const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "", opts.head,
+    opts.self ? { mode: "self", cfg } : {});
   console.log(pc.green(`PR #${prNum} approved by '${agent}' (issue #${issue}, authored by '${author}').`));
   console.log(pc.dim("Cross-review satisfied — `orch merge` will now accept this PR (if CI is green)."));
 }
 
 export async function reviewChangesCommand(
   prArg: string,
-  opts: { agent?: string; notes?: string },
+  opts: { agent?: string; notes?: string; self?: boolean },
 ): Promise<void> {
   const cwd = process.cwd();
   const cfg = loadConfig(cwd);
@@ -79,7 +99,7 @@ export async function reviewChangesCommand(
   const prNum = parsePr(prArg);
   if (!opts.notes) throw new Error("--notes is required to request changes");
 
-  const { issue, author } = await requestChanges(prNum, agent, cwd, opts.notes);
+  const { issue, author } = await requestChanges(prNum, agent, cwd, opts.notes, opts.self ? { mode: "self", cfg } : {});
   console.log(pc.yellow(`PR #${prNum}: changes requested by '${agent}'.`));
   console.log(pc.dim(`Issue #${issue} bounced back to author '${author}' (status:in-progress).`));
 }

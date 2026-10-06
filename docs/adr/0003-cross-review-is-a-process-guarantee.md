@@ -81,5 +81,5 @@ identity. The existing trusted-authorship boundary remains unchanged.
 | Claim lock leaked after a failed or no-commit harness run | Resolved | Failure paths now release the lock and prune the task worktree; preserve this lifecycle for every new terminal state. |
 | Worktree was pruned before the PR merge completed | Resolved | Merge now completes before cleanup, preserving the branch/worktree when merge fails. |
 | N+1 `gh` lookups while evaluating issue eligibility and review queues | Open | Fetch issue/PR metadata in bulk and evaluate candidates from the resulting snapshot. |
-| Adapter `runReview` and `healthCheck` seams are implemented but unwired | Open | Invoke health checks before dispatch and either wire automated review dispatch or remove the unused seam. |
+| Adapter `runReview` and `healthCheck` seams are implemented but unwired | Partly resolved | Automated review now runs through `orch review-run` on the read-only `runHeadless` path (ADR-0008) and the unused `runReview` seam was removed. `healthCheck` is still not invoked before dispatch. |
 | `orch run` is described as a daemon but drains the currently eligible queue once and exits | Open | Either add polling/wake-up behavior or consistently document and name it as a one-shot drainer. |

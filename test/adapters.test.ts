@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildClaudeInteractivePlanArgs,
+  buildClaudeReviewArgs,
   buildClaudeTaskArgs,
   resultTextFromClaudeStreamJson,
 } from "../src/adapters/claude.js";
-import { buildCodexTaskArgs, resultTextFromCodexJson } from "../src/adapters/codex.js";
+import { buildCodexReviewArgs, buildCodexTaskArgs, resultTextFromCodexJson } from "../src/adapters/codex.js";
 import { makeAdapter } from "../src/adapters/index.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { configuredAdapterCommands } from "../src/commands/doctor.js";
@@ -75,6 +76,24 @@ describe("task adapter arguments", () => {
       "-c",
       "model_reasoning_effort=medium",
     ]);
+  });
+});
+
+describe("read-only reviewer arguments", () => {
+  it("gives Claude read tools only and explicitly denies edits and shell", () => {
+    const args = buildClaudeReviewArgs({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob");
+    const denied = args[args.indexOf("--disallowedTools") + 1].split(",");
+    expect(denied).toEqual(expect.arrayContaining(["Edit", "Write", "Bash"]));
+    expect(args).not.toContain("acceptEdits");
+    expect(args.slice(-4)).toEqual(["--model", "claude-sonnet-5-5", "--effort", "medium"]);
+  });
+
+  it("runs Codex in its read-only sandbox without auto-approval", () => {
+    const args = buildCodexReviewArgs({ model: "gpt-6.1-sol", effort: "medium" });
+    expect(args).toEqual(["exec", "--json", "-s", "read-only", "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=medium"]);
+    expect(args).not.toContain("--approve-for-me");
+    expect(buildCodexReviewArgs()).toEqual(["exec", "--json", "-s", "read-only"]);
   });
 });
 

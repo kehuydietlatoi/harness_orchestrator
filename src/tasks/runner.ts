@@ -14,6 +14,7 @@ import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
 import { estimateCost } from "../board/pricing.js";
+import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
 
 export interface RunSummary {
   issue: number;
@@ -34,6 +35,16 @@ export function resolveTaskModel(
 async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Promise<number> {
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   return countCommitsAhead(base.ref, "HEAD", worktree);
+}
+
+/** Put `agent` on cooldown when a failed run's log shows it ran out of usage. */
+function noteUsageLimit(agent: string, logFile: string, cwd: string): void {
+  try {
+    const until = noteUsageLimitFromLog(agent, readFileSync(logFile, "utf8"), cwd);
+    if (until) console.log(pc.yellow(`⏸ '${agent}' hit its usage limit — paused until ${until.toLocaleString()}`));
+  } catch {
+    // An unreadable log just means no availability signal; the failure is handled as usual.
+  }
 }
 
 /** Validate that a specific open issue is a routed todo ready for dispatch. */
@@ -110,6 +121,11 @@ export async function processNext(
   cfg: OrchConfig,
   cwd: string,
 ): Promise<RunSummary | null> {
+  const pausedUntil = unavailableUntil(agent, cwd);
+  if (pausedUntil) {
+    log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
+    return null;
+  }
   const task = await claimNext(agent, cfg, cwd);
   if (!task) return null;
 
@@ -131,6 +147,10 @@ export async function dispatchSpecific(
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
   const agent = resolveDispatchAgent(issue, open, cfg);
+  const pausedUntil = unavailableUntil(agent, cwd);
+  if (pausedUntil) {
+    throw new Error(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+  }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
 }
@@ -171,6 +191,7 @@ async function processClaimed(
     harnessDurationMs = result.durationMs;
 
     if (!result.ok) {
+      noteUsageLimit(agent, logFile, cwd);
       await recoverClaim(n, task.worktree.path, cwd);
       console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
       summary = { issue: n, outcome: "failed", durationMs: result.durationMs };

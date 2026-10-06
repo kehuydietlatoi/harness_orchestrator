@@ -65,17 +65,19 @@ export async function runHeadlessAgent(
   cwd: string,
   logName: string,
   timeoutMs?: number,
+  opts: { readOnly?: boolean; runCwd?: string } = {},
 ): Promise<HeadlessResult> {
   if (!adapter.runHeadless) {
     throw new Error(`lead adapter '${adapter.id}' does not support planner/judge execution`);
   }
   const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
   return adapter.runHeadless({
-    cwd,
+    cwd: opts.runCwd ?? cwd, // process cwd; the log always lands under the repo's logs/
     prompt,
     model,
     logFile,
     timeoutMs,
+    ...(opts.readOnly ? { readOnly: true } : {}),
   });
 }
 

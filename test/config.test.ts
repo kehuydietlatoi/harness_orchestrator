@@ -96,6 +96,14 @@ describe("loadConfig", () => {
     });
   });
 
+  it("defaults to cross-or-self review and validates the configured policy", () => {
+    expect(loadConfig(writeConfig({})).reviewPolicy).toBe("cross-or-self");
+    expect(loadConfig(writeConfig({ reviewPolicy: "cross" })).reviewPolicy).toBe("cross");
+    for (const reviewPolicy of ["self", "", null, 1]) {
+      expect(() => loadConfig(writeConfig({ reviewPolicy }))).toThrow(/reviewPolicy/);
+    }
+  });
+
   it("leaves baseBranch unset so repositories use their GitHub default", () => {
     const config = loadConfig(writeConfig({}));
 

@@ -9,7 +9,6 @@ import type {
   InteractivePlanContext,
   InteractivePlanResult,
   RunContext,
-  ReviewContext,
   RunResult,
 } from "./types.js";
 
@@ -35,6 +34,24 @@ export function buildClaudeTaskArgs(model?: ModelSpec): string[] {
     "Read,Edit,Write,Bash",
   ];
   return [...args, ...claudeModelArgs(model)];
+}
+
+/**
+ * Claude argv for a read-only reviewer session. Edit/Write/Bash are denied outright
+ * (not merely un-allowed) so a user-level allow rule cannot re-enable them. Pure.
+ */
+export function buildClaudeReviewArgs(model?: ModelSpec): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--allowedTools",
+    "Read,Grep,Glob",
+    "--disallowedTools",
+    "Edit,Write,Bash,NotebookEdit",
+    ...claudeModelArgs(model),
+  ];
 }
 
 /** Reduce Claude stream-json output to the final result text. Pure. */
@@ -81,29 +98,9 @@ export class ClaudeAdapter implements HarnessAdapter {
     return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
   }
 
-  async runReview(ctx: ReviewContext): Promise<RunResult> {
-    const args = [
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "acceptEdits",
-      "--allowedTools",
-      "Read,Bash",
-    ];
-    const r = await spawnLogged(this.cfg.cmd, args, {
-      cwd: ctx.cwd,
-      input: ctx.prompt,
-      logFile: ctx.logFile,
-      timeoutMs: ctx.timeoutMs,
-      shell: WIN,
-    });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
-  }
-
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
-    return runStructuredHeadless(this.cfg.cmd, buildClaudeTaskArgs(ctx.model), ctx, resultTextFromClaudeStreamJson);
+    const args = ctx.readOnly ? buildClaudeReviewArgs(ctx.model) : buildClaudeTaskArgs(ctx.model);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromClaudeStreamJson);
   }
 
   runInteractivePlan(ctx: InteractivePlanContext): Promise<InteractivePlanResult> {

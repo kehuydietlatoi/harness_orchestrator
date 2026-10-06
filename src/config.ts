@@ -13,6 +13,11 @@ export interface ModelSpec {
 
 export type EffortTier = "easy" | "hard";
 
+/** Who may review a PR: `cross` = only the other harness; `cross-or-self` additionally
+ * lets the author's harness review in a fresh session while every other harness is
+ * unavailable (usage limit), so one exhausted harness cannot block the other. */
+export type ReviewPolicy = "cross" | "cross-or-self";
+
 export interface AdapterConfig {
   cmd: string;
   models?: Record<EffortTier, ModelSpec>;
@@ -49,6 +54,7 @@ export interface OrchConfig {
    * When omitted, orch asks GitHub for the repository default branch. */
   baseBranch?: string;
   requireCrossReview: boolean;
+  reviewPolicy: ReviewPolicy;
   requireHumanMerge: boolean;
   worktreeRoot: string;
   maxConcurrent: number;
@@ -67,6 +73,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
   agents: ["claude", "codex"],
   lead: "claude",
   requireCrossReview: true,
+  reviewPolicy: "cross-or-self",
   requireHumanMerge: false,
   worktreeRoot: "../wt",
   maxConcurrent: 2,
@@ -114,6 +121,13 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     (typeof raw.baseBranch !== "string" || raw.baseBranch.trim().length === 0)
   ) {
     throw new Error("baseBranch must be a non-empty string when configured");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "reviewPolicy") &&
+    raw.reviewPolicy !== "cross" &&
+    raw.reviewPolicy !== "cross-or-self"
+  ) {
+    throw new Error('reviewPolicy must be "cross" or "cross-or-self"');
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {

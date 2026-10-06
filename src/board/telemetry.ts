@@ -180,8 +180,18 @@ export function projectId(cwd: string): string {
   return basename(resolve(cwd));
 }
 
+/** Root of orch's per-user state. `ORCH_HOME` relocates it (tests, sandboxes). */
+export function orchHome(): string {
+  return process.env.ORCH_HOME || join(homedir(), ".orch");
+}
+
+/** Per-project state directory under the orch home (runs, availability, ...). */
+export function projectStateDir(cwd: string): string {
+  return join(orchHome(), projectId(cwd));
+}
+
 export function telemetryPath(cwd: string): string {
-  return join(homedir(), ".orch", projectId(cwd), "runs.jsonl");
+  return join(projectStateDir(cwd), "runs.jsonl");
 }
 
 function nullableNumber(value: unknown): number | null {
