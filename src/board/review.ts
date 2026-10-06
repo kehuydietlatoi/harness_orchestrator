@@ -143,6 +143,28 @@ export interface GateResult {
 }
 
 /**
+ * Does the current head carry an acceptable approval? Either the other harness approved
+ * it, or - under `cross-or-self` - its author's own fresh session did and the record is
+ * marked `self` (an unmarked author approval never counts). Pure; shared by the merge gate
+ * and the autonomous loop so they cannot disagree about what "approved" means.
+ */
+export function reviewSatisfied(params: {
+  author: string | null;
+  reviewers: readonly string[];
+  selfReviewers?: readonly string[];
+  reviewPolicy?: ReviewPolicy;
+  agents: readonly string[];
+}): boolean {
+  const cross = params.reviewers.some((r) => r !== params.author && params.agents.includes(r));
+  const self =
+    params.reviewPolicy === "cross-or-self" &&
+    params.author !== null &&
+    params.agents.includes(params.author) &&
+    (params.selfReviewers ?? []).includes(params.author);
+  return cross || self;
+}
+
+/**
  * Pure gate decision (no I/O) — the core policy, unit-tested in isolation.
  * Returns the list of blocking reasons; empty means "may merge".
  */
@@ -161,15 +183,7 @@ export function evaluateGate(params: {
 }): string[] {
   const reasons: string[] = [];
   if (params.requireCrossReview) {
-    const cross = params.reviewers.find((r) => r !== params.author && params.agents.includes(r));
-    // A fallback self-review counts only under a policy that allows it, and only when the
-    // approval record itself is marked `self` (an unmarked author approval never counts).
-    const self =
-      params.reviewPolicy === "cross-or-self" &&
-      params.author !== null &&
-      params.agents.includes(params.author) &&
-      (params.selfReviewers ?? []).includes(params.author);
-    if (!cross && !self) {
+    if (!reviewSatisfied(params)) {
       reasons.push(
         `needs approval from the other harness (author='${params.author ?? "?"}', reviewers=[${params.reviewers.join(", ") || "none"}])`,
       );
