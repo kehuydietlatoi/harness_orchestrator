@@ -391,6 +391,16 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       return summary;
     }
 
+    // Ctrl-C may have arrived while the reads above were pending (observe, blockedBacklog); the check at the
+    // top of the loop cannot see that, and falling through here would start new merges, reviews, fixes or
+    // implementations after the operator asked to stop. Nothing is dispatched past this point; only work that
+    // is already running is awaited.
+    if (opts.signal?.aborted) {
+      await Promise.all(inflight.values());
+      summary.stopped = "aborted";
+      return summary;
+    }
+
     let backlog = 0;
     for (const { obs, step } of actionable) {
       if (inflight.size < max) launchStep(obs, step);

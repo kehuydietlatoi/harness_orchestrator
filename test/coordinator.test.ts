@@ -954,6 +954,99 @@ describe("runAutopilot", () => {
     expect(await run).toMatchObject({ merged: [38], failures: 1 });
   });
 
+  describe("aborting while a read is still pending", () => {
+    const deferred = () => {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      return { promise, release };
+    };
+    const tick = async (n: number) => { for (let i = 0; i < n; i += 1) await vi.advanceTimersByTimeAsync(1000); };
+
+    it("dispatches nothing when Ctrl-C arrives during the board observation", async () => {
+      const w = new World();
+      w.add(pr(38, { approved: true })); // the observation will say: merge it
+      w.todo.push({ issue: 9, agent: "claude", pr: {} }); // ...and there is routed work to start
+      const gate = deferred();
+      const deps = w.deps();
+      const inner = deps.observe;
+      let reading = false;
+      deps.observe = async () => { const seen = await inner(); reading = true; await gate.promise; return seen; };
+      const ctl = new AbortController();
+
+      const run = runAutopilot({ ...OPTS, signal: ctl.signal }, deps);
+      for (let i = 0; i < 10 && !reading; i += 1) await tick(1);
+      expect(reading).toBe(true); // the read has happened but not returned
+      ctl.abort(); // Ctrl-C while observe() is pending
+      gate.release(); // ...which then resolves with work to dispatch
+
+      const summary = await run;
+
+      expect(summary.stopped).toBe("aborted");
+      expect(w.calls).toEqual([]); // neither a step nor an implementation was started
+      expect(w.todo).toHaveLength(1);
+      expect(summary.merged).toEqual([]);
+    });
+
+    it("dispatches nothing when Ctrl-C arrives during the paused-backlog lookup", async () => {
+      const w = new World();
+      w.todo.push({ issue: 9, agent: "codex", pr: {} }); // codex is available and would be started
+      const gate = deferred();
+      const deps = w.deps();
+      let looking = false;
+      deps.blockedBacklog = async () => { looking = true; await gate.promise; return []; };
+      const ctl = new AbortController();
+
+      const run = runAutopilot({ ...OPTS, signal: ctl.signal }, deps);
+      for (let i = 0; i < 10 && !looking; i += 1) await tick(1);
+      expect(looking).toBe(true);
+      ctl.abort();
+      gate.release();
+
+      const summary = await run;
+
+      expect(summary.stopped).toBe("aborted");
+      expect(w.calls).toEqual([]); // no implement:codex:9
+      expect(w.todo).toHaveLength(1);
+    });
+
+    it("still waits for work that is already running, and starts nothing after it", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true }));
+      const fixGate = deferred();
+      const obsGate = deferred();
+      const deps = w.deps();
+      const innerExecute = deps.execute;
+      deps.execute = async (obs, step) => {
+        if (step.kind === "fix") await fixGate.promise; // a fix is running
+        return innerExecute(obs, step);
+      };
+      const innerObserve = deps.observe;
+      let observeCalls = 0;
+      deps.observe = async () => {
+        const seen = await innerObserve();
+        observeCalls += 1;
+        if (observeCalls === 2) await obsGate.promise; // the second read is pending while the fix runs
+        return seen;
+      };
+      const ctl = new AbortController();
+      let done = false;
+      const run = runAutopilot({ ...OPTS, signal: ctl.signal }, deps).finally(() => { done = true; });
+      for (let i = 0; i < 10 && observeCalls < 2; i += 1) await tick(1);
+      expect(observeCalls).toBe(2);
+
+      ctl.abort();
+      obsGate.release();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(done).toBe(false); // the running fix has not finished, so neither has the loop
+
+      fixGate.release();
+      const summary = await run;
+
+      expect(summary.stopped).toBe("aborted");
+      expect(w.calls).toEqual(["fix:review:38"]); // the in-flight fix completed; no review or merge was started after it
+    });
+  });
+
   it("stops launching when aborted but lets in-flight work finish", async () => {
     const w = new World();
     w.add(pr(38, { approved: true }));

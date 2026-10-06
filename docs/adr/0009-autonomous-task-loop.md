@@ -75,6 +75,10 @@ for that pass (rather than launching, say, a second fix for already-addressed fe
 immediately; a dropped task is never mistaken for "nothing left to do", and unaffected tasks are acted on
 from the same pass.
 
+Ctrl-C is honoured at the last moment before dispatch, not only at the top of each pass: if it arrives
+while a read (`observe`, the paused-backlog lookup) is pending, nothing new is started when the read
+returns, and only work already running is awaited.
+
 Two races are closed explicitly. An implementing agent runs `orch submit` itself, so its PR can exist
 before its process has finished: the loop records the issue as *implementing* from the moment it is
 claimed (`processNext`'s `onClaimed`) and takes no step on it until implementation has finalised. And
