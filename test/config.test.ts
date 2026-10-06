@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_FILE, formatModelSpec, loadConfig } from "../src/config.js";
+import { CONFIG_FILE, DEFAULT_CONFIG, formatModelSpec, loadConfig, resolveLeadModel } from "../src/config.js";
 
 describe("loadConfig", () => {
   let dir = "";
@@ -30,6 +30,7 @@ describe("loadConfig", () => {
         easy: { model: "claude-sonnet-5-5", effort: "medium" },
         hard: { model: "claude-sonnet-5-5", effort: "medium" },
       },
+      leadModel: { model: "claude-opus-5-5", effort: "high" },
     });
     expect(config.adapters.codex).toEqual({
       cmd: "codex",
@@ -93,7 +94,31 @@ describe("loadConfig", () => {
         easy: { model: "haiku", effort: "medium" },
         hard: { model: "claude-sonnet-5-5", effort: "medium" },
       },
+      leadModel: { model: "claude-opus-5-5", effort: "high" },
     });
+  });
+
+  it("runs a Claude lead on Opus and merges a partial leadModel with the default", () => {
+    expect(resolveLeadModel(loadConfig(writeConfig({})))).toEqual({ model: "claude-opus-5-5", effort: "high" });
+    rmSync(dir, { recursive: true, force: true });
+    const partial = loadConfig(writeConfig({ adapters: { claude: { leadModel: { effort: "max" } } } }));
+    expect(partial.adapters.claude.leadModel).toEqual({ model: "claude-opus-5-5", effort: "max" });
+    rmSync(dir, { recursive: true, force: true });
+    // Legacy string form follows the tier rule: a model for Claude, an effort for Codex.
+    const legacy = loadConfig(writeConfig({ adapters: { claude: { leadModel: "opus" }, codex: { leadModel: "xhigh" } } }));
+    expect(legacy.adapters.claude.leadModel).toEqual({ model: "opus", effort: "high" });
+    expect(legacy.adapters.codex.leadModel).toEqual({ effort: "xhigh" });
+    rmSync(dir, { recursive: true, force: true });
+    expect(() => loadConfig(writeConfig({ adapters: { claude: { leadModel: 7 } } }))).toThrow(/adapters\.claude\.leadModel/);
+  });
+
+  it("falls back to the lead's hard tier when it has no leadModel", () => {
+    const codexLead = loadConfig(writeConfig({ lead: "codex" }));
+    expect(codexLead.adapters.codex.leadModel).toBeUndefined();
+    expect(resolveLeadModel(codexLead)).toEqual({ model: "gpt-6.1-sol", effort: "medium" });
+    expect(resolveLeadModel({ lead: "claude", adapters: { claude: { cmd: "claude", models: DEFAULT_CONFIG.adapters.claude.models } } }))
+      .toEqual({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(resolveLeadModel({ lead: "missing", adapters: {} })).toBeUndefined();
   });
 
   it("defaults to cross-or-self review and validates the configured policy", () => {

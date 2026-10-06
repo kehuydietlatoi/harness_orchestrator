@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { loadConfig } from "../config.js";
+import { loadConfig, resolveLeadModel } from "../config.js";
 import { makeAdapter } from "../adapters/index.js";
 import { parseTickets, resolvePlan, type ResolvedPlan } from "../tasks/plan.js";
 import { createFromPlan, type Created, type Failed } from "../tasks/plan-create.js";
@@ -127,7 +127,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   const { code } = await runInteractivePlanner(adapter, {
     cwd,
     seed,
-    model: cfg.adapters[cfg.lead]?.models?.hard,
+    model: resolveLeadModel(cfg),
   });
 
   const written = existsSync(outputPath) && statSync(outputPath).mtimeMs > before;

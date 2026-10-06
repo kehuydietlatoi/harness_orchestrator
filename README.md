@@ -217,7 +217,8 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
       "models": {
         "easy": { "model": "claude-sonnet-5-5", "effort": "medium" },
         "hard": { "model": "claude-sonnet-5-5", "effort": "medium" }
-      }
+      },
+      "leadModel": { "model": "claude-opus-5-5", "effort": "high" }
     },
     "codex": {
       "cmd": "codex",
@@ -244,8 +245,9 @@ never changes cost; override `models.<tier>.model` to change it. Both tiers defa
 (e.g. `{ "effort": "high" }`) to make `effort:hard` mean something. Partial specs merge
 per tier over the defaults, and the older string form (`"easy": "sonnet"`) is still read
 (a bare string means a model, except for Codex where it means a reasoning effort). Tasks
-without an effort label use `defaultEffort`. Planning and the routing judge use the
-lead's `hard` tier.
+without an effort label use `defaultEffort`. The lead's decision points (planning and
+the routing judge) use its `leadModel`, falling back to its `hard` tier when unset: by
+default a Claude lead plans on Opus at `high` effort while task runs stay on the tiers.
 
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
