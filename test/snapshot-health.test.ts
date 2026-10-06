@@ -24,10 +24,12 @@ describe("lifecycle health projection", () => {
     expect(task.health.kind).toBe(kind);
     expect(formatSnapshotTable(snapshot)).toContain(kind);
     expect(formatStatusTask(task)).toContain(`[${kind}]`);
-    expect(lifecycleChecks(snapshot)[0].name).toContain(kind);
     if (["inconsistent", "needs-attention"].includes(kind)) {
+      expect(lifecycleChecks(snapshot)[0].name).toContain(kind);
       expect(task.recoveryCommand).toBe("orch repair 1");
       expect(lifecycleChecks(snapshot)[0].ok).toBe(false);
+    } else {
+      expect(lifecycleChecks(snapshot)).toEqual([]);
     }
   });
   it("includes closed-issue residue and missing-issue locks but excludes cleaned closed issues", () => {

@@ -64,12 +64,8 @@ The pieces of the routing pipeline:
 
 ## Surfaces
 
-- **snapshot** — the canonical read model of the open board (`buildSnapshot` /
-  `assemble`, `src/board/snapshot.ts`). Terminal, JSON, and dashboard all render from it.
-- **dashboard** — the localhost web UI (`src/server/server.ts`, `127.0.0.1` only). **Read-only
-  today** (`GET /` + `GET /status`). The routing UI (planned) adds an authenticated-by-
-  locality **mutation surface** (`POST /actions/*`) behind a single `assertLocal`
-  chokepoint for routing, planning, and dispatch.
+- **snapshot** - the shared view of open tasks and retained resources for closed or missing issues, including lifecycle health and safe recovery hints.
+- **dashboard** - the local web interface for observing task health, planning issues, assigning agents, and dispatching work. Its write actions are restricted to the local browser.
 
 ## The work loop
 

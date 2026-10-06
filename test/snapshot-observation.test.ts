@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("../src/github/github.js", () => ({ listIssues: vi.fn(), listPrs: vi.fn(), getRepoUrl: vi.fn(), prChecksState: vi.fn() }));
+vi.mock("../src/github/github.js", () => ({ listIssues: vi.fn(), listPrs: vi.fn(), getIssue: vi.fn(), getBranchPrs: vi.fn(), getIssueReferencedPrs: vi.fn(), getRepoUrl: vi.fn(), prChecksState: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ listLocks: vi.fn() }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn(), compareBranchToBase: vi.fn() }));
 vi.mock("../src/config.js", () => ({ loadConfig: () => ({ baseBranch: "main" }) }));
@@ -16,6 +16,8 @@ beforeEach(() => {
   vi.mocked(gh.listIssues).mockResolvedValue([{ number: 1, state: "OPEN", labels: ["review:needed"], assignees: [], body: "", title: "task" }]);
   vi.mocked(gh.listPrs).mockResolvedValue([{ number: 2, state: "OPEN", headRefName: "task/1-x", body: "", title: "pr", headSha: "a", htmlUrl: "" }]);
   vi.mocked(gh.getRepoUrl).mockResolvedValue(null);
+  vi.mocked(gh.getBranchPrs).mockResolvedValue([]);
+  vi.mocked(gh.getIssueReferencedPrs).mockResolvedValue([]);
   vi.mocked(gh.prChecksState).mockResolvedValue("pending");
   vi.mocked(listLocks).mockResolvedValue([1]);
   vi.mocked(git.resolveBaseBranch).mockResolvedValue({ name: "main", ref: "refs/heads/main" });
@@ -29,7 +31,87 @@ describe("snapshot observation", () => {
     expect(snapshot.tasks[0].health.kind).toBe("in-review");
     expect(gh.listIssues).toHaveBeenCalledOnce();
     expect(gh.listPrs).toHaveBeenCalledOnce();
+    expect(gh.listIssues).toHaveBeenCalledWith({ cwd: `/repo-${fixture}`, state: "open" });
+    expect(gh.listPrs).toHaveBeenCalledWith({ cwd: `/repo-${fixture}`, state: "open" });
+    expect(gh.getIssue).not.toHaveBeenCalled();
+    expect(gh.getBranchPrs).not.toHaveBeenCalled();
+    expect(gh.getIssueReferencedPrs).not.toHaveBeenCalled();
     expect(listLocks).toHaveBeenCalledWith({ cwd: `/repo-${fixture}`, strict: true });
+  });
+  it("looks up only unique retained-resource issues absent from the open set", async () => {
+    const cwd = `/repo-${fixture}`;
+    vi.mocked(listLocks).mockResolvedValue([1, 3, 4]);
+    vi.mocked(gh.getIssue).mockImplementation(async (number) => {
+      if (number === 4) throw new Error("not found");
+      return { number, state: "CLOSED", title: "closed", labels: [], assignees: [], body: "" };
+    });
+    vi.mocked(exec).mockImplementation(async (_cmd, args) => ({ code: 0, stderr: "", stdout:
+      args?.[0] === "worktree" ? `worktree ${process.cwd()}/src\nbranch refs/heads/task/3-closed\n\n` : "task/3-closed\ntask/99-old\n" }));
+    const snapshot = await buildSnapshot(cwd);
+    expect(vi.mocked(gh.getIssue).mock.calls).toEqual([[3, { cwd }], [4, { cwd }]]);
+    expect(snapshot.tasks.map((task) => [task.number, task.issueState])).toEqual([[1, "OPEN"], [3, "CLOSED"], [4, "MISSING"]]);
+    expect(snapshot.tasks.slice(1).every((task) => task.health.kind === "inconsistent")).toBe(true);
+    expect(gh.getBranchPrs).toHaveBeenCalledOnce();
+    expect(gh.getBranchPrs).toHaveBeenCalledWith("task/3-closed", { cwd });
+    expect(gh.listIssues).toHaveBeenCalledOnce();
+    expect(gh.listIssues).toHaveBeenCalledWith({ cwd, state: "open" });
+    expect(gh.listPrs).toHaveBeenCalledOnce();
+    expect(gh.listPrs).toHaveBeenCalledWith({ cwd, state: "open" });
+  });
+  it("does not compare or fetch history for old branches without an open issue, lock, or worktree", async () => {
+    vi.mocked(gh.listIssues).mockResolvedValue([]);
+    vi.mocked(gh.listPrs).mockResolvedValue([]);
+    vi.mocked(listLocks).mockResolvedValue([]);
+    vi.mocked(exec).mockImplementation(async (_cmd, args) => ({ code: 0, stderr: "", stdout:
+      args?.[0] === "worktree" ? "" : Array.from({ length: 500 }, (_, i) => `task/${i + 10}-merged`).join("\n") }));
+    expect((await buildSnapshot(`/repo-${fixture}`)).tasks).toEqual([]);
+    expect(git.compareBranchToBase).not.toHaveBeenCalled();
+    expect(gh.getIssue).not.toHaveBeenCalled();
+    expect(gh.getBranchPrs).not.toHaveBeenCalled();
+    expect(gh.getIssueReferencedPrs).not.toHaveBeenCalled();
+  });
+  it.each(["CLOSED", "MERGED"])("observes %s PR history after the local branch was removed", async (state) => {
+    vi.mocked(gh.listPrs).mockResolvedValue([]);
+    vi.mocked(listLocks).mockResolvedValue([]);
+    vi.mocked(exec).mockResolvedValue({ code: 0, stderr: "", stdout: "" });
+    vi.mocked(gh.getBranchPrs).mockResolvedValue([{ number: 2, state, headRefName: "task/1-task", body: "", title: "pr", headSha: "a", htmlUrl: "" }]);
+    const task = (await buildSnapshot(`/repo-${fixture}`)).tasks[0];
+    expect(task.health.kind).toBe(state === "CLOSED" ? "needs-attention" : "inconsistent");
+    expect(task.recoveryCommand).toBe("orch repair 1");
+    expect(gh.getBranchPrs).toHaveBeenCalledOnce();
+    expect(gh.getBranchPrs).toHaveBeenCalledWith("task/1-task", { cwd: `/repo-${fixture}` });
+  });
+  it("reports failed targeted PR observation instead of ready", async () => {
+    vi.mocked(gh.listPrs).mockResolvedValue([]);
+    vi.mocked(gh.getBranchPrs).mockRejectedValue(new Error("PR lookup unavailable"));
+    const task = (await buildSnapshot(`/repo-${fixture}`)).tasks[0];
+    expect(task.health).toMatchObject({ kind: "inconsistent", violations: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("PR lookup unavailable") }),
+    ]) });
+    expect(task.recoveryCommand).toBe("orch repair 1");
+  });
+  it("finds closed PRs by body after an issue rename, while ignoring unrelated mentions", async () => {
+    vi.mocked(gh.listPrs).mockResolvedValue([]);
+    vi.mocked(listLocks).mockResolvedValue([]);
+    vi.mocked(exec).mockResolvedValue({ code: 0, stderr: "", stdout: "" });
+    const pr = { number: 2, state: "CLOSED", headRefName: "custom", body: "Closes #1", title: "pr", headSha: "a", htmlUrl: "" };
+    vi.mocked(gh.getIssueReferencedPrs).mockResolvedValue([pr, { ...pr, number: 3, body: "Mentions #1", state: "OPEN" }]);
+    const task = (await buildSnapshot(`/repo-${fixture}`)).tasks[0];
+    expect(task.health).toEqual({ kind: "needs-attention", reason: "pr-closed", recovery: "inspect-closed-pr" });
+    expect(task.prNumber).toBe(2);
+    expect(gh.getIssueReferencedPrs).toHaveBeenCalledOnce();
+    expect(gh.getIssueReferencedPrs).toHaveBeenCalledWith(1, { cwd: `/repo-${fixture}` });
+  });
+  it("observes an unlocked worktree's issue and branch even without an open issue", async () => {
+    vi.mocked(gh.listIssues).mockResolvedValue([]);
+    vi.mocked(gh.listPrs).mockResolvedValue([]);
+    vi.mocked(listLocks).mockResolvedValue([]);
+    vi.mocked(gh.getIssue).mockRejectedValue(new Error("missing"));
+    const task = (await buildSnapshot(`/repo-${fixture}`)).tasks[0];
+    expect(task.health.kind).toBe("inconsistent");
+    expect(gh.getIssue).toHaveBeenCalledOnce();
+    expect(git.compareBranchToBase).toHaveBeenCalledOnce();
+    expect(git.compareBranchToBase).toHaveBeenCalledWith("task/1-x", expect.anything(), `/repo-${fixture}`);
   });
   it("reports comparison failure as inconsistent with a safe repair command", async () => {
     vi.mocked(git.compareBranchToBase).mockRejectedValue(new Error("comparison unavailable"));

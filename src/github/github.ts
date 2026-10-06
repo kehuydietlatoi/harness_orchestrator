@@ -239,6 +239,52 @@ export async function getPr(number: number, opts: { cwd?: string } = {}): Promis
   return parsePr(JSON.parse(r.stdout));
 }
 
+/** Bounded history lookup for one task branch. A full page is ambiguous, so fail
+ * explicitly rather than deriving healthy state from a truncated PR history. */
+export async function getBranchPrs(branch: string, opts: { cwd?: string } = {}): Promise<Pr[]> {
+  const limit = 100;
+  const r = await exec("gh", ["pr", "list", "--head", branch, "--state", "all",
+    "--limit", String(limit), "--json", PR_FIELDS], { cwd: opts.cwd });
+  if (r.code !== 0) throw new Error(`cannot observe PRs for ${branch}: ${r.stderr.trim()}`);
+  const prs = (JSON.parse(r.stdout) as unknown[]).map(parsePr);
+  if (prs.length >= limit) throw new Error(`cannot observe complete PR history for ${branch}: limit ${limit} reached`);
+  return prs;
+}
+
+/** One bounded issue-local read also finds PRs with renamed/non-task heads.
+ * See https://docs.github.com/en/graphql/reference/issues#crossreferencedevent.
+ * The caller still applies the canonical task/PR association to these mentions. */
+export async function getIssueReferencedPrs(number: number, opts: { cwd?: string } = {}): Promise<Pr[]> {
+  const query = `query($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      issue(number: $number) {
+        timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT]) {
+          pageInfo { hasNextPage }
+          nodes { ... on CrossReferencedEvent {
+            isCrossRepository
+            source { __typename ... on PullRequest { number title body headRefName state url headRefOid } }
+          } }
+        }
+      }
+    }
+  }`;
+  const r = await exec("gh", ["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
+    "-F", `number=${number}`, "-f", `query=${query}`], { cwd: opts.cwd });
+  if (r.code !== 0) throw new Error(`cannot observe PR references for #${number}: ${r.stderr.trim()}`);
+  const response = JSON.parse(r.stdout) as {
+    errors?: unknown[];
+    data?: { repository?: { issue?: { timelineItems?: {
+      pageInfo: { hasNextPage: boolean };
+      nodes: Array<{ isCrossRepository: boolean; source: { __typename: string } } | null>;
+    } } } };
+  };
+  const timeline = response.data?.repository?.issue?.timelineItems;
+  if (response.errors?.length || !timeline) throw new Error(`cannot observe PR references for #${number}`);
+  if (timeline.pageInfo.hasNextPage) throw new Error(`cannot observe complete PR references for #${number}: limit 100 reached`);
+  return timeline.nodes.flatMap((event) =>
+    event && !event.isCrossRepository && event.source.__typename === "PullRequest" ? [parsePr(event.source)] : []);
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 function parseRestPr(o: any): Pr {
   return {

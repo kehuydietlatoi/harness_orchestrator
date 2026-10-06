@@ -40,7 +40,7 @@ interface Check {
 }
 
 export function lifecycleChecks(snapshot: Snapshot): Check[] {
-  return snapshot.tasks.map((task) => ({ name: `#${task.number} lifecycle: ${task.health.kind}`,
+  return snapshot.tasks.filter((task) => task.recoveryCommand !== null).map((task) => ({ name: `#${task.number} lifecycle: ${task.health.kind}`,
     ok: task.recoveryCommand === null, note: healthDetail(task) }));
 }
 

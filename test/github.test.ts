@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
-const { listIssues, listOpenPrs, listPrs, listLabels } = await import("../src/github/github.js");
+const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
 
 function restIssue(n: number, over: Record<string, unknown> = {}) {
   return {
@@ -110,6 +110,55 @@ describe("listOpenPrs", () => {
 
     expect(merged.state).toBe("MERGED");
     expect(execMock.mock.calls[0][1][1]).toContain("state=all");
+  });
+});
+
+describe("getBranchPrs", () => {
+  it("queries only the requested head with a fixed limit and preserves PR states", async () => {
+    execMock.mockResolvedValueOnce(ok([
+      { number: 7, state: "CLOSED", headRefName: "task/1-x", url: "https://github.com/acme/orch/pull/7" },
+      { number: 8, state: "MERGED", headRefName: "task/1-x" },
+    ]));
+    const prs = await getBranchPrs("task/1-x", { cwd: "/repo" });
+    expect(prs.map((pr) => pr.state)).toEqual(["CLOSED", "MERGED"]);
+    expect(prs[0].htmlUrl).toBe("https://github.com/acme/orch/pull/7");
+    expect(execMock).toHaveBeenCalledWith("gh", ["pr", "list", "--head", "task/1-x", "--state", "all",
+      "--limit", "100", "--json", "number,title,body,headRefName,state,url,headRefOid"], { cwd: "/repo" });
+  });
+  it("accepts an empty history but rejects failures and potentially truncated history", async () => {
+    execMock.mockResolvedValueOnce(ok([]));
+    expect(await getBranchPrs("task/1-x")).toEqual([]);
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    await expect(getBranchPrs("task/1-x")).rejects.toThrow("offline");
+    execMock.mockResolvedValueOnce(ok(Array.from({ length: 100 }, (_, number) => ({ number }))));
+    await expect(getBranchPrs("task/1-x")).rejects.toThrow("limit 100 reached");
+  });
+});
+
+describe("getIssueReferencedPrs", () => {
+  const response = (nodes: unknown[], hasNextPage = false) => ({ data: { repository: { issue: {
+    timelineItems: { nodes, pageInfo: { hasNextPage } },
+  } } } });
+  it("reads one issue's references and excludes cross-repository PRs and issue mentions", async () => {
+    const source = { __typename: "PullRequest", number: 9, state: "CLOSED", body: "Closes #1", headRefName: "custom" };
+    execMock.mockResolvedValueOnce(ok(response([
+      { isCrossRepository: false, source },
+      { isCrossRepository: true, source: { ...source, number: 10 } },
+      { isCrossRepository: false, source: { __typename: "Issue" } },
+    ])));
+    expect(await getIssueReferencedPrs(1)).toMatchObject([{ number: 9, state: "CLOSED", headRefName: "custom" }]);
+    expect(execMock).toHaveBeenCalledOnce();
+    expect(execMock.mock.calls[0][1]).toEqual(["api", "graphql", "-F", "owner={owner}", "-F", "name={repo}",
+      "-F", "number=1", "-f", expect.stringContaining("timelineItems(first: 100, itemTypes: [CROSS_REFERENCED_EVENT])")]);
+  });
+  it("fails explicitly for missing, partial, truncated, or unavailable observations", async () => {
+    for (const body of [{ data: { repository: { issue: null } } },
+      { ...response([]), errors: [{ message: "partial response" }] }, response([], true)]) {
+      execMock.mockResolvedValueOnce(ok(body));
+      await expect(getIssueReferencedPrs(1)).rejects.toThrow("cannot observe");
+    }
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    await expect(getIssueReferencedPrs(1)).rejects.toThrow("offline");
   });
 });
 

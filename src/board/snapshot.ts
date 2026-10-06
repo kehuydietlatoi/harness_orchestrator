@@ -3,6 +3,9 @@ import {
   type Issue,
   type Pr,
   getRepoUrl,
+  getIssue,
+  getBranchPrs,
+  getIssueReferencedPrs,
   listIssues,
   listPrs,
   prChecksState,
@@ -14,7 +17,7 @@ import { listLocks } from "../git/lock.js";
 import { prIssueNumber } from "./review.js";
 import { readRuns, type RunRecord } from "./telemetry.js";
 import { exec } from "../util/exec.js";
-import type { Worktree } from "../git/worktree.js";
+import { branchName, slugify, type Worktree } from "../git/worktree.js";
 import { compareBranchToBase, resolveBaseBranch } from "../git/git.js";
 import { loadConfig } from "../config.js";
 import { deriveTaskState, type TaskFacts, type TaskState } from "../tasks/lifecycle.js";
@@ -215,13 +218,11 @@ async function listWorktrees(cwd: string): Promise<Worktree[]> {
   return parseWorktrees(result.stdout);
 }
 
-/** Cache of CI state keyed by `<pr>:<headSha>` so steady-state polls reuse a
- * result until a new commit lands, rather than shelling out to `gh` every 2s. */
+/** Repository-scoped CI cache, refreshed on new heads or after ten seconds. */
 const checksCache = new Map<string, { state: ChecksState; expires: number }>();
 
 /** CI roll-up for the PRs whose issue is awaiting review — the only ones the
- * dashboard renders a checks badge for. Cached by head SHA; unknown SHAs are
- * fetched once and reused until the branch advances. */
+ * dashboard renders a checks badge for. Unknown SHAs use the same short TTL. */
 async function reviewChecks(prs: readonly Pr[], issues: readonly Issue[], cwd: string): Promise<Map<number, ChecksState>> {
   const needsReview = new Set(
     issues.filter((issue) => issue.labels.includes(REVIEW_NEEDED)).map((issue) => issue.number),
@@ -250,14 +251,29 @@ async function reviewChecks(prs: readonly Pr[], issues: readonly Issue[], cwd: s
 export async function buildSnapshot(cwd: string): Promise<Snapshot> {
   const cfg = loadConfig(cwd);
   const [issues, prs, locks, worktrees, runs, repoUrl] = await Promise.all([
-    listIssues({ cwd, state: "all" }),
-    listPrs({ cwd, state: "all" }),
+    listIssues({ cwd, state: "open" }),
+    listPrs({ cwd, state: "open" }),
     listLocks({ cwd, strict: true }),
     listWorktrees(cwd),
     Promise.resolve(readRuns(cwd)),
     getRepoUrl({ cwd }),
   ]);
+  const active = new Set(issues.map((issue) => issue.number));
+  for (const number of locks) active.add(number);
+  for (const worktree of worktrees) {
+    const number = worktreeIssueNumber(worktree);
+    if (number !== null) active.add(number);
+  }
+  // Only retained resources warrant individual issue reads. Old task branches
+  // alone are normal merge residue and must not grow polling work with history.
+  const openNumbers = new Set(issues.map((issue) => issue.number));
+  const residue = await Promise.all([...active].filter((number) => !openNumbers.has(number)).map(async (number) => {
+    try { return await getIssue(number, { cwd }); }
+    catch { return null; } // assemble exposes missing/inaccessible issues as inconsistent.
+  }));
+  issues.push(...residue.filter((issue): issue is Issue => issue !== null));
   const branches = new Map<number, BranchObservation>();
+  const taskBranches = new Map<number, Set<string>>();
   const refs = await exec("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads/task/"], { cwd });
   if (refs.code !== 0) throw new Error(`cannot observe task branches: ${refs.stderr.trim()}`);
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
@@ -265,12 +281,40 @@ export async function buildSnapshot(cwd: string): Promise<Snapshot> {
     const match = ref.match(/^task\/(\d+)(?:-|$)/);
     if (!match) continue;
     const number = Number(match[1]);
+    if (!active.has(number)) continue;
+    const names = taskBranches.get(number) ?? new Set<string>();
+    names.add(ref);
+    taskBranches.set(number, names);
     if (branches.has(number)) {
       branches.set(number, { state: "absent", error: "multiple task branches map to this issue" });
       continue;
     }
     try { branches.set(number, { state: await compareBranchToBase(ref, base, cwd) }); }
     catch (error) { branches.set(number, { state: "absent", error: String(error) }); }
+  }
+  // An open PR dominates prFact, so history is needed only for active tasks
+  // without one. Include the expected branch when its local ref was removed.
+  const withOpenPr = new Set(prs.map(prIssueNumber));
+  const issueNumbers = new Set(issues.map((issue) => issue.number));
+  for (const issue of issues) {
+    if (!taskBranches.has(issue.number)) {
+      taskBranches.set(issue.number, new Set([branchName(issue.number, slugify(issue.title))]));
+    }
+  }
+  for (const [number, names] of taskBranches) {
+    if (withOpenPr.has(number)) continue;
+    try {
+      const history = await Promise.all([
+        ...[...names].map((name) => getBranchPrs(name, { cwd })),
+        ...(issueNumbers.has(number) ? [getIssueReferencedPrs(number, { cwd })] : []),
+      ]);
+      const taskPrs = new Map(history.flat().filter((pr) => prIssueNumber(pr) === number).map((pr) => [pr.number, pr]));
+      prs.push(...taskPrs.values());
+    } catch (error) {
+      const branch = branches.get(number);
+      branches.set(number, { state: branch?.state ?? "absent",
+        error: [branch?.error, String(error)].filter(Boolean).join("; ") });
+    }
   }
   for (const worktree of worktrees) {
     const number = worktreeIssueNumber(worktree);
