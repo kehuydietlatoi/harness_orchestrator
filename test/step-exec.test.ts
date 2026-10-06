@@ -67,6 +67,8 @@ function fakeEnv(opts: {
   ancestor?: boolean;
   /** Whether the worktree HEAD contains the PR head (the pre-flight worktree check). */
   headContained?: boolean;
+  /** `git rev-parse` fails (inspecting the result of a completed run throws). */
+  revParseFails?: boolean;
 }) {
   const agentCalls: Array<Parameters<StepEnv["runAgent"]>[0]> = [];
   const gitCalls: string[][] = [];
@@ -81,7 +83,10 @@ function fakeEnv(opts: {
     git: async (args) => {
       gitCalls.push(args);
       const ok = { code: 0, stderr: "" };
-      if (args[0] === "rev-parse") return { ...ok, stdout: `${opts.head ?? NEW_HEAD}\n` };
+      if (args[0] === "rev-parse") {
+        if (opts.revParseFails) return { code: 128, stdout: "", stderr: "fatal: not a git repository" };
+        return { ...ok, stdout: `${opts.head ?? NEW_HEAD}\n` };
+      }
       if (args[0] === "status") return { ...ok, stdout: opts.dirty ? " M file.ts\n" : "" };
       if (args[0] === "push") return { code: opts.pushCode ?? 0, stdout: "", stderr: opts.pushCode ? "rejected" : "" };
       if (args[0] === "merge-base") {
@@ -373,6 +378,67 @@ describe("step executors", () => {
 
       expect(result).toEqual({ signal: "step.failed", detail: "'claude' exited 2" });
       expect(unavailableUntil("claude", cwd)).toBeNull();
+    });
+  });
+
+  describe("after the push has happened", () => {
+    it("keeps the pushed outcome and its round when the label update fails (fix)", async () => {
+      vi.mocked(gh.editIssue).mockRejectedValue(new Error("labels down"));
+      const { env, gitCalls } = fakeEnv({});
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(true);
+      expect(result.signal).toBe("fix.pushed"); // the round is spent: the head changed on GitHub
+      expect(result.detail).toContain("round 1 (review)");
+      expect(result.detail).toContain("labels not updated (labels down)");
+      expect(result.detail).toContain("orch repair 38");
+      expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-pushed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1, since: expect.any(Number) });
+    });
+
+    it("keeps the pushed outcome when the label update fails (conflict resolution)", async () => {
+      vi.mocked(gh.editIssue).mockRejectedValue(new Error("labels down"));
+      const { env } = fakeEnv({});
+
+      const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
+
+      expect(result.signal).toBe("conflict.resolved");
+      expect(result.detail).toContain("labels not updated (labels down)");
+      expect(recordRun).toHaveBeenCalledWith(38, "claude", expect.anything(), "resolve-pushed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "resolve-conflict", round: 1, since: expect.any(Number) });
+    });
+
+    it("counts that round: the pushed signal is what the budget is derived from", async () => {
+      vi.mocked(gh.editIssue).mockRejectedValue(new Error("labels down"));
+      const { env } = fakeEnv({});
+      const { fixRoundsFor } = await import("../src/tasks/events.js");
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      const asEvent = { ts: "t", issue: 38, type: "step.finished", step: "fix", signal: result.signal };
+      expect(fixRoundsFor([asEvent], 38)).toBe(1);
+    });
+
+    it("always records telemetry for a completed run, even when inspecting its result throws (fix)", async () => {
+      const { env } = fakeEnv({ revParseFails: true });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(result.signal).toBe("step.failed");
+      expect(result.detail).toContain("git rev-parse failed");
+      expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-failed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1, since: expect.any(Number) });
+    });
+
+    it("always records telemetry for a completed run, even when inspecting its result throws (conflict)", async () => {
+      const { env } = fakeEnv({ revParseFails: true });
+
+      const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
+
+      expect(result.signal).toBe("step.failed");
+      expect(recordRun).toHaveBeenCalledWith(38, "claude", expect.anything(), "resolve-failed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "resolve-conflict", round: 1, since: expect.any(Number) });
     });
   });
 

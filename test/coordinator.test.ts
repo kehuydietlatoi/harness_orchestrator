@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  MAX_STEP_FAILURES, runAutopilot, type ActionableStep, type AutopilotOptions, type CoordinatorDeps,
+  MAX_ESCALATION_FAILURES, MAX_STEP_FAILURES, runAutopilot, type ActionableStep, type AutopilotOptions, type CoordinatorDeps,
 } from "../src/tasks/coordinator.js";
 import type { OrchEvent } from "../src/tasks/events.js";
 import type { Observation, TaskObservation } from "../src/tasks/observe.js";
@@ -62,7 +62,7 @@ class World {
     const open = [...this.prs.values()].filter((p) => !p.merged);
     if (this.unobservedPolls > 0) {
       this.unobservedPolls -= 1;
-      return { tasks: [], unobserved: open.map((p) => 1000 + p.issue) };
+      return { tasks: [], unobserved: open.map((p) => 1000 + p.issue), ambiguous: [] };
     }
     const tasks = open.map((p) => {
       const facts = {
@@ -78,7 +78,7 @@ class World {
         reviews: [], facts, step: decideStep(facts), feedback: p.changes ? "please fix" : null,
       } as TaskObservation;
     });
-    return { tasks, unobserved: [] };
+    return { tasks, unobserved: [], ambiguous: [] };
   };
 
   execute = async (obs: TaskObservation, step: ActionableStep): Promise<StepResult> => {
@@ -445,6 +445,7 @@ describe("runAutopilot", () => {
       return {
         tasks: only ? [only, { ...only, pr: { ...only.pr, number: 2000, headRefName: "task/38-duplicate" } }] : [],
         unobserved: [],
+        ambiguous: [],
       };
     };
 
@@ -466,7 +467,7 @@ describe("runAutopilot", () => {
     deps.observe = async () => {
       const live = await w.observe();
       const t38 = live.tasks.find((t) => t.issue.number === 38); // the duplicate exists only while #38 is open
-      return { tasks: t38 ? [...live.tasks, { ...t38, pr: { ...t38.pr, number: 2000 } }] : live.tasks, unobserved: [] };
+      return { tasks: t38 ? [...live.tasks, { ...t38, pr: { ...t38.pr, number: 2000 } }] : live.tasks, unobserved: [], ambiguous: [] };
     };
 
     let done = false;
@@ -475,6 +476,113 @@ describe("runAutopilot", () => {
 
     expect(w.calls).toEqual(["merge:40"]);
     expect(await run).toMatchObject({ ambiguous: [38], merged: [40] });
+  });
+
+  describe("ambiguity decided from the full PR inventory", () => {
+    it("never merges a readable duplicate just because its twin could not be loaded", async () => {
+      const w = new World();
+      w.add(pr(38, { approved: true })); // the readable, approved twin: would merge if it looked unique
+      const deps = w.deps();
+      deps.observe = async () => ({
+        tasks: (await w.observe()).tasks, // observeTasks may still hand back the twin it could read...
+        unobserved: [],
+        ambiguous: [{ issue: 38, prs: [1038, 2000] }], // ...but the inventory says two PRs map to #38
+      });
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 100 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+      expect(done).toBe(true);
+      expect(w.calls).toEqual([]); // nothing was driven, and in particular nothing merged
+      expect(await run).toMatchObject({ ambiguous: [38], merged: [], stopped: "drained" });
+      expect(w.said.some((l) => l.includes("2 open PRs map to this issue (#1038, #2000)"))).toBe(true);
+    });
+
+    it("reports an ambiguous issue even when none of its PRs was observed", async () => {
+      const w = new World();
+      const deps = w.deps();
+      deps.observe = async () => ({ tasks: [], unobserved: [], ambiguous: [{ issue: 7, prs: [70, 71] }] });
+
+      const summary = await runAutopilot(OPTS, deps);
+
+      expect(summary).toMatchObject({ ambiguous: [7], stopped: "drained" });
+    });
+  });
+
+  describe("escalation that itself fails", () => {
+    const failed: StepResult = { signal: "step.failed", detail: "label write failed" };
+    /** A task that must escalate (its one allowed fix round is spent), whose escalation writes then fail. */
+    function stuck(n: number, failures: number): World {
+      const w = new World();
+      w.maxRounds = 1;
+      w.add(pr(38, { changes: true, rounds: 1, overrides: { escalate: Array.from({ length: n }, () => failed).slice(0, failures) } }));
+      return w;
+    }
+    const timed = (w: World) => {
+      const times: number[] = [];
+      const deps = w.deps();
+      const inner = deps.execute;
+      deps.execute = async (obs, step) => { if (step.kind === "escalate") times.push(Date.now()); return inner(obs, step); };
+      return { deps, times };
+    };
+    const driveWith = async (deps: CoordinatorDeps, opts: Partial<AutopilotOptions> = {}) => {
+      let done = false;
+      const run = runAutopilot({ ...OPTS, ...opts }, deps).finally(() => { done = true; });
+      for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+      expect(done, "the loop must terminate").toBe(true);
+      return run;
+    };
+
+    it("backs off between attempts and gives up after a bound, reporting it instead of retrying forever", async () => {
+      const w = stuck(50, 50);
+      const { deps, times } = timed(w);
+
+      const summary = await driveWith(deps);
+
+      expect(w.calls).toEqual(["escalate:38", "escalate:38", "escalate:38"]); // MAX_ESCALATION_FAILURES, not unbounded
+      expect(MAX_ESCALATION_FAILURES).toBe(3);
+      expect(times[1] - times[0]).toBeGreaterThanOrEqual(30_000); // backoff grows with each failure
+      expect(times[2] - times[1]).toBeGreaterThanOrEqual(60_000);
+      expect(summary).toMatchObject({ escalated: [], escalationFailed: [38], failures: 3, stopped: "drained" });
+      expect(w.said.some((l) => l.includes("could not be escalated after 3 attempts"))).toBe(true);
+    });
+
+    it("does not treat a failing escalation as progress, so --max-idle still ends the wait", async () => {
+      const w = stuck(50, 50);
+      const { deps } = timed(w);
+
+      // Retries come at t=0, 30s and 90s. With a 75s idle limit the loop must stop before the third; if a
+      // failed escalation reset the idle clock it would reach the third attempt and finish as "drained".
+      const summary = await driveWith(deps, { maxIdleMs: 75_000 });
+
+      expect(summary.stopped).toBe("idle-timeout");
+      expect(w.calls).toEqual(["escalate:38", "escalate:38"]);
+    });
+
+    it("recovers: a later escalation that works clears the failures and escalates normally", async () => {
+      const w = stuck(1, 1); // only the first attempt fails
+      const { deps } = timed(w);
+
+      const summary = await driveWith(deps);
+
+      expect(w.calls).toEqual(["escalate:38", "escalate:38"]);
+      expect(summary).toMatchObject({ escalated: [38], escalationFailed: [], stopped: "drained" });
+    });
+
+    it("escalates immediately the first time, without waiting out earlier step-failure backoff", async () => {
+      const w = new World();
+      const fail: StepResult = { signal: "step.failed", detail: "no new commits" };
+      w.add(pr(38, { changes: true, overrides: { fix: [fail, fail] } })); // two failed fixes -> escalate
+      const { deps, times } = timed(w);
+      const start = Date.now();
+
+      await driveWith(deps);
+
+      expect(w.calls).toEqual(["fix:review:38", "fix:review:38", "escalate:38"]);
+      expect(times).toHaveLength(1);
+      expect(times[0] - start).toBeLessThan(120_000); // a bounded delay only, not an extra escalation backoff
+    });
   });
 
   it("never runs more steps at once than its slot limit", async () => {

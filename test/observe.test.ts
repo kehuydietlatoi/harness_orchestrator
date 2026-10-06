@@ -137,12 +137,12 @@ describe("observeTasks", () => {
 
   it("skips PRs it does not own: no issue, unknown author, unmapped branch", async () => {
     vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:ghost"] }]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [], ambiguous: [] });
     vi.mocked(gh.listIssues).mockResolvedValue([]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [], ambiguous: [] });
     vi.mocked(gh.listIssues).mockResolvedValue([issue]);
     vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headRefName: "random", body: "no ref" }]);
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [] });
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [], ambiguous: [] });
   });
 
   it("skips just the PR it cannot observe and keeps the rest", async () => {
@@ -160,7 +160,58 @@ describe("observeTasks", () => {
 
   it("reports every PR it could not read when none can be", async () => {
     vi.mocked(gh.listPrReviews).mockRejectedValue(new Error("rate limited"));
-    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [62] });
+    expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [62], ambiguous: [] });
+  });
+
+  describe("two open PRs for one issue", () => {
+    const twin = { ...pr, number: 63, headRefName: "feature/second-attempt", body: "Closes #38", headSha: "d".repeat(40) };
+
+    it("is reported as ambiguous: neither PR is observed, and nothing is fetched per PR", async () => {
+      vi.mocked(gh.listOpenPrs).mockResolvedValue([pr, twin]);
+
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+
+      expect(out).toEqual({ tasks: [], unobserved: [], ambiguous: [{ issue: 38, prs: [62, 63] }] });
+      expect(gh.listPrReviews).not.toHaveBeenCalled();
+      expect(gh.prChecksState).not.toHaveBeenCalled();
+      expect(gh.prMergeability).not.toHaveBeenCalled();
+    });
+
+    it("stays ambiguous when one twin is unreadable and the other is approved and green (it must not look unique)", async () => {
+      vi.mocked(gh.listOpenPrs).mockResolvedValue([pr, twin]);
+      vi.mocked(gh.listPrReviews).mockImplementation(async (n) => {
+        if (n === 63) throw new Error("gh exploded");
+        return [review("codex", "approve")]; // the readable twin is approved
+      });
+
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+
+      expect(out.tasks).toEqual([]); // so the coordinator has nothing it could merge
+      expect(out.ambiguous).toEqual([{ issue: 38, prs: [62, 63] }]);
+    });
+
+    it("does not depend on which twin is listed first", async () => {
+      vi.mocked(gh.listOpenPrs).mockResolvedValue([twin, pr]);
+      expect((await observeTasks(DEFAULT_CONFIG, "/repo")).ambiguous).toEqual([{ issue: 38, prs: [62, 63] }]);
+    });
+
+    it("leaves every other issue observable", async () => {
+      const other = { ...pr, number: 70, headRefName: "task/39-y", body: "Closes #39", headSha: "e".repeat(40) };
+      vi.mocked(gh.listIssues).mockResolvedValue([issue, { ...issue, number: 39 }]);
+      vi.mocked(gh.listOpenPrs).mockResolvedValue([pr, twin, other]);
+
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+
+      expect(out.tasks.map((t) => t.pr.number)).toEqual([70]);
+      expect(out.ambiguous).toEqual([{ issue: 38, prs: [62, 63] }]);
+    });
+
+    it("ignores a PR that is not an orch-owned task when judging ambiguity", async () => {
+      vi.mocked(gh.listOpenPrs).mockResolvedValue([pr, { ...twin, headRefName: "random", body: "no reference" }]);
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+      expect(out.ambiguous).toEqual([]);
+      expect(out.tasks.map((t) => t.pr.number)).toEqual([62]);
+    });
   });
 
   describe("round budget through the real observation-to-decision pipeline", () => {

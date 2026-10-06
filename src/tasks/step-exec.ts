@@ -107,6 +107,11 @@ async function inspectWorktree(env: StepEnv, worktree: string): Promise<Worktree
 /**
  * Push the worktree's commits to the PR branch (never forced) and put the task back in
  * review. Requires that the agent actually moved HEAD and left nothing uncommitted.
+ *
+ * Once the push has happened the round is *spent*: the head changed on GitHub. The label projection that
+ * follows is disposable (the loop derives state from facts, and `orch repair` restores labels), so a failure
+ * there must not turn a pushed fix into a failed step: that would drop the round from the budget and the
+ * signal that counts it, and let later runs exceed `maxReviewRounds`.
  */
 async function pushAndRequeueReview(
   obs: TaskObservation,
@@ -114,22 +119,37 @@ async function pushAndRequeueReview(
   cwd: string,
   worktree: string,
   extraCheck?: () => Promise<string | null>,
-): Promise<StepResult | null> {
+): Promise<{ failed: StepResult } | { pushed: true; warning?: string }> {
   const state = await inspectWorktree(env, worktree);
-  if (state.dirty) return failure("the agent left uncommitted changes; nothing was pushed");
-  if (state.head === obs.pr.headSha) return failure("the agent made no new commits");
+  if (state.dirty) return { failed: failure("the agent left uncommitted changes; nothing was pushed") };
+  if (state.head === obs.pr.headSha) return { failed: failure("the agent made no new commits") };
   const problem = await extraCheck?.();
-  if (problem) return failure(problem);
+  if (problem) return { failed: failure(problem) };
 
   const push = await env.git(["push", "origin", `HEAD:refs/heads/${obs.pr.headRefName}`], worktree);
-  if (push.code !== 0) return failure(`git push failed: ${push.stderr.trim()}`);
-  await editIssue(obs.issue.number, {
-    cwd,
-    addLabels: [STATUS.inReview, REVIEW_NEEDED],
-    // A new head voids earlier approvals, so their projections go too (the gate never reads them).
-    removeLabels: [STATUS.inProgress, ...obs.issue.labels.filter((l) => l.startsWith(REVIEWED_BY_PREFIX))],
-  });
-  return null; // pushed
+  if (push.code !== 0) return { failed: failure(`git push failed: ${push.stderr.trim()}`) };
+  try {
+    await editIssue(obs.issue.number, {
+      cwd,
+      addLabels: [STATUS.inReview, REVIEW_NEEDED],
+      // A new head voids earlier approvals, so their projections go too (the gate never reads them).
+      removeLabels: [STATUS.inProgress, ...obs.issue.labels.filter((l) => l.startsWith(REVIEWED_BY_PREFIX))],
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`#${obs.issue.number}: pushed, but updating labels failed: ${message}`);
+    return { pushed: true, warning: `labels not updated (${message}); run \`orch repair ${obs.issue.number}\`` };
+  }
+  return { pushed: true };
+}
+
+/** Run an outcome computation so that an unexpected error still yields a result, and therefore telemetry. */
+async function settled(compute: () => Promise<StepResult>): Promise<StepResult> {
+  try {
+    return await compute();
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error));
+  }
 }
 
 /**
@@ -223,9 +243,12 @@ export async function executeFix(
   const outcome = async (): Promise<StepResult> => {
     if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
-    return (await pushAndRequeueReview(obs, env, cwd, worktree)) ?? { signal: "fix.pushed", detail: `round ${round} (${reason})` };
+    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree);
+    if ("failed" in pushed) return pushed.failed;
+    return { signal: "fix.pushed", detail: `round ${round} (${reason})${pushed.warning ? `; ${pushed.warning}` : ""}` };
   };
-  const result = await outcome();
+  // A completed harness run is always recorded, even if inspecting or pushing its result throws.
+  const result = await settled(outcome);
   recordRun(n, agent, model, result.signal === "fix.pushed" ? "fix-pushed" : "fix-failed", Date.now() - started,
     attempt.logFile, cwd, cfg, { phase: "fix" satisfies RunPhase, round, since: attempt.since });
   return result;
@@ -264,12 +287,15 @@ export async function executeResolveConflict(
     prompt: formatConflictPrompt({ issue: obs.issue, pr: obs.pr, worktree, baseName: base.name }),
   });
   const run = attempt.run;
-  const result = run.ok
-    ? ((await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
-        const merged = await env.git(["merge-base", "--is-ancestor", `origin/${base.name}`, "HEAD"], worktree);
-        return merged.code === 0 ? null : `the branch still does not contain origin/${base.name}`;
-      })) ?? ({ signal: "conflict.resolved", detail: `resolved by '${agent}'` } satisfies StepResult))
-    : afterAgentFailure(agent, attempt, cwd);
+  const result = await settled(async () => {
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
+    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
+      const merged = await env.git(["merge-base", "--is-ancestor", `origin/${base.name}`, "HEAD"], worktree);
+      return merged.code === 0 ? null : `the branch still does not contain origin/${base.name}`;
+    });
+    if ("failed" in pushed) return pushed.failed;
+    return { signal: "conflict.resolved", detail: `resolved by '${agent}'${pushed.warning ? `; ${pushed.warning}` : ""}` };
+  });
   recordRun(n, agent, model, result.signal === "conflict.resolved" ? "resolve-pushed" : "resolve-failed",
     Date.now() - started, attempt.logFile, cwd, cfg, { phase: "resolve-conflict", round, since: attempt.since });
   return result;

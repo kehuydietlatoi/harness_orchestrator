@@ -69,11 +69,17 @@ export function assembleFacts(params: {
   };
 }
 
-/** One pass over the board: the tasks we could read, and the PRs we could not. */
+/** One pass over the board: the tasks we could read, the PRs we could not, and the issues we must not touch. */
 export interface Observation {
   tasks: TaskObservation[];
   /** PR numbers that could not be read this pass. Callers must treat them as unknown, never as done. */
   unobserved: number[];
+  /**
+   * Issues with more than one open PR. Which one is "the" task PR is a human decision, so none of them is
+   * observed or driven. Decided from the complete open-PR list *before* any per-PR lookup, so a PR that
+   * would have failed to load still counts: otherwise its readable twin would look unique and could merge.
+   */
+  ambiguous: Array<{ issue: number; prs: number[] }>;
 }
 
 /**
@@ -88,12 +94,26 @@ export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observ
   const out: TaskObservation[] = [];
   const unobserved: number[] = [];
 
+  // Group the orch-owned PRs by issue first, from the full list, so ambiguity never depends on what loads.
+  const owned = new Map<number, { issue: Issue; author: string; prs: Pr[] }>();
   for (const pr of prs) {
     const n = prIssueNumber(pr);
     const issue = n === null ? undefined : open.get(n);
     if (!issue || n === null) continue;
     const author = issueAgent(issue);
     if (!author || !cfg.agents.includes(author)) continue; // not an orch-owned task
+    const entry = owned.get(n) ?? { issue, author, prs: [] };
+    entry.prs.push(pr);
+    owned.set(n, entry);
+  }
+
+  const ambiguous: Observation["ambiguous"] = [];
+  for (const [n, { issue, author, prs: candidates }] of owned) {
+    if (candidates.length > 1) {
+      ambiguous.push({ issue: n, prs: candidates.map((p) => p.number).sort((a, b) => a - b) });
+      continue;
+    }
+    const pr = candidates[0];
     try {
       const [reviews, checks, mergeable] = await Promise.all([
         listPrReviews(pr.number, { cwd }),
@@ -112,5 +132,5 @@ export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observ
       log.warn(`could not observe PR #${pr.number}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  return { tasks: out, unobserved };
+  return { tasks: out, unobserved, ambiguous };
 }

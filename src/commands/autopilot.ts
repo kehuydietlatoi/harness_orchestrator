@@ -32,12 +32,15 @@ export async function autopilotCommand(opts: {
   const cfg = loadConfig(cwd);
 
   if (opts.dryRun) {
-    const { tasks, unobserved } = await observeTasks(cfg, cwd);
+    const { tasks, unobserved, ambiguous } = await observeTasks(cfg, cwd);
     console.log(pc.bold(`orch autopilot --dry-run — ${tasks.length} open task PR(s)\n`));
     if (!tasks.length) console.log(pc.dim("  (no open task PRs; autopilot would claim new work instead)"));
     for (const t of tasks) {
       console.log(`  #${t.issue.number} PR #${t.pr.number} by ${t.author}: ${pc.cyan(describeStep(t.step))}` +
         pc.dim(`  [round ${t.facts.rounds}/${t.facts.maxRounds}]`));
+    }
+    if (ambiguous.length) {
+      console.log(pc.yellow(`  ambiguous (several open PRs for one issue, left alone): ${ambiguous.map((a) => `#${a.issue} (PRs ${a.prs.map((p) => `#${p}`).join(", ")})`).join("; ")}`));
     }
     if (unobserved.length) {
       console.log(pc.yellow(`  could not observe PR(s): ${unobserved.map((n) => `#${n}`).join(", ")} (autopilot would keep retrying)`));
@@ -94,6 +97,9 @@ export async function autopilotCommand(opts: {
   }
   if (summary.ambiguous.length) {
     console.log(pc.yellow(`  ambiguous (several open PRs for one issue): ${summary.ambiguous.map((n) => `#${n}`).join(", ")}  (left alone)`));
+  }
+  if (summary.escalationFailed.length) {
+    console.log(pc.red(`  COULD NOT ESCALATE (writes kept failing): ${summary.escalationFailed.map((n) => `#${n}`).join(", ")}  (needs you, unlabelled)`));
   }
   if (summary.escalated.length) {
     console.log(pc.red(`  escalated to you:    ${summary.escalated.map((n) => `#${n}`).join(", ")}  (needs-attention)`));

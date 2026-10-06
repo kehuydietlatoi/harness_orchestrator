@@ -70,7 +70,16 @@ Telemetry follows the same rule: `recordRun` reads usage from the run's own byte
 that falls back to a fresh session is recorded as its own run, and the Codex adapter reads its thread id
 from what it appended, so a retry that reports nothing never inherits an earlier attempt's tokens or id.
 If two open PRs map to one issue, which is "the" task PR is a human decision: the loop drives neither,
-reports the issue as ambiguous once, and does not let it block the loop. Failures back off; a paused harness
+reports the issue as ambiguous once, and does not let it block the loop. That is decided from the
+complete open-PR list *before* any per-PR lookup (`Observation.ambiguous`), so a twin that fails to load
+still counts and its readable, approved sibling can never look unique and be merged.
+
+Escalation is the safety valve, so it is retried, but not blindly: when escalating itself fails (the
+label or comment write errors), the attempt backs off, is bounded (`MAX_ESCALATION_FAILURES`, then the
+issue is reported as `escalationFailed` and left alone), and is not counted as progress, so `--max-idle`
+still applies. A fix that has been pushed is a spent round even if the label update that follows fails:
+that projection is disposable (`orch repair` restores it), so the executor keeps the `fix.pushed` signal
+and notes the warning rather than failing, and a completed harness run is always recorded in telemetry. Failures back off; a paused harness
 (usage limit, ADR-0008) is waited out and never counted as a failure. Merge still goes through the
 full gate (`checkMergeGate`: approval bound to the head, CI, SHA-guarded squash), and conflicts are
 resolved by merging the base into the branch (Claude preferred), never by rewriting history.

@@ -37,6 +37,8 @@ export interface AutopilotSummary {
   awaitingHuman: number[];
   /** Issues with more than one open PR: which one is "the" task PR is a human decision, so none is driven. */
   ambiguous: number[];
+  /** Issues that needed a human but could not be escalated (its label/comment writes kept failing). Look at these first. */
+  escalationFailed: number[];
   failures: number;
   stopped: "drained" | "idle-timeout" | "aborted";
 }
@@ -69,6 +71,11 @@ const PRIORITY: Record<ActionableStep["kind"], number> = {
 
 /** Consecutive failed attempts at a task's step before a human is called in. */
 export const MAX_STEP_FAILURES = 2;
+/**
+ * Failed attempts at escalating one task (the label or comment write itself failing) before the loop stops
+ * trying and just reports it. Escalation is the safety valve, so it is retried, but never without bound.
+ */
+export const MAX_ESCALATION_FAILURES = 3;
 const FAILURE_BACKOFF_MS = 30_000;
 const UNAVAILABLE_BACKOFF_MS = 60_000;
 
@@ -125,10 +132,13 @@ function describe(step: ActionableStep): string {
  */
 export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps): Promise<AutopilotSummary> {
   const max = Math.max(1, opts.max);
-  const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], ambiguous: [], failures: 0, stopped: "drained" };
+  const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], ambiguous: [], escalationFailed: [], failures: 0, stopped: "drained" };
   const inflight = new Map<string, Promise<void>>();
   const failing = new Map<number, { count: number; detail: string }>();
   const retryAt = new Map<number, number>();
+  /** Failed escalation attempts per issue, and when the next may start. Kept apart from ordinary step failures. */
+  const escalationFailures = new Map<number, number>();
+  const escalateRetryAt = new Map<number, number>();
   const drained = new Set<string>();
   /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
   const implementing = new Set<number>();
@@ -137,13 +147,26 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   let lastProgress = deps.now();
 
   const settle = (issue: number, step: string, result: StepResult, startedAt: number): void => {
-    // A refusal because a harness is paused is not progress: counting it would let a cooldown that
-    // outlasts --max-idle keep resetting the timer, so the loop would never give up waiting.
-    if (result.signal !== "agent.unavailable") lastProgress = deps.now();
+    // Neither a refusal because a harness is paused nor a failed escalation is progress: counting them would
+    // let a cooldown, or a label write that keeps failing, reset the timer forever so --max-idle never fires.
+    const failedEscalation = step === "escalate" && result.signal === "step.failed";
+    if (result.signal !== "agent.unavailable" && !failedEscalation) lastProgress = deps.now();
     deps.record({ type: "step.finished", issue, step, signal: result.signal, detail: result.detail, durationMs: deps.now() - startedAt });
     deps.say(`  #${issue} ${step} -> ${result.signal}${result.detail ? ` (${result.detail})` : ""}`);
     switch (result.signal) {
       case "step.failed": {
+        if (failedEscalation) {
+          // Escalating itself failed: back off and retry a bounded number of times, then stop and report.
+          const attempts = (escalationFailures.get(issue) ?? 0) + 1;
+          escalationFailures.set(issue, attempts);
+          escalateRetryAt.set(issue, deps.now() + FAILURE_BACKOFF_MS * attempts);
+          summary.failures += 1;
+          if (attempts >= MAX_ESCALATION_FAILURES && !summary.escalationFailed.includes(issue)) {
+            summary.escalationFailed.push(issue);
+            deps.say(`  #${issue} could not be escalated after ${attempts} attempts; it needs a human and is not being retried`);
+          }
+          break;
+        }
         const count = (failing.get(issue)?.count ?? 0) + 1;
         failing.set(issue, { count, detail: result.detail ?? "unknown error" });
         retryAt.set(issue, deps.now() + FAILURE_BACKOFF_MS * count);
@@ -160,6 +183,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         break;
       case "task.escalated":
         summary.escalated.push(issue);
+        escalationFailures.delete(issue);
+        escalateRetryAt.delete(issue);
         break;
       default:
         failing.delete(issue);
@@ -232,9 +257,10 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
 
     let tasks: TaskObservation[] = [];
     let unobserved: number[] = [];
+    let ambiguous: Observation["ambiguous"] = [];
     let observed = true;
     try {
-      ({ tasks, unobserved } = await deps.observe());
+      ({ tasks, unobserved, ambiguous } = await deps.observe());
     } catch (error) {
       observed = false; // GitHub unreachable: say so and retry rather than concluding "nothing to do"
       deps.say(`  could not observe the board: ${error instanceof Error ? error.message : String(error)}`);
@@ -246,20 +272,23 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
 
     const actionable: Array<{ obs: TaskObservation; step: ActionableStep }> = [];
     let waiting = !observed || unobserved.length > 0;
-    const prsPerIssue = new Map<number, number[]>();
-    for (const t of tasks) prsPerIssue.set(t.issue.number, [...(prsPerIssue.get(t.issue.number) ?? []), t.pr.number]);
+    // Two open PRs for one issue: driving either could merge the wrong one, and both would contend for the
+    // same issue slot. The observation decides this from the full open-PR inventory (so an unreadable twin
+    // still counts); an observation that nevertheless lists two tasks for one issue is treated the same way.
+    const ambiguousPrs = new Map<number, number[]>(ambiguous.map((a) => [a.issue, a.prs]));
+    const perIssue = new Map<number, number[]>();
+    for (const t of tasks) perIssue.set(t.issue.number, [...(perIssue.get(t.issue.number) ?? []), t.pr.number]);
+    for (const [n, prs] of perIssue) if (prs.length > 1) ambiguousPrs.set(n, prs);
+    for (const [n, prs] of ambiguousPrs) {
+      // Left to a human, reported once, and never allowed to block the loop.
+      if (!summary.ambiguous.includes(n)) {
+        summary.ambiguous.push(n);
+        deps.say(`#${n}: ${prs.length} open PRs map to this issue (${prs.map((p) => `#${p}`).join(", ")}); not driving any of them`);
+      }
+    }
     for (const obs of tasks) {
       const n = obs.issue.number;
-      const prs = prsPerIssue.get(n) ?? [];
-      if (prs.length > 1) {
-        // Two open PRs for one issue: driving either could merge the wrong one, and both would contend for
-        // the same issue slot. Leave them to a human, once, and do not let them block the loop.
-        if (!summary.ambiguous.includes(n)) {
-          summary.ambiguous.push(n);
-          deps.say(`#${n}: ${prs.length} open PRs map to this issue (${prs.map((p) => `#${p}`).join(", ")}); not driving any of them`);
-        }
-        continue;
-      }
+      if (ambiguousPrs.has(n)) continue;
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
       const fails = failing.get(n);
@@ -275,7 +304,14 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         continue;
       }
       if (!isActionable(step)) continue;
-      if (step.kind !== "escalate" && (retryAt.get(n) ?? 0) > deps.now()) { waiting = true; continue; }
+      if (step.kind === "escalate") {
+        // The first escalation is immediate (a human is already overdue); a failed one backs off and is bounded.
+        if ((escalationFailures.get(n) ?? 0) >= MAX_ESCALATION_FAILURES) continue; // gave up; in the summary
+        if ((escalateRetryAt.get(n) ?? 0) > deps.now()) { waiting = true; continue; }
+      } else if ((retryAt.get(n) ?? 0) > deps.now()) {
+        waiting = true;
+        continue;
+      }
       actionable.push({ obs, step });
     }
     actionable.sort((a, b) => PRIORITY[a.step.kind] - PRIORITY[b.step.kind] || a.obs.issue.number - b.obs.issue.number);
