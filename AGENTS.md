@@ -47,3 +47,5 @@ Single-context: `CONTEXT.md` (glossary) + `docs/adr/` at the repo root. See `doc
 **Labels & issue lifecycle**: `docs/WORKFLOW.md` is the single reference for every label
 orch relies on and exactly when each is set/cleared (traced from source). Update it in the
 same change that adds or moves a label — code wins if they disagree.
+
+- **Package verification**: the e2e package test packs a source fixture twice, checks integrity and the allowlist, and installs the tarball without install scripts. Keep prepare as the single build-before-pack hook. Run via npm run test:e2e; direct Vitest invocation may set ORCH_TEST_NPM_CLI to npm-cli.js. Documentation linked from README is shipped.
