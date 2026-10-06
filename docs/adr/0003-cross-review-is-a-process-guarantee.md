@@ -54,8 +54,6 @@ cannot use the other's identity.
   key management, identity-to-agent mapping, and migration from label-only
   approvals to verified principals or attestations.
 
-## Review backlog
-
 ## Commit binding (issue #38)
 
 Approval now lives in a submitted GitHub COMMENT review ending with an
@@ -75,6 +73,8 @@ reads detect stale approvals even if the review-needed label has not caught up.
 
 This binds the process decision to code, but does not authenticate harness
 identity. The existing trusted-authorship boundary remains unchanged.
+
+## Review backlog
 
 | Finding | Status | Follow-up |
 |---|---|---|

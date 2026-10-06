@@ -390,29 +390,6 @@ export async function prChecksState(
   return "pass";
 }
 
-export async function reviewPr(
-  number: number,
-  decision: "approve" | "request-changes" | "comment",
-  body: string,
-  opts: { cwd?: string } = {},
-): Promise<void> {
-  const flag =
-    decision === "approve"
-      ? "--approve"
-      : decision === "request-changes"
-        ? "--request-changes"
-        : "--comment";
-  const args = ["pr", "review", String(number), flag];
-  if (body) args.push("--body", body);
-  const r = await exec("gh", args, { cwd: opts.cwd });
-  if (r.code !== 0) {
-    // GitHub forbids approving your own PR. Both agents share one GitHub user,
-    // so approval is tracked by orch labels instead; treat this as non-fatal.
-    if (/can not approve your own|your own pull request/i.test(r.stderr)) return;
-    throw new Error(`gh pr review #${number} failed: ${r.stderr.trim()}`);
-  }
-}
-
 export async function mergePr(
   number: number,
   opts: { cwd?: string; method?: "squash" | "merge" | "rebase"; deleteBranch?: boolean; expectedHead?: string } = {},

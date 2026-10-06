@@ -33,6 +33,8 @@ _(add project-specific facts, gotchas, and architectural decisions below)_
 - **Operator health projection (#41)**: snapshot carries health, recoveryCommand, issueState, and open blockers; board/status/doctor/demo/dashboard use this shared projection. Shared pure task facts feed snapshot and repair. Polling lists open issues/PRs only, resolves absent issues only for retained locks/worktrees, and compares branches only for open, locked, or worktree-backed tasks. PR-history reads require a local lock, registered worktree, or local task branch and no open PR; plain todos keep `pr: "none"`. Successful bounded branch-specific and issue-reference history results (including empty results) are cached by `<cwd>:<issue>` for 60 seconds; lookup failures are inconsistent for that poll and are not cached. Completed issues with no retained claim/worktree resources are omitted. Strict lock/worktree inventory reads fail explicitly; per-task branch/registration failures are inconsistent.
 - **Package verification**: the e2e package test packs a source fixture twice, checks integrity and the allowlist, and installs the tarball without install scripts. Keep prepare as the single build-before-pack hook. Run via npm run test:e2e; direct Vitest invocation may set ORCH_TEST_NPM_CLI to npm-cli.js. Documentation linked from README is shipped.
 
+- **Review binding**: approval metadata lives in submitted COMMENT PR reviews (`src/board/approval.ts`), bound to PR/head and native review commit. Labels are projections. `review-approve --head` requires the inspected SHA; request-changes revokes earlier approvals. Merge uses the REST SHA guard and retains remote branches. Legacy labels cannot authorize a merge. Repair and snapshot derive approvals and current-head changes-requested from these records; repair removes stale approval projections and preserves the author bounce until the head changes. Snapshot caches successful open-task PR review reads by repository/PR/head for 10 seconds; repair and the merge gate always read fresh records.
+
 ## Agent skills
 
 ### Issue tracker
@@ -50,6 +52,3 @@ Single-context: `CONTEXT.md` (glossary) + `docs/adr/` at the repo root. See `doc
 **Labels & issue lifecycle**: `docs/WORKFLOW.md` is the single reference for every label
 orch relies on and exactly when each is set/cleared (traced from source). Update it in the
 same change that adds or moves a label — code wins if they disagree.
-
-- **Review binding**: approval metadata lives in submitted COMMENT PR reviews (`src/board/approval.ts`), bound to PR/head and native review commit. Labels are projections. `review-approve --head` requires the inspected SHA; request-changes revokes earlier approvals. Merge uses the REST SHA guard and retains remote branches. Legacy labels cannot authorize a merge.
-

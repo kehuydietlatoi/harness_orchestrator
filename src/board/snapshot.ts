@@ -2,17 +2,19 @@ import {
   type ChecksState,
   type Issue,
   type Pr,
+  type PrReview,
   getRepoUrl,
   getIssue,
   getBranchPrs,
   getIssueReferencedPrs,
   listIssues,
   listPrs,
+  listPrReviews,
   prChecksState,
 } from "../github/github.js";
 import { issueAgent, parseDeps, openDepsFromMap, byNumber } from "./board.js";
 import { buildGraph } from "./graph.js";
-import { REVIEW_NEEDED, REVIEWED_BY_PREFIX } from "../github/labels.js";
+import { REVIEW_NEEDED } from "../github/labels.js";
 import { listLocks } from "../git/lock.js";
 import { prIssueNumber } from "./review.js";
 import { readRuns, type RunRecord } from "./telemetry.js";
@@ -21,7 +23,7 @@ import { branchName, slugify, type Worktree } from "../git/worktree.js";
 import { compareBranchToBase, resolveBaseBranch } from "../git/git.js";
 import { loadConfig } from "../config.js";
 import { deriveTaskState, type TaskFacts, type TaskState } from "../tasks/lifecycle.js";
-import { prFact, telemetryFact } from "../tasks/facts.js";
+import { prFact, reviewFact, telemetryFact } from "../tasks/facts.js";
 import { existsSync } from "node:fs";
 
 export interface TaskView {
@@ -101,6 +103,7 @@ export function assemble(
   repoUrl: string | null = null,
   checks: ReadonlyMap<number, ChecksState> = new Map(),
   branches: ReadonlyMap<number, BranchObservation> = new Map(),
+  reviews: ReadonlyMap<number, readonly PrReview[]> = new Map(),
 ): Snapshot {
   const locked = new Set(locks);
 
@@ -130,12 +133,14 @@ export function assemble(
     const pr = prByIssue.get(issue.number);
     const run = latestRunByIssue.get(issue.number);
     const branch = branches.get(issue.number);
+    const review = reviewFact(pr, reviews.get(pr?.number ?? 0) ?? []);
     const relatedWorktrees = worktrees.filter((w) => worktreeIssueNumber(w) === issue.number);
     const health = deriveTaskState({
       issue: issue.state === "OPEN" ? "open" : issue.state === "CLOSED" ? "closed" : "missing",
       lock: locked.has(issue.number), worktree: relatedWorktrees.length > 0,
       branch: branch?.state ?? "absent",
       pr: prFact(prs.filter((p) => prIssueNumber(p) === issue.number)),
+      changesRequested: review.changesRequested,
       telemetry: telemetryFact(runs, issue.number),
     });
     const errors = [branch?.error,
@@ -158,9 +163,7 @@ export function assemble(
       prNumber: pr?.number ?? null,
       prUrl: pr?.htmlUrl || null,
       prChecks: pr ? (checks.get(pr.number) ?? null) : null,
-      reviewedBy: issue.labels
-        .filter((label) => label.startsWith(REVIEWED_BY_PREFIX))
-        .map((label) => label.slice(REVIEWED_BY_PREFIX.length)),
+      reviewedBy: review.reviewers.filter((reviewer) => reviewer !== issueAgent(issue)),
       locked: locked.has(issue.number),
       worktree: worktreeByIssue.get(issue.number) ?? null,
       latestRun: run
@@ -223,6 +226,35 @@ const checksCache = new Map<string, { state: ChecksState; expires: number }>();
 
 /** Successful task PR history (including empty results), refreshed every minute. */
 const historyCache = new Map<string, { prs: Pr[]; expires: number }>();
+
+/** Only successful open-task PR review reads are cached; head changes refresh immediately. */
+const reviewsCache = new Map<string, { reviews: PrReview[]; expires: number }>();
+
+async function taskReviews(
+  prs: readonly Pr[], issues: readonly Issue[], cwd: string, branches: Map<number, BranchObservation>,
+): Promise<Map<number, PrReview[]>> {
+  const tasks = new Set(issues.filter((issue) => issue.state === "OPEN").map((issue) => issue.number));
+  const result = new Map<number, PrReview[]>();
+  for (const [key, value] of reviewsCache) if (value.expires <= Date.now()) reviewsCache.delete(key);
+  await Promise.all(prs.map(async (pr) => {
+    const number = prIssueNumber(pr);
+    if (pr.state !== "OPEN" || number === null || !tasks.has(number)) return;
+    const key = `${cwd}:${pr.number}:${pr.headSha}`;
+    try {
+      let cached = reviewsCache.get(key);
+      if (!cached) {
+        cached = { reviews: await listPrReviews(pr.number, { cwd }), expires: Date.now() + 10_000 };
+        reviewsCache.set(key, cached);
+      }
+      result.set(pr.number, cached.reviews);
+    } catch (error) {
+      const branch = branches.get(number);
+      branches.set(number, { state: branch?.state ?? "absent",
+        error: [branch?.error, `PR review lookup failed: ${String(error)}`].filter(Boolean).join("; ") });
+    }
+  }));
+  return result;
+}
 
 /** CI roll-up for the PRs whose issue is awaiting review — the only ones the
  * dashboard renders a checks badge for. Unknown SHAs use the same short TTL. */
@@ -334,6 +366,8 @@ export async function buildSnapshot(cwd: string): Promise<Snapshot> {
     }
   }
   for (const [key, value] of checksCache) if (value.expires <= Date.now()) checksCache.delete(key);
-  const checks = await reviewChecks(prs, issues, cwd);
-  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString(), repoUrl, checks, branches);
+  const [checks, reviews] = await Promise.all([
+    reviewChecks(prs, issues, cwd), taskReviews(prs, issues, cwd, branches),
+  ]);
+  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString(), repoUrl, checks, branches, reviews);
 }

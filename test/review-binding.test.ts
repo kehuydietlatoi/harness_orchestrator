@@ -22,6 +22,48 @@ beforeEach(() => {
   vi.mocked(gh.prChecksPass).mockResolvedValue({ pass: true, detail: "ok" });
 });
 describe("review and merge boundary", () => {
+  it("excludes a current-head request-changes decision from the queue", async () => {
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex", "status:in-progress"] }]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([{ id: 2, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", pr: 62, head, timestamp: "2026-09-09T12:00:00Z", decision: "request-changes" }, "fix") }]);
+    expect(await reviewQueue("claude", "/repo")).toEqual([]);
+  });
+  it("skips review reads when review-needed explicitly queues the PR", async () => {
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex", "review:needed"] }]);
+    expect(await reviewQueue("claude", "/repo")).toHaveLength(1);
+    expect(gh.listPrReviews).not.toHaveBeenCalled();
+  });
+  it("does not queue an unreviewed PR without a review-needed projection", async () => {
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex"] }]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([]);
+    expect(await reviewQueue("claude", "/repo")).toEqual([]);
+  });
+  it("queues stale approval records even when their label is absent", async () => {
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headSha: "b".repeat(40) }]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex"] }]);
+    expect(await reviewQueue("claude", "/repo")).toHaveLength(1);
+  });
+  it("queues an orphaned approval label but skips a current approval", async () => {
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([issue]);
+    expect(await reviewQueue("claude", "/repo")).toEqual([]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([]);
+    expect(await reviewQueue("claude", "/repo")).toHaveLength(1);
+  });
+  it("keeps revoked approvals out of the queue even if their labels remain", async () => {
+    const previous = await gh.listPrReviews(62, { cwd: "/repo" });
+    vi.mocked(gh.listPrReviews).mockResolvedValue([...previous, { id: 2, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", pr: 62, head, timestamp: "2026-09-09T12:00:00Z", decision: "request-changes" }, "fix") }]);
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([issue]);
+    expect(await reviewQueue("claude", "/repo")).toEqual([]);
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headSha: "b".repeat(40) }]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex"] }]);
+    expect(await reviewQueue("claude", "/repo")).toEqual([]);
+  });
   it("requires structured approval even if a legacy label exists", async () => {
     vi.mocked(gh.listPrReviews).mockResolvedValue([]);
     expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).ok).toBe(false);

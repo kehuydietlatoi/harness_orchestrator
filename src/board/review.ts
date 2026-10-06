@@ -16,7 +16,7 @@ import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
 import type { OrchConfig } from "../config.js";
-import { currentReviewers, formatReview } from "./approval.js";
+import { currentReviewers, formatReview, reviewState } from "./approval.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
 export function prIssueNumber(pr: Pick<Pr, "headRefName" | "body">): number | null {
@@ -46,8 +46,11 @@ export async function reviewQueue(agent: string, cwd: string): Promise<ReviewIte
     if (!issue) continue;
     const author = issueAgent(issue);
     if (author === agent) continue; // never review your own work
-    const reviewers = currentReviewers(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
-    if (!issue.labels.includes(REVIEW_NEEDED) && reviewers.some((r) => r !== author)) continue;
+    if (!issue.labels.includes(REVIEW_NEEDED)) {
+      const review = reviewState(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
+      if (review.changesRequested || review.reviewers.some((r) => r !== author)) continue;
+      if (!review.staleApproval && !issue.labels.some((label) => label.startsWith(REVIEWED_BY_PREFIX))) continue;
+    }
     items.push({ pr, issue, author });
   }
   return items;

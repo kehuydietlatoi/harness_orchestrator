@@ -87,7 +87,7 @@ describe("assemble", () => {
           prNumber: 101,
           prUrl: "https://github.com/acme/orch/pull/101",
           prChecks: "pass",
-          reviewedBy: ["claude"],
+          reviewedBy: [],
           locked: true,
           worktree: "C:\\repo\\wt\\issue-12",
           latestRun: {

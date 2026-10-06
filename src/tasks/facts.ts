@@ -1,4 +1,10 @@
 import type { TaskFacts } from "./lifecycle.js";
+import type { Pr, PrReview } from "../github/github.js";
+import { reviewState } from "../board/approval.js";
+
+export function reviewFact(pr: Pr | undefined, reviews: readonly PrReview[]) {
+  return reviewState(pr?.state === "OPEN" ? reviews : [], pr?.number ?? 0, pr?.headSha ?? "");
+}
 
 export function prFact(prs: readonly { state: string }[]): TaskFacts["pr"] {
   if (prs.some((pr) => pr.state === "OPEN")) return "open";

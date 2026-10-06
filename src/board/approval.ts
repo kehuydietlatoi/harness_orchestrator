@@ -29,13 +29,27 @@ export function parseReview(review: PrReview): ReviewRecord | null {
 
 /** Server review ids order decisions; client timestamps never determine precedence. */
 export function currentReviewers(reviews: readonly PrReview[], pr: number, head: string): string[] {
-  const approved = new Set<string>();
+  return reviewState(reviews, pr, head).reviewers;
+}
+
+/** Shared head-bound review facts for the gate, queue, repair, and board. */
+export function reviewState(reviews: readonly PrReview[], pr: number, head: string): {
+  reviewers: string[];
+  changesRequested: boolean;
+  staleApproval: boolean;
+} {
+  const approved = new Map<string, string>();
+  let latest: ReviewRecord | null = null;
   for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
     const r = parseReview(review);
     if (!r || r.pr !== pr) continue;
+    latest = r;
     if (r.decision === "request-changes") approved.clear();
-    else if (r.head === head) approved.add(r.reviewer);
-    else approved.delete(r.reviewer);
+    else approved.set(r.reviewer, r.head);
   }
-  return [...approved];
+  return {
+    reviewers: [...approved].filter(([, sha]) => sha === head).map(([reviewer]) => reviewer),
+    changesRequested: latest?.decision === "request-changes" && latest.head === head,
+    staleApproval: [...approved.values()].some((sha) => sha !== head),
+  };
 }
