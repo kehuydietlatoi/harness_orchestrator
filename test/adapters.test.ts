@@ -6,6 +6,7 @@ import {
   resultTextFromClaudeStreamJson,
 } from "../src/adapters/claude.js";
 import {
+  codexDelegation,
   buildCodexReviewArgs,
   buildCodexTaskArgs,
   resultTextFromCodexJson,
@@ -140,6 +141,28 @@ describe("read-only reviewer arguments", () => {
     expect(args).toEqual(["exec", "--json", "-s", "read-only", "-m", "gpt-6.1-sol", "-c", "model_reasoning_effort=medium"]);
     expect(args).not.toContain("--approve-for-me");
     expect(buildCodexReviewArgs()).toEqual(["exec", "--json", "-s", "read-only"]);
+  });
+});
+
+describe("codexDelegation (stall guard)", () => {
+  const line = (o: unknown): string => JSON.stringify(o);
+
+  it("flags a collab tool call and a spawn_agent tool/name", () => {
+    expect(codexDelegation(line({ type: "item.started", item: { id: "i1", type: "collab_tool_call", tool: "spawn_agent" } })))
+      .toMatch(/sub-agents/);
+    expect(codexDelegation(line({ type: "item.started", item: { type: "mcp_tool_call", tool: "spawn_agent" } }))).toBeDefined();
+    expect(codexDelegation(line({ type: "response_item", name: "spawn_agent" }))).toBeDefined();
+  });
+
+  it("ignores assistant text and reasoning that merely mention spawn_agent", () => {
+    expect(codexDelegation(line({ type: "item.completed", item: { type: "agent_message", text: "I will not use spawn_agent" } }))).toBeUndefined();
+    expect(codexDelegation(line({ type: "item.completed", item: { type: "reasoning", text: "spawn_agent is off" } }))).toBeUndefined();
+  });
+
+  it("ignores ordinary events and non-JSON lines", () => {
+    expect(codexDelegation(line({ type: "item.completed", item: { type: "command_execution", command: "ls" } }))).toBeUndefined();
+    expect(codexDelegation("spawn_agent not json")).toBeUndefined();
+    expect(codexDelegation("")).toBeUndefined();
   });
 });
 

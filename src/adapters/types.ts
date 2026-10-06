@@ -41,6 +41,8 @@ export interface HeadlessResult {
   text: string;
   /** Full structured log, surfaced in fail-closed error messages. */
   raw: string;
+  /** Set when orch stopped the run early (e.g. the harness began delegating to sub-agents). */
+  aborted?: string;
 }
 
 export interface InteractivePlanContext {

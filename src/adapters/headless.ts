@@ -30,6 +30,7 @@ export async function runStructuredHeadless(
   args: string[],
   ctx: HeadlessContext,
   resultText: (raw: string) => string,
+  abortOn?: (line: string) => string | undefined,
 ): Promise<HeadlessResult> {
   mkdirSync(dirname(ctx.logFile), { recursive: true });
   rmSync(ctx.logFile, { force: true });
@@ -39,6 +40,7 @@ export async function runStructuredHeadless(
     logFile: ctx.logFile,
     timeoutMs: ctx.timeoutMs,
     shell: WIN,
+    abortOn,
   });
   let raw = "";
   try {
@@ -46,7 +48,13 @@ export async function runStructuredHeadless(
   } catch {
     // A missing log leaves raw empty; the planner/judge fails closed.
   }
-  return { code: r.code, timedOut: r.timedOut, text: resultText(raw), raw };
+  return {
+    code: r.code,
+    timedOut: r.timedOut,
+    text: resultText(raw),
+    raw,
+    ...(r.aborted !== undefined ? { aborted: r.aborted } : {}),
+  };
 }
 
 /**

@@ -86,6 +86,32 @@ describe("spawnLogged", () => {
     20_000,
   );
 
+  // A harness that idles on its own sub-agents is only caught by the timeout, 15+ minutes late. `abortOn`
+  // stops it the moment a telltale line appears. The marker is split across two writes: a chunk boundary
+  // inside a line must not hide it.
+  it("aborts at once when abortOn matches a line, even one split across chunks", async () => {
+    const log = join(tmp(), "abort.log");
+    const script =
+      "process.stdout.write('ok-line' + String.fromCharCode(10) + 'DELEG');" +
+      "setTimeout(() => { process.stdout.write('ATE' + String.fromCharCode(10)); setTimeout(() => {}, 60000); }, 100);";
+    const r = await spawnLogged(process.execPath, ["-e", script], {
+      logFile: log,
+      timeoutMs: 30_000,
+      abortOn: (line) => (line === "DELEGATE" ? "delegating" : undefined),
+    });
+    expect(r.aborted).toBe("delegating");
+    expect(r.code).toBe(125);
+    expect(r.timedOut).toBe(false);
+    expect(r.durationMs).toBeLessThan(10_000);
+    expect(readFileSync(log, "utf8")).toContain("DELEGATE"); // what was seen is still logged
+  }, 20_000);
+
+  it("leaves a run alone when abortOn never matches", async () => {
+    const r = await spawnLogged(process.execPath, ["-e", "console.log('fine')"], { abortOn: () => undefined });
+    expect(r.code).toBe(0);
+    expect(r.aborted).toBeUndefined();
+  });
+
   it("returns 127 when the command cannot start", async () => {
     const r = await spawnLogged("definitely-not-a-real-command-xyz", []);
     expect(r.code).toBe(127);
