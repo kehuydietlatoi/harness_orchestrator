@@ -11,3 +11,6 @@ coverage/
 tickets.json
 .claude/skills/orch-plan/
 .claude/settings.local.json
+
+# Owner-only session notes, not part of the shipped docs.
+docs/session-summary-*.md
