@@ -46,7 +46,9 @@ are pushed by orch, never forced; a new head voids earlier approvals, so the cha
 Before a writable harness touches the task worktree, orch proves it is the right one: Git must
 register the path on the task branch (`observeWorktree`), that branch must be the PR's, and the PR
 head must already be in its history. A switched, detached, or unregistered directory is refused
-rather than pushed from, since its commits would land on the PR.
+rather than pushed from, since its commits would land on the PR. The harness runs with write access,
+so the same proof is repeated immediately before anything is published: a branch switch, a detached
+HEAD, or rewritten history during the run is refused, and nothing is pushed.
 
 **3. It must converge or hand off.**
 Each task has a round budget (`maxReviewRounds`, default 3) of *spent* rounds: the larger of the
@@ -73,6 +75,13 @@ If two open PRs map to one issue, which is "the" task PR is a human decision: th
 reports the issue as ambiguous once, and does not let it block the loop. That is decided from the
 complete open-PR list *before* any per-PR lookup (`Observation.ambiguous`), so a twin that fails to load
 still counts and its readable, approved sibling can never look unique and be merged.
+
+Failure counts, retry timers and the "paused" marker belong to a *step*, not to an issue. A failed
+review followed by a manual approval and one failed merge is a first failure of the merge, not a second
+failure of the issue, and a review that a paused harness refused must not hold back a merge that became
+ready meanwhile (a merge needs no agent). Only the refused step itself is a "retry after a pause", and
+the idle deadline is enforced *before* such a retry is relaunched: with `--poll` at least as long as the
+pause, every poll would otherwise make the retry actionable again and the loop would never give up.
 
 Escalation is the safety valve, so it is retried, but not blindly: when escalating itself fails (the
 label or comment write errors), the attempt backs off, is bounded (`MAX_ESCALATION_FAILURES`, then the

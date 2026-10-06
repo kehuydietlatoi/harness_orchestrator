@@ -143,6 +143,16 @@ async function pushAndRequeueReview(
   return { pushed: true };
 }
 
+/**
+ * Re-run the worktree identity checks immediately before publishing. They were true when the harness
+ * started, but it ran with write access and may since have switched branches, detached HEAD, or rewritten
+ * history; `git push origin HEAD:<pr-branch>` would then publish whatever HEAD happens to be.
+ */
+async function recheckWorktree(obs: TaskObservation, cfg: OrchConfig, cwd: string, env: StepEnv): Promise<string | null> {
+  const again = await resolveWorktree(obs, cfg, cwd, env);
+  return "problem" in again ? `${again.problem} (checked again just before pushing)` : null;
+}
+
 /** Run an outcome computation so that an unexpected error still yields a result, and therefore telemetry. */
 async function settled(compute: () => Promise<StepResult>): Promise<StepResult> {
   try {
@@ -243,7 +253,8 @@ export async function executeFix(
   const outcome = async (): Promise<StepResult> => {
     if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
-    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree);
+    // The harness ran with write access: prove again that this is still the right worktree before publishing.
+    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, () => recheckWorktree(obs, cfg, cwd, env));
     if ("failed" in pushed) return pushed.failed;
     return { signal: "fix.pushed", detail: `round ${round} (${reason})${pushed.warning ? `; ${pushed.warning}` : ""}` };
   };
@@ -290,6 +301,8 @@ export async function executeResolveConflict(
   const result = await settled(async () => {
     if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
     const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
+      const again = await recheckWorktree(obs, cfg, cwd, env); // the harness had write access: still the right worktree?
+      if (again) return again;
       const merged = await env.git(["merge-base", "--is-ancestor", `origin/${base.name}`, "HEAD"], worktree);
       return merged.code === 0 ? null : `the branch still does not contain origin/${base.name}`;
     });

@@ -134,8 +134,15 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const max = Math.max(1, opts.max);
   const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], ambiguous: [], escalationFailed: [], failures: 0, stopped: "drained" };
   const inflight = new Map<string, Promise<void>>();
-  const failing = new Map<number, { count: number; detail: string }>();
-  const retryAt = new Map<number, number>();
+  /** Consecutive failures of ONE step on an issue. A different step starts a fresh count: a failed review followed
+   * by an external approval and one failed merge is a first failure of the merge, not a second failure. */
+  const failing = new Map<number, { count: number; detail: string; step: string }>();
+  /** The step that last ended in `agent.unavailable` per issue: relaunching that same step is a retry after a
+   * pause, not new work. A different step on the same issue is real work. */
+  const lastUnavailable = new Map<number, string>();
+  /** When a refused or failed step may be tried again. Tied to that step: backing off a review says nothing
+   * about a merge that became ready meanwhile (e.g. after a manual approval), which needs no agent at all. */
+  const retryAt = new Map<number, { at: number; step: string }>();
   /** Failed escalation attempts per issue, and when the next may start. Kept apart from ordinary step failures. */
   const escalationFailures = new Map<number, number>();
   const escalateRetryAt = new Map<number, number>();
@@ -146,7 +153,9 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
    * not from "nothing in flight", because probing a harness for new work is not progress. */
   let lastProgress = deps.now();
 
-  const settle = (issue: number, step: string, result: StepResult, startedAt: number): void => {
+  const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step): void => {
+    if (result.signal === "agent.unavailable") lastUnavailable.set(issue, identity);
+    else lastUnavailable.delete(issue);
     // Neither a refusal because a harness is paused nor a failed escalation is progress: counting them would
     // let a cooldown, or a label write that keeps failing, reset the timer forever so --max-idle never fires.
     const failedEscalation = step === "escalate" && result.signal === "step.failed";
@@ -167,14 +176,15 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
           }
           break;
         }
-        const count = (failing.get(issue)?.count ?? 0) + 1;
-        failing.set(issue, { count, detail: result.detail ?? "unknown error" });
-        retryAt.set(issue, deps.now() + FAILURE_BACKOFF_MS * count);
+        const previous = failing.get(issue);
+        const count = (previous && previous.step === identity ? previous.count : 0) + 1;
+        failing.set(issue, { count, detail: result.detail ?? "unknown error", step: identity });
+        retryAt.set(issue, { at: deps.now() + FAILURE_BACKOFF_MS * count, step: identity });
         summary.failures += 1;
         break;
       }
       case "agent.unavailable":
-        retryAt.set(issue, deps.now() + Math.max(opts.pollMs, UNAVAILABLE_BACKOFF_MS));
+        retryAt.set(issue, { at: deps.now() + Math.max(opts.pollMs, UNAVAILABLE_BACKOFF_MS), step: identity });
         break;
       case "task.merged":
         summary.merged.push(issue);
@@ -206,7 +216,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       } catch (error) {
         result = { signal: "step.failed", detail: error instanceof Error ? error.message : String(error) };
       }
-      settle(n, step.kind, result, startedAt);
+      settle(n, step.kind, result, startedAt, describe(step));
     })().finally(() => inflight.delete(key));
     inflight.set(key, run);
   };
@@ -292,7 +302,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
       const fails = failing.get(n);
-      if (fails && fails.count >= MAX_STEP_FAILURES && isActionable(step) && step.kind !== "escalate") {
+      if (fails && isActionable(step) && step.kind !== "escalate" && fails.step === describe(step) && fails.count >= MAX_STEP_FAILURES) {
         step = { kind: "escalate", reason: `${describe(step)} failed ${fails.count} times in a row (${fails.detail})` };
       }
       if (step.kind === "wait") { waiting = true; continue; }
@@ -308,9 +318,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         // The first escalation is immediate (a human is already overdue); a failed one backs off and is bounded.
         if ((escalationFailures.get(n) ?? 0) >= MAX_ESCALATION_FAILURES) continue; // gave up; in the summary
         if ((escalateRetryAt.get(n) ?? 0) > deps.now()) { waiting = true; continue; }
-      } else if ((retryAt.get(n) ?? 0) > deps.now()) {
-        waiting = true;
-        continue;
+      } else {
+        const wait = retryAt.get(n);
+        if (wait && wait.step === describe(step) && wait.at > deps.now()) {
+          waiting = true;
+          continue;
+        }
       }
       actionable.push({ obs, step });
     }
@@ -337,7 +350,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         lastBlocked = "";
       }
     }
-    if (waiting && actionable.length === 0 && !stepsRunning && deps.now() - lastProgress >= opts.maxIdleMs) {
+    // Retrying a step that a paused harness refused is not new work. With --poll >= the pause backoff every
+    // poll makes such a retry actionable again, so the deadline must be enforced *before* relaunching it, or
+    // a cooldown that outlasts --max-idle would be retried forever. Real work (a different step, an
+    // escalation) still runs: it is progress.
+    const onlyPausedRetries = actionable.every((a) => a.step.kind !== "escalate" && lastUnavailable.get(a.obs.issue.number) === describe(a.step));
+    if ((waiting || actionable.length > 0) && onlyPausedRetries && !stepsRunning && deps.now() - lastProgress >= opts.maxIdleMs) {
       await Promise.all(inflight.values()); // let any harness probe finish; it is short
       deps.say(`  no progress for ${Math.round((deps.now() - lastProgress) / 60_000)} min with work still waiting; stopping`);
       summary.stopped = "idle-timeout";

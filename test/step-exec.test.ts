@@ -66,12 +66,13 @@ function fakeEnv(opts: {
   /** Whether the base branch is an ancestor of HEAD (conflict resolution check). */
   ancestor?: boolean;
   /** Whether the worktree HEAD contains the PR head (the pre-flight worktree check). */
-  headContained?: boolean;
+  headContained?: boolean | boolean[];
   /** `git rev-parse` fails (inspecting the result of a completed run throws). */
   revParseFails?: boolean;
 }) {
   const agentCalls: Array<Parameters<StepEnv["runAgent"]>[0]> = [];
   const gitCalls: string[][] = [];
+  let headChecks = 0;
   const env: StepEnv = {
     runAgent: async (ctx) => {
       agentCalls.push(ctx);
@@ -90,7 +91,9 @@ function fakeEnv(opts: {
       if (args[0] === "status") return { ...ok, stdout: opts.dirty ? " M file.ts\n" : "" };
       if (args[0] === "push") return { code: opts.pushCode ?? 0, stdout: "", stderr: opts.pushCode ? "rejected" : "" };
       if (args[0] === "merge-base") {
-        const intact = args[2] === HEAD ? opts.headContained !== false : opts.ancestor !== false;
+        // `headContained` may be a sequence: [true, false] = fine before the run, lost by the time we push.
+        const seq = Array.isArray(opts.headContained) ? opts.headContained : [opts.headContained !== false];
+        const intact = args[2] === HEAD ? seq[Math.min(headChecks++, seq.length - 1)] : opts.ancestor !== false;
         return { code: intact ? 0 : 1, stdout: "", stderr: "" };
       }
       return { ...ok, stdout: "" };
@@ -378,6 +381,74 @@ describe("step executors", () => {
 
       expect(result).toEqual({ signal: "step.failed", detail: "'claude' exited 2" });
       expect(unavailableUntil("claude", cwd)).toBeNull();
+    });
+  });
+
+  describe("the worktree is verified again immediately before publishing", () => {
+    const right = { outcome: "usable" as const, worktree: { path: "", branch: "task/38-add-the-thing" } };
+    const onBranch = (branch: string) => ({ outcome: "usable" as const, worktree: { path: wt, branch } });
+
+    it("refuses to push when the harness switched the worktree to another branch while it ran", async () => {
+      vi.mocked(observeWorktree)
+        .mockResolvedValueOnce(onBranch("task/38-add-the-thing")) // before the run: correct
+        .mockResolvedValueOnce(onBranch("task/99-other")); // by the time it finished: switched
+      const { env, agentCalls, gitCalls } = fakeEnv({});
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(agentCalls).toHaveLength(1); // the run happened...
+      expect(result.signal).toBe("step.failed");
+      expect(result.detail).toContain("is on 'task/99-other'");
+      expect(result.detail).toContain("checked again just before pushing");
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(false); // ...but nothing was published
+      expect(gh.editIssue).not.toHaveBeenCalled();
+      expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-failed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1, since: expect.any(Number) });
+    });
+
+    it("refuses to push when the worktree became detached or unregistered during the run", async () => {
+      vi.mocked(observeWorktree)
+        .mockResolvedValueOnce(onBranch("task/38-add-the-thing"))
+        .mockResolvedValueOnce({ outcome: "conflict", detail: "worktree path is attached to 'detached HEAD'" });
+      const { env, gitCalls } = fakeEnv({});
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(result.detail).toContain("not usable");
+      expect(result.detail).toContain("detached HEAD");
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+    });
+
+    it("refuses to push when the PR head is no longer part of the worktree history (history rewritten)", async () => {
+      const { env, gitCalls } = fakeEnv({ headContained: [true, false] });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(result.detail).toContain(`does not contain PR head ${HEAD.slice(0, 8)}`);
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+    });
+
+    it("applies the same last-moment check to a conflict resolution", async () => {
+      vi.mocked(observeWorktree)
+        .mockResolvedValueOnce(onBranch("task/38-add-the-thing"))
+        .mockResolvedValueOnce(onBranch("task/99-other"));
+      const { env, agentCalls, gitCalls } = fakeEnv({});
+
+      const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
+
+      expect(agentCalls).toHaveLength(1);
+      expect(result.signal).toBe("step.failed");
+      expect(result.detail).toContain("checked again just before pushing");
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+    });
+
+    it("still pushes when the worktree is unchanged (the extra check is not a new way to fail)", async () => {
+      vi.mocked(observeWorktree).mockResolvedValue(onBranch("task/38-add-the-thing")); // sticky: both checks pass
+      const { env, gitCalls } = fakeEnv({});
+
+      expect((await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env)).signal).toBe("fix.pushed");
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(true);
+      expect(right.worktree.branch).toBe("task/38-add-the-thing");
     });
   });
 

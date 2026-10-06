@@ -478,6 +478,131 @@ describe("runAutopilot", () => {
     expect(await run).toMatchObject({ ambiguous: [38], merged: [40] });
   });
 
+  describe("retrying a paused harness", () => {
+    const paused: StepResult = { signal: "agent.unavailable", detail: "all harnesses paused" };
+
+    it("enforces --max-idle before relaunching the retry, even when --poll is as long as the pause", async () => {
+      const w = new World();
+      w.add(pr(38, { overrides: { review: Array.from({ length: 50 }, () => paused) } }));
+
+      // pollMs (60s) >= the pause backoff (60s), so EVERY poll makes the retry actionable again. Retries are
+      // not progress, so with a 150s limit the loop must stop at t=180s after attempts at 0s, 60s and 120s.
+      const summary = await drive(w, { pollMs: 60_000, maxIdleMs: 150_000 });
+
+      expect(summary.stopped).toBe("idle-timeout");
+      expect(w.calls).toEqual(["review:38", "review:38", "review:38"]);
+      expect(summary.failures).toBe(0);
+    });
+
+    it("still retries after the pause when there is time left, and finishes the task", async () => {
+      const w = new World();
+      w.add(pr(38, { overrides: { review: [paused, paused] } }));
+
+      const summary = await drive(w, { pollMs: 60_000, maxIdleMs: 30 * 60_000 });
+
+      expect(w.calls).toEqual(["review:38", "review:38", "review:38", "merge:38"]);
+      expect(summary).toMatchObject({ merged: [38], stopped: "drained" });
+    });
+
+    it("does not delay an unrelated step on the same issue behind a retry timer (a merge after a manual approval)", async () => {
+      const w = new World();
+      w.add(pr(38, { overrides: { review: [paused] } })); // the review is refused: it is backed off for 60s
+      w.onSleep = (n) => { if (n === 2) w.prs.get(38)!.approved = true; }; // approved by hand at t=2s
+      const deps = w.deps();
+      const inner = deps.execute;
+      const started = Date.now();
+      let mergeAt = -1;
+      deps.execute = async (obs, step) => {
+        if (step.kind === "merge") mergeAt = Date.now() - started;
+        return inner(obs, step);
+      };
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 2000 && !done; i += 1) {
+        await vi.advanceTimersByTimeAsync(1000);
+        w.sleeps += 1;
+        w.onSleep?.(w.sleeps);
+      }
+
+      expect(done).toBe(true);
+      expect(await run).toMatchObject({ merged: [38] });
+      // A merge needs no agent, so the review's 60s pause must not hold it back.
+      expect(mergeAt).toBeGreaterThanOrEqual(0);
+      expect(mergeAt).toBeLessThan(30_000);
+    });
+
+    it("does not let the idle deadline cut off real work that became actionable meanwhile", async () => {
+      const w = new World();
+      w.add(pr(38, { overrides: { review: [paused] } }));
+      // Someone approves the PR by hand while the harness is paused: the next step is a merge, which is progress.
+      w.onSleep = (n) => { if (n === 2) w.prs.get(38)!.approved = true; };
+
+      const summary = await drive(w, { pollMs: 60_000, maxIdleMs: 60_000 });
+
+      expect(w.calls).toEqual(["review:38", "merge:38"]);
+      expect(summary).toMatchObject({ merged: [38], stopped: "drained" });
+    });
+  });
+
+  describe("failure counts belong to a step, not to an issue", () => {
+    const failed = (detail: string): StepResult => ({ signal: "step.failed", detail });
+
+    it("does not escalate a failed review followed by an external approval and ONE failed merge", async () => {
+      const w = new World();
+      w.add(pr(38, { overrides: { review: [failed("verdict unparseable")], merge: [failed("gate refused")] } }));
+      const deps = w.deps();
+      const inner = deps.execute;
+      deps.execute = async (obs, step) => {
+        const result = await inner(obs, step);
+        if (step.kind === "review" && result.signal === "step.failed") w.prs.get(38)!.approved = true; // approved by hand
+        return result;
+      };
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+      expect(done).toBe(true);
+      expect(w.calls).toEqual(["review:38", "merge:38", "merge:38"]);
+      expect(await run).toMatchObject({ merged: [38], escalated: [], failures: 2 });
+    });
+
+    it("still escalates when the SAME step fails repeatedly", async () => {
+      const w = new World();
+      w.add(pr(38, { approved: true, overrides: { merge: [failed("gate refused"), failed("gate refused")] } }));
+
+      const summary = await drive(w);
+
+      expect(w.calls).toEqual(["merge:38", "merge:38", "escalate:38"]);
+      expect(summary).toMatchObject({ escalated: [38], merged: [] });
+    });
+
+    it("treats a fix for review feedback and a fix for CI as different steps", async () => {
+      const w = new World();
+      w.add(pr(38, { changes: true, overrides: { fix: [failed("no new commits")] } }));
+      const deps = w.deps();
+      const inner = deps.execute;
+      deps.execute = async (obs, step) => {
+        const result = await inner(obs, step);
+        if (step.kind === "fix" && step.reason === "review" && result.signal === "step.failed") {
+          const p = w.prs.get(38)!; // the review feedback is withdrawn and CI goes red instead
+          p.changes = false; p.checks = "fail";
+        }
+        return result;
+      };
+      w.prs.get(38)!.overrides.fix = [failed("no new commits"), failed("flaky")];
+
+      let done = false;
+      const run = runAutopilot(OPTS, deps).finally(() => { done = true; });
+      for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+
+      expect(done).toBe(true);
+      expect(w.calls.slice(0, 2)).toEqual(["fix:review:38", "fix:ci:38"]);
+      expect((await run).escalated).toEqual([]); // two failures, but of two different steps
+    });
+  });
+
   describe("ambiguity decided from the full PR inventory", () => {
     it("never merges a readable duplicate just because its twin could not be loaded", async () => {
       const w = new World();
