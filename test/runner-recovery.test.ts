@@ -133,6 +133,69 @@ describe("processNext recovery", () => {
     });
   });
 
+  describe("a run that dies on a usage limit goes back to the queue instead of needing a human", () => {
+    const LIMIT =
+      '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}\n';
+    const dies = async (ctx: { logFile: string }) => {
+      appendFileSync(ctx.logFile, LIMIT, "utf8");
+      return { ok: false, code: 1, durationMs: 1, timedOut: false };
+    };
+
+    it("requeues to status:todo (no needs-attention), releasing worktree and lock first", async () => {
+      mocks.runTask.mockImplementation(dies);
+      const order: string[] = [];
+      mocks.removeWorktree.mockImplementation(async () => (order.push("worktree"), true));
+      mocks.lockRelease.mockImplementation(async () => (order.push("lock"), true));
+      mocks.editIssue.mockImplementation(async (_n: number, o: { addLabels?: string[] }) => {
+        order.push(`labels:${o.addLabels?.join(",")}`);
+      });
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "requeued" });
+      expect(order.slice(-3)).toEqual(["worktree", "lock", "labels:status:todo"]);
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, {
+        cwd,
+        addLabels: ["status:todo"],
+        removeLabels: ["status:claimed", "status:in-progress"],
+      });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      // "usage-limited" must not read as a failed run, or the lifecycle would park the requeued task.
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ issue: 35, outcome: "usage-limited" });
+      expect(unavailableUntil("codex", cwd)).not.toBeNull(); // and the harness is still paused
+    });
+
+    it("keeps the claim and flags needs-attention when work was left behind", async () => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.removeWorktree.mockResolvedValue(false); // dirty / committed: safe cleanup retains it
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(mocks.lockRelease).not.toHaveBeenCalled();
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+      expect(mocks.editIssue).toHaveBeenLastCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+      expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ outcome: "failed" });
+    });
+
+    it("falls back to needs-attention, never todo, when the lock cannot be released", async () => {
+      mocks.runTask.mockImplementation(dies);
+      mocks.lockRelease.mockRejectedValue(new Error("lock busy"));
+
+      const outcome = await processNext("codex", DEFAULT_CONFIG, cwd);
+
+      expect(outcome).toMatchObject({ issue: 35, outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+    });
+
+    it("does not requeue a plain failure (no usage-limit event in this run's own output)", async () => {
+      mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1, timedOut: false });
+
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+      expect(mocks.editIssue).not.toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["status:todo"] }));
+    });
+  });
+
   describe("usage telemetry reads only the run's own log range", () => {
     it("recordRun parses just the bytes after `since`, never an earlier attempt's usage", () => {
       mkdirSync(join(cwd, "logs"), { recursive: true });

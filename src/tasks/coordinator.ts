@@ -255,13 +255,18 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         drained.add(agent);
         return;
       }
-      lastProgress = deps.now();
+      const requeued = result.outcome === "requeued";
+      // A requeue is the harness running dry, not a failure and not progress: the task is back in the queue and
+      // the pause (not the task) decides when it runs again, so it neither counts against us nor resets the idle clock.
+      if (!requeued) lastProgress = deps.now();
       const ok = result.outcome === "submitted";
       if (ok) summary.submitted.push(result.issue);
-      else summary.failures += 1;
+      else if (!requeued) summary.failures += 1;
+      else drained.add(agent);
       deps.record({
         type: "step.finished", issue: result.issue, step: "implement", agent,
-        signal: ok ? "task.submitted" : "step.failed", detail: result.outcome, durationMs: deps.now() - startedAt,
+        signal: ok ? "task.submitted" : requeued ? "agent.unavailable" : "step.failed",
+        detail: result.outcome, durationMs: deps.now() - startedAt,
       });
       deps.say(`  #${result.issue} implement (${agent}) -> ${result.outcome}${result.prUrl ? ` ${result.prUrl}` : ""}`);
     })().finally(() => {

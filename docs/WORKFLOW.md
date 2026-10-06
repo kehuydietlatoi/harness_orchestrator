@@ -70,6 +70,7 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Submit | `submit` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | push branch, open PR (`Closes #n`) |
 | Run fails / times out | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Run exception / submit uncertainty | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
+| Run dies on a usage limit | `processClaimed` | `status:todo` | `status:claimed`, `status:in-progress` | only if safe cleanup removes the worktree (nothing left behind): remove it, release the lock, *then* relabel; telemetry `usage-limited` (not a failed run). Otherwise falls through to the "Run fails" row |
 | Run, no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | structured COMMENT review bound to the reviewed head |
 | Review (automated) | `runAutomatedReview` (`orch review-run`) | via `approve` / `requestChanges` | via `approve` / `requestChanges` | read-only headless session by the other harness (or a fresh self-review fallback), strict JSON verdict, recorded only if the PR head is unchanged |
