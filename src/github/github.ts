@@ -412,13 +412,19 @@ export async function prChecksState(
 
 export async function mergePr(
   number: number,
-  opts: { cwd?: string; method?: "squash" | "merge" | "rebase"; deleteBranch?: boolean; expectedHead?: string } = {},
+  opts: { cwd?: string; method?: "squash" | "merge" | "rebase"; deleteBranch?: boolean; expectedHead?: string; title?: string } = {},
 ): Promise<void> {
   if (opts.expectedHead) {
     const r = await exec("gh", ["api", `repos/{owner}/{repo}/pulls/${number}/merge`,
       "--method", "PUT", "--input", "-"], {
       cwd: opts.cwd,
-      input: JSON.stringify({ sha: opts.expectedHead, merge_method: opts.method ?? "squash" }),
+      input: JSON.stringify({
+        sha: opts.expectedHead,
+        merge_method: opts.method ?? "squash",
+        // Without a title GitHub defaults to the first commit's message, which is often a working title.
+        // Match what `gh pr merge --squash` produces: "<PR title> (#<n>)".
+        ...(opts.title && (opts.method ?? "squash") === "squash" ? { commit_title: `${opts.title} (#${number})` } : {}),
+      }),
     });
     if (r.code !== 0) throw new Error(`guarded merge #${number} failed: ${r.stderr.trim()}`);
     if (JSON.parse(r.stdout).merged !== true) throw new Error(`GitHub did not merge PR #${number}`);

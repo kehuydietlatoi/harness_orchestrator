@@ -137,6 +137,8 @@ export async function requestChanges(
 
 export interface GateResult {
   head: string;
+  /** The PR title, for the squash commit title. */
+  title: string;
   ok: boolean;
   reasons: string[];
   issue: number | null;
@@ -208,7 +210,7 @@ export async function checkMergeGate(
   const pr = await getPr(prNum, { cwd });
   const n = prIssueNumber(pr);
   if (n === null) {
-    return { ok: false, reasons: ["cannot map PR to an issue"], issue: null, author: null, head: pr.headSha };
+    return { ok: false, reasons: ["cannot map PR to an issue"], issue: null, author: null, head: pr.headSha, title: pr.title };
   }
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
@@ -233,7 +235,7 @@ export async function checkMergeGate(
     }),
   );
 
-  return { ok: reasons.length === 0, reasons, issue: n, author, head: pr.headSha };
+  return { ok: reasons.length === 0, reasons, issue: n, author, head: pr.headSha, title: pr.title };
 }
 
 /** Merge a PR through the gate, then prune the worktree and release the lock. */
@@ -247,7 +249,7 @@ export async function merge(
   if (!gate.ok) {
     throw new Error(`merge blocked for PR #${prNum}:\n  - ${gate.reasons.join("\n  - ")}`);
   }
-  await mergePr(prNum, { cwd, method: "squash", expectedHead: gate.head });
+  await mergePr(prNum, { cwd, method: "squash", expectedHead: gate.head, title: gate.title });
 
   // Report what cleanup actually did; a retained worktree is not "pruned".
   let worktree: "removed" | "retained" | "none" = "none";

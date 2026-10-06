@@ -90,6 +90,16 @@ describe("commit-bound review transport", () => {
     await mergePr(62, { expectedHead: "a".repeat(40), cwd: "/repo" });
     expect(execMock.mock.calls[0][1]).toEqual(["api", "repos/{owner}/{repo}/pulls/62/merge", "--method", "PUT", "--input", "-"]);
     expect(JSON.parse(execMock.mock.calls[0][2].input)).toEqual({ sha: "a".repeat(40), merge_method: "squash" });
+    // A squash merge carries the PR title, not whatever the first commit happened to be called.
+    execMock.mockResolvedValueOnce(ok({ merged: true }));
+    await mergePr(62, { expectedHead: "a".repeat(40), title: "fix: the real title" });
+    expect(JSON.parse(execMock.mock.calls[1][2].input)).toEqual({
+      sha: "a".repeat(40), merge_method: "squash", commit_title: "fix: the real title (#62)",
+    });
+    // ...but a non-squash merge keeps GitHub's default merge message.
+    execMock.mockResolvedValueOnce(ok({ merged: true }));
+    await mergePr(62, { expectedHead: "a".repeat(40), title: "fix: the real title", method: "merge" });
+    expect(JSON.parse(execMock.mock.calls[2][2].input)).toEqual({ sha: "a".repeat(40), merge_method: "merge" });
     execMock.mockResolvedValueOnce(ok({ merged: false }));
     await expect(mergePr(62, { expectedHead: "a".repeat(40) })).rejects.toThrow("did not merge");
     execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "HTTP 409 head changed" });
