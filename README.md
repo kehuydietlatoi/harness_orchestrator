@@ -123,7 +123,11 @@ doing anything (it also lists what it would claim and what it would skip); set `
 to stop at an approved, green PR. Autopilot **only starts issues that carry an `agent:` label**: unrouted
 backlog is left alone (route it with `orch assign`), and `--no-claim` makes it drive existing PRs only.
 `--issues 12,13,14` scopes a run to those issues (one plan's tickets): nothing else is claimed or driven,
-and the run stops with *plan complete* once each is closed or escalated (or lists the ones still open). See
+and the run stops with *plan complete* once each is closed or escalated (or lists the ones still open).
+When it stops it prints a **run report** (`orch report` gives the same for any range): per task the
+outcome, fix rounds, review verdicts, runs, cost, and time to merge, plus the escalation rate, mean rounds
+to approval, and cost per merged task. Costs that a harness does not report (flat-rate Codex) are shown
+as unknown or as a lower bound, never as zero. See
 [ADR-0009](docs/adr/0009-autonomous-task-loop.md).
 
 Review and merge are separate steps. `orch review-run <pr>` reviews a PR headlessly in a
@@ -199,6 +203,7 @@ request checks. Off-machine access would require additional authentication.
 | `orch dispatch <issue>` | run one routed todo by issue number |
 | `orch review-queue` / `orch review <pr>` | list review work / print a diff and checklist |
 | `orch autopilot [--max n] [--poll s] [--max-idle min] [--no-claim] [--dry-run] [--issues list]` | run tasks end to end (implement, review, fix, resolve conflicts, merge), escalating to a human when stuck |
+| `orch report [--since when] [--issues list] [--json] [--summarize]` | measure the autopilot: outcomes, rounds to approval, escalation rate, cost per merged task; `--summarize` has the lead write a summary and a `tickets.followup.json` draft (creates no issues) |
 | `orch review-run <pr> [--agent <reviewer>]` | headless read-only review that records the verdict; falls back to a fresh self-review when the other harness is out of usage |
 | `orch review-approve <pr>` | record a cross-review approval (`--self` for the fallback) |
 | `orch review-changes <pr> --notes "..."` | request changes from the author |

@@ -24,10 +24,10 @@ export default defineConfig({
       // The floor is dragged down by the thin src/commands/* CLI wrappers, which
       // are presentational and covered by the e2e smoke rather than units.
       thresholds: {
-        statements: 55,
-        branches: 78,
-        functions: 55,
-        lines: 55,
+        statements: 72,
+        branches: 85,
+        functions: 77,
+        lines: 72,
       },
     },
   },

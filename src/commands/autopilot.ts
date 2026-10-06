@@ -1,5 +1,8 @@
 import pc from "picocolors";
 import { eligibleIssues, issueAgent } from "../board/board.js";
+import { buildRunReport, formatRunReport } from "../board/report.js";
+import { readRuns } from "../board/telemetry.js";
+import { readEvents } from "../tasks/events.js";
 import { loadConfig } from "../config.js";
 import { defaultDeps, runAutopilot } from "../tasks/coordinator.js";
 import { observeTasks } from "../tasks/observe.js";
@@ -96,6 +99,7 @@ export async function autopilotCommand(opts: {
       ),
   );
 
+  const startedAt = new Date();
   const controller = new AbortController();
   let interrupted = false;
   process.on("SIGINT", () => {
@@ -135,4 +139,13 @@ export async function autopilotCommand(opts: {
     console.log(pc.yellow("  could not check which of the scoped issues are still open (see orch board)"));
   }
   if (summary.failures) console.log(pc.dim(`  ${summary.failures} step failure(s) along the way`));
+
+  // What this run did and cost, from the same telemetry `orch report` reads.
+  const report = buildRunReport(readEvents(cwd), readRuns(cwd), { since: startedAt, issues: scope });
+  if (report.tasks.length) {
+    console.log("");
+    console.log(pc.bold("Run report"));
+    console.log(formatRunReport(report));
+    console.log(pc.dim(`  (\`orch report --since ${startedAt.toISOString()}${scope ? ` --issues ${[...scope].join(",")}` : ""} --summarize\` for the lead's summary and follow-ups)`));
+  }
 }
