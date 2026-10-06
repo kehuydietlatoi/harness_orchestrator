@@ -124,6 +124,25 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`. Repair preserves `status:in-progress` and clears `review:needed` while the latest structured decision requests changes on the current head. A new head returns the task to review; stale approval labels are removed. The review queue includes explicit `review:needed` PRs without reading reviews, and otherwise recovers stale approvals or orphaned approval labels while excluding current-head changes requested.
 
+## Autopilot (the autonomous loop)
+
+`orch autopilot` (`src/tasks/coordinator.ts`) derives each open task PR's next step from facts
+(`decideStep`, `src/tasks/steps.ts`) and performs it; it adds no labels of its own beyond the ones below.
+
+| Step | Trigger (facts) | Effect | Labels it sets / clears |
+|---|---|---|---|
+| review | head has no acceptable approval and no change request | `runAutomatedReview` (read-only, cross or fallback self) | via `approve` / `requestChanges` |
+| fix | change request on the head, or red CI | resume the author's session (fresh session if refused); commit; orch pushes (no force) | sets `status:in-review`, `review:needed`; clears `status:in-progress` |
+| resolve-conflict | PR conflicts with the base | Claude (else the author) merges `origin/<base>` into the branch; orch checks the base is an ancestor, then pushes | same as fix |
+| merge | approved on the head, CI green/none, mergeable | `merge()` through `checkMergeGate` | `status:done`; releases lock, prunes worktree |
+| await-human | as merge, with `requireHumanMerge` | nothing; reported | - |
+| escalate | round budget (`maxReviewRounds`) spent, or a step failed twice in a row | comment on the PR | sets `needs-attention` (the loop then ignores the task until a human clears it) |
+
+Run state lives outside GitHub: `~/.orch/<project>/events.jsonl` (every step start/finish and its signal),
+`sessions/issue-<n>.json` (the author's conversation id), and `availability.json`. None of it is lifecycle
+truth: losing it can only cost a cold start or a blurred statistic. Fix and conflict runs write
+`logs/issue-<n>-fix<k>.jsonl` / `-resolve<k>.jsonl` and `runs.jsonl` records with `phase` and `round`.
+
 ## Usage-limit availability and self-review
 
 A failed harness run whose log shows a usage-limit refusal puts that agent on cooldown

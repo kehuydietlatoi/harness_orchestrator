@@ -1,0 +1,76 @@
+import pc from "picocolors";
+import { loadConfig } from "../config.js";
+import { defaultDeps, runAutopilot } from "../tasks/coordinator.js";
+import { observeTasks } from "../tasks/observe.js";
+import type { Step } from "../tasks/steps.js";
+
+function positive(name: string, value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) throw new Error(`${name} must be a positive number (got '${value}')`);
+  return n;
+}
+
+function describeStep(step: Step): string {
+  switch (step.kind) {
+    case "fix": return `fix (${step.reason})`;
+    case "none": case "wait": case "await-human": case "escalate": return `${step.kind}: ${step.reason}`;
+    default: return step.kind;
+  }
+}
+
+export async function autopilotCommand(opts: {
+  max?: string;
+  poll?: string;
+  maxIdle?: string;
+  dryRun?: boolean;
+}): Promise<void> {
+  const cwd = process.cwd();
+  const cfg = loadConfig(cwd);
+
+  if (opts.dryRun) {
+    const tasks = await observeTasks(cfg, cwd);
+    console.log(pc.bold(`orch autopilot --dry-run — ${tasks.length} open task PR(s)\n`));
+    if (!tasks.length) console.log(pc.dim("  (no open task PRs; autopilot would claim new work instead)"));
+    for (const t of tasks) {
+      console.log(`  #${t.issue.number} PR #${t.pr.number} by ${t.author}: ${pc.cyan(describeStep(t.step))}` +
+        pc.dim(`  [round ${t.facts.rounds}/${t.facts.maxRounds}]`));
+    }
+    return;
+  }
+
+  const max = Math.floor(positive("--max", opts.max, cfg.maxConcurrent ?? 1));
+  const pollMs = Math.round(positive("--poll", opts.poll, 20) * 1000);
+  const maxIdleMs = Math.round(positive("--max-idle", opts.maxIdle, 30) * 60_000);
+
+  console.log(
+    pc.bold("orch autopilot") +
+      pc.dim(
+        ` — up to ${max} concurrent, polling every ${pollMs / 1000}s, ${cfg.maxReviewRounds} fix round(s) per task` +
+          (cfg.requireHumanMerge ? ", human merges" : ", auto-merge"),
+      ),
+  );
+
+  const controller = new AbortController();
+  let interrupted = false;
+  process.on("SIGINT", () => {
+    if (interrupted) process.exit(130);
+    interrupted = true;
+    controller.abort();
+    console.log(pc.yellow("\nStopping after in-flight steps finish (Ctrl-C again to exit now)."));
+  });
+
+  const summary = await runAutopilot({ max, pollMs, maxIdleMs, signal: controller.signal }, defaultDeps(cfg, cwd));
+
+  console.log("");
+  console.log(pc.bold(`Autopilot stopped (${summary.stopped}).`));
+  console.log(`  merged:    ${summary.merged.map((n) => `#${n}`).join(", ") || "none"}`);
+  console.log(`  submitted: ${summary.submitted.map((n) => `#${n}`).join(", ") || "none"}`);
+  if (summary.awaitingHuman.length) {
+    console.log(pc.yellow(`  awaiting your merge: ${summary.awaitingHuman.map((n) => `#${n}`).join(", ")}  (orch merge <pr> --human)`));
+  }
+  if (summary.escalated.length) {
+    console.log(pc.red(`  escalated to you:    ${summary.escalated.map((n) => `#${n}`).join(", ")}  (needs-attention)`));
+  }
+  if (summary.failures) console.log(pc.dim(`  ${summary.failures} step failure(s) along the way`));
+}

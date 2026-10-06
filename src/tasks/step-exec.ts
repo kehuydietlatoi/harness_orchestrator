@@ -10,7 +10,7 @@ import type { OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
 import { worktreePath } from "../git/worktree.js";
 import { commentOnPr, editIssue, failingChecks } from "../github/github.js";
-import { NEEDS_ATTENTION, REVIEW_NEEDED, STATUS } from "../github/labels.js";
+import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS } from "../github/labels.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import type { TaskObservation } from "./observe.js";
@@ -115,7 +115,8 @@ async function pushAndRequeueReview(
   await editIssue(obs.issue.number, {
     cwd,
     addLabels: [STATUS.inReview, REVIEW_NEEDED],
-    removeLabels: [STATUS.inProgress],
+    // A new head voids earlier approvals, so their projections go too (the gate never reads them).
+    removeLabels: [STATUS.inProgress, ...obs.issue.labels.filter((l) => l.startsWith(REVIEWED_BY_PREFIX))],
   });
   return null; // pushed
 }

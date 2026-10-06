@@ -127,6 +127,15 @@ describe("step executors", () => {
         expect.any(String), cwd, DEFAULT_CONFIG, { phase: "fix", round: 1 });
     });
 
+    it("clears stale approval projections when the new head is requeued for review", async () => {
+      const { env } = fakeEnv({});
+      const stale = { ...obs(), issue: { ...issue, labels: ["agent:codex", "reviewed-by:claude"] } };
+      await executeFix(stale, "review", DEFAULT_CONFIG, cwd, env);
+      expect(gh.editIssue).toHaveBeenCalledWith(38, expect.objectContaining({
+        removeLabels: ["status:in-progress", "reviewed-by:claude"],
+      }));
+    });
+
     it("cold-starts with the spec and diff instructions when no session is on record", async () => {
       const { env, agentCalls } = fakeEnv({ runs: [{ ok: true, sessionId: "fresh" }] });
       await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);

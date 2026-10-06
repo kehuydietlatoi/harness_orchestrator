@@ -98,6 +98,14 @@ dependency. `--max` limits concurrency **per dispatcher**, not across both termi
 Use `orch dispatch <issue>` to run one routed task or `orch run --agent codex --once`
 to process at most one eligible task.
 
+**Hands-off mode.** `orch autopilot` runs the whole loop: it claims routed tasks, has the other
+harness review each PR (read-only), sends feedback or a red CI back to the author's **resumed**
+session, has Claude resolve merge conflicts, and squash-merges through the normal gate. It
+escalates to you (`needs-attention` plus a PR comment) after `maxReviewRounds` fix rounds or two
+failed attempts at a step. `orch autopilot --dry-run` shows the next step for every open PR without
+doing anything; set `requireHumanMerge: true` to stop at an approved, green PR. See
+[ADR-0009](docs/adr/0009-autonomous-task-loop.md).
+
 Review and merge are separate steps. `orch review-run <pr>` reviews a PR headlessly in a
 **read-only** session and records the verdict (see below); or review by hand: `orch review`
 prints a diff and checklist, `review-approve` records a decision. The dispatcher does not
@@ -170,6 +178,7 @@ request checks. Off-machine access would require additional authentication.
 | `orch run [--agent x] [--max n] [--once]` | process eligible tasks in isolated worktrees |
 | `orch dispatch <issue>` | run one routed todo by issue number |
 | `orch review-queue` / `orch review <pr>` | list review work / print a diff and checklist |
+| `orch autopilot [--max n] [--poll s] [--max-idle min] [--dry-run]` | run tasks end to end (implement, review, fix, resolve conflicts, merge), escalating to a human when stuck |
 | `orch review-run <pr> [--agent <reviewer>]` | headless read-only review that records the verdict; falls back to a fresh self-review when the other harness is out of usage |
 | `orch review-approve <pr>` | record a cross-review approval (`--self` for the fallback) |
 | `orch review-changes <pr> --notes "..."` | request changes from the author |
@@ -194,6 +203,7 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "requireCrossReview": true,
   "reviewPolicy": "cross-or-self",
   "requireHumanMerge": false,
+  "maxReviewRounds": 3,
   "worktreeRoot": "../wt",
   "maxConcurrent": 2,
   "taskTimeoutMs": 1800000,

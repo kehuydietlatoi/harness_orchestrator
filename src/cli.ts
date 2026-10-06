@@ -10,6 +10,7 @@ import { abandonCommand } from "./commands/abandon.js";
 import { boardCommand } from "./commands/board.js";
 import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
+import { autopilotCommand } from "./commands/autopilot.js";
 import {
   reviewQueueCommand,
   reviewCommand,
@@ -134,6 +135,15 @@ program
   .option("-m, --max <n>", "max concurrent tasks (defaults to config.maxConcurrent)")
   .option("--once", "process a single task then exit")
   .action(wrap(runCommand));
+
+program
+  .command("autopilot")
+  .description("Run tasks end to end: implement, review, fix feedback in the author's session, resolve conflicts, merge; escalate to a human when stuck")
+  .option("-m, --max <n>", "max concurrent agent runs (defaults to config.maxConcurrent)")
+  .option("--poll <seconds>", "how often to re-check CI and the board when nothing finishes (default 20)")
+  .option("--max-idle <minutes>", "stop after this long with work waiting and no progress (default 30)")
+  .option("--dry-run", "show the next step for every open task PR without doing anything")
+  .action(wrap(autopilotCommand));
 
 program
   .command("dispatch <issue>")
