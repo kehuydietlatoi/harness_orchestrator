@@ -366,9 +366,18 @@ export async function prChecksPass(
  * can show an in-progress state. */
 export type ChecksState = "pass" | "fail" | "pending" | "none";
 
+/**
+ * CI roll-up for a PR.
+ *
+ * Lenient by default (the dashboard): output that cannot be read is shown as `fail`. That is the wrong
+ * answer for anything that *acts* on the result, because gh also produces unreadable output when it
+ * could not ask at all (network, auth, rate limit, API error): a healthy PR would look red. Callers that
+ * act pass `strict: true`, which reads whatever JSON gh printed (it exits non-zero while checks fail or
+ * are pending but still prints the results) and throws only when there are no results to read.
+ */
 export async function prChecksState(
   number: number,
-  opts: { cwd?: string } = {},
+  opts: { cwd?: string; strict?: boolean } = {},
 ): Promise<ChecksState> {
   const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,state"], {
     cwd: opts.cwd,
@@ -380,6 +389,10 @@ export async function prChecksState(
   try {
     arr = JSON.parse(r.stdout);
   } catch {
+    if (opts.strict) {
+      const why = (r.stderr || r.stdout).trim() || `exit ${r.code}`;
+      throw new Error(`could not read the checks of PR #${number}: ${why}`);
+    }
     // gh exits non-zero while checks are failing/pending; treat unparseable as fail.
     if (r.code !== 0) return "fail";
   }

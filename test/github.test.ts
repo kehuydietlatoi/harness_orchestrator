@@ -4,7 +4,59 @@ const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
-const { mergePr, recordPrReview, listPrReviews } = await import("../src/github/github.js");
+const { mergePr, recordPrReview, listPrReviews, prChecksState } = await import("../src/github/github.js");
+
+describe("prChecksState", () => {
+  const results = (...buckets: string[]) => JSON.stringify(buckets.map((bucket) => ({ bucket, state: "X" })));
+  const gh = (code: number, stdout: string, stderr = "") => ({ code, stdout, stderr });
+  beforeEach(() => execMock.mockReset());
+
+  it("reads the results gh printed whatever its exit code (it exits non-zero while checks fail or are pending)", async () => {
+    for (const strict of [false, true]) {
+      execMock.mockResolvedValueOnce(gh(0, results("pass", "pass")));
+      expect(await prChecksState(1, { strict })).toBe("pass");
+      execMock.mockResolvedValueOnce(gh(1, results("pass", "fail")));
+      expect(await prChecksState(1, { strict })).toBe("fail");
+      execMock.mockResolvedValueOnce(gh(8, results("pass", "pending")));
+      expect(await prChecksState(1, { strict })).toBe("pending");
+      execMock.mockResolvedValueOnce(gh(1, results("cancel")));
+      expect(await prChecksState(1, { strict })).toBe("fail");
+    }
+  });
+
+  it("treats 'no checks reported' as none, strict or not", async () => {
+    for (const strict of [false, true]) {
+      execMock.mockResolvedValueOnce(gh(1, "", "no checks reported on the 'x' branch"));
+      expect(await prChecksState(1, { strict })).toBe("none");
+    }
+  });
+
+  it("a failed lookup is red to the lenient dashboard reader but an ERROR to the strict one", async () => {
+    const error = gh(1, "", "GraphQL: Could not resolve to a PullRequest with the number of 999999.");
+
+    execMock.mockResolvedValueOnce(error);
+    expect(await prChecksState(999999)).toBe("fail"); // unchanged: the dashboard keeps its conservative display
+
+    execMock.mockResolvedValueOnce(error);
+    await expect(prChecksState(999999, { strict: true })).rejects.toThrow(
+      /could not read the checks of PR #999999: GraphQL: Could not resolve/,
+    );
+  });
+
+  it("strict mode also rejects unreadable output, with or without a failing exit code", async () => {
+    execMock.mockResolvedValueOnce(gh(1, "<html>rate limited</html>"));
+    await expect(prChecksState(1, { strict: true })).rejects.toThrow("rate limited");
+    execMock.mockResolvedValueOnce(gh(0, "not json"));
+    await expect(prChecksState(1, { strict: true })).rejects.toThrow("could not read the checks of PR #1");
+    execMock.mockResolvedValueOnce(gh(137, ""));
+    await expect(prChecksState(1, { strict: true })).rejects.toThrow("exit 137");
+  });
+
+  it("is lenient unless asked otherwise", async () => {
+    execMock.mockResolvedValueOnce(gh(1, "", "network is unreachable"));
+    expect(await prChecksState(1)).toBe("fail");
+  });
+});
 
 describe("commit-bound review transport", () => {
   it("sends an expected-head merge and checks GitHub actually merged", async () => {

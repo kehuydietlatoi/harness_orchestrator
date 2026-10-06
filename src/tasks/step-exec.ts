@@ -243,6 +243,10 @@ export async function executeFix(
     // The failed resume still cost something: record it as its own run before the fresh attempt.
     recordRun(n, agent, model, "fix-resume-failed", Date.now() - started, attempt.logFile, cwd, cfg,
       { phase: "fix" satisfies RunPhase, round, since: attempt.since });
+    // The first run had write access and failed: it may have switched branches, detached HEAD or rewritten
+    // history before it did. A second writable run must not start in a worktree that is no longer the right one.
+    const unsafe = await recheckWorktree(obs, cfg, cwd, env);
+    if (unsafe) return failure(unsafe);
     started = Date.now();
     attempt = await runTracked(env, {
       issue: n, agent, worktree, prompt: prompt(false), model, logFile: followUpLog(cwd, n, `fix${round}-cold`),

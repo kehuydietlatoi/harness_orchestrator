@@ -117,7 +117,7 @@ export async function observeTasks(cfg: OrchConfig, cwd: string): Promise<Observ
     try {
       const [reviews, checks, mergeable] = await Promise.all([
         listPrReviews(pr.number, { cwd }),
-        prChecksState(pr.number, { cwd }),
+        prChecksState(pr.number, { cwd, strict: true }), // a failed lookup must be 'unobserved', never 'red'
         prMergeability(pr.number, { cwd }),
       ]);
       const facts = assembleFacts({

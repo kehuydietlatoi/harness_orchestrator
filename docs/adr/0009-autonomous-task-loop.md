@@ -47,8 +47,14 @@ Before a writable harness touches the task worktree, orch proves it is the right
 register the path on the task branch (`observeWorktree`), that branch must be the PR's, and the PR
 head must already be in its history. A switched, detached, or unregistered directory is refused
 rather than pushed from, since its commits would land on the PR. The harness runs with write access,
-so the same proof is repeated immediately before anything is published: a branch switch, a detached
-HEAD, or rewritten history during the run is refused, and nothing is pushed.
+so the same proof is repeated immediately before anything is published, and before the cold-session
+fallback launches a second writable run after a failed resumed one: a branch switch, a detached HEAD, or
+rewritten history during a run is refused, and nothing further runs or is pushed.
+
+CI is read *strictly* by the loop (`prChecksState(..., { strict: true })`): `gh` also prints nothing
+usable when it could not ask at all (network, auth, rate limit), and the dashboard's lenient reading of
+that as "fail" would make a healthy PR look red and trigger a writable fix. A failed lookup puts the PR
+in `unobserved`, which decides no step and keeps the loop polling.
 
 **3. It must converge or hand off.**
 Each task has a round budget (`maxReviewRounds`, default 3) of *spent* rounds: the larger of the

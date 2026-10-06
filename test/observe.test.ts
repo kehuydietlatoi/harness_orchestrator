@@ -163,6 +163,32 @@ describe("observeTasks", () => {
     expect(await observeTasks(DEFAULT_CONFIG, "/repo")).toEqual({ tasks: [], unobserved: [62], ambiguous: [] });
   });
 
+  describe("a CI lookup that failed is not red CI", () => {
+    it("asks for the checks strictly, so a retrieval error cannot masquerade as failing checks", async () => {
+      await observeTasks(DEFAULT_CONFIG, "/repo");
+      expect(gh.prChecksState).toHaveBeenCalledWith(62, { cwd: "/repo", strict: true });
+    });
+
+    it("puts the PR in `unobserved` and decides no step (so no writable fix can start)", async () => {
+      vi.mocked(gh.prChecksState).mockRejectedValue(new Error("could not read the checks of PR #62: network is unreachable"));
+
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+
+      expect(out.tasks).toEqual([]); // nothing to act on: no fix, no escalation, no merge
+      expect(out.unobserved).toEqual([62]);
+    });
+
+    it("does not confuse an unreadable lookup with a genuinely red one", async () => {
+      vi.mocked(gh.prChecksState).mockResolvedValue("fail"); // really red
+      const { tasks: [red] } = await observeTasks(DEFAULT_CONFIG, "/repo");
+      expect(red.step).toEqual({ kind: "fix", reason: "ci" });
+
+      vi.mocked(gh.prChecksState).mockRejectedValue(new Error("auth expired")); // could not ask
+      const out = await observeTasks(DEFAULT_CONFIG, "/repo");
+      expect(out.tasks.some((t) => t.step.kind === "fix")).toBe(false);
+    });
+  });
+
   describe("two open PRs for one issue", () => {
     const twin = { ...pr, number: 63, headRefName: "feature/second-attempt", body: "Closes #38", headSha: "d".repeat(40) };
 

@@ -452,6 +452,64 @@ describe("step executors", () => {
     });
   });
 
+  describe("the cold-session fallback after a failed resumed run", () => {
+    const onBranch = (branch: string) => ({ outcome: "usable" as const, worktree: { path: wt, branch } });
+    const resumable = () => writeSession(38, { agent: "codex", sessionId: "thread" }, cwd);
+
+    it("does not start a second writable run when the first one left the worktree on another branch", async () => {
+      resumable();
+      vi.mocked(observeWorktree)
+        .mockResolvedValueOnce(onBranch("task/38-add-the-thing")) // before the first run
+        .mockResolvedValueOnce(onBranch("task/99-other")); // after it failed: it switched branches
+      const { env, agentCalls, gitCalls } = fakeEnv({ runs: [{ ok: false, code: 1 }, { ok: true }] });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(agentCalls).toHaveLength(1); // no second agent run
+      expect(result.signal).toBe("step.failed");
+      expect(result.detail).toContain("is on 'task/99-other'");
+      expect(result.detail).toContain("checked again just before pushing");
+      expect(gitCalls.some((a) => a[0] === "push")).toBe(false);
+      expect(gh.editIssue).not.toHaveBeenCalled();
+      // The failed resumed run still cost something and is recorded, once.
+      expect(vi.mocked(recordRun).mock.calls.map((c) => c[3])).toEqual(["fix-resume-failed"]);
+    });
+
+    it("does not start a second writable run when the first one detached HEAD or lost registration", async () => {
+      resumable();
+      vi.mocked(observeWorktree)
+        .mockResolvedValueOnce(onBranch("task/38-add-the-thing"))
+        .mockResolvedValueOnce({ outcome: "conflict", detail: "worktree path is attached to 'detached HEAD'" });
+      const { env, agentCalls } = fakeEnv({ runs: [{ ok: false, code: 1 }, { ok: true }] });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(agentCalls).toHaveLength(1);
+      expect(result.detail).toContain("detached HEAD");
+    });
+
+    it("does not start a second writable run when the first one rewrote history", async () => {
+      resumable();
+      const { env, agentCalls } = fakeEnv({ runs: [{ ok: false, code: 1 }, { ok: true }], headContained: [true, false] });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(agentCalls).toHaveLength(1);
+      expect(result.detail).toContain(`does not contain PR head ${HEAD.slice(0, 8)}`);
+    });
+
+    it("still falls back to a fresh session when the worktree is intact", async () => {
+      resumable();
+      const { env, agentCalls } = fakeEnv({ runs: [{ ok: false, code: 1 }, { ok: true, sessionId: "fresh" }] });
+
+      const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
+
+      expect(result.signal).toBe("fix.pushed");
+      expect(agentCalls).toHaveLength(2);
+      expect(agentCalls[1].resumeSession).toBeUndefined();
+    });
+  });
+
   describe("after the push has happened", () => {
     it("keeps the pushed outcome and its round when the label update fails (fix)", async () => {
       vi.mocked(gh.editIssue).mockRejectedValue(new Error("labels down"));
