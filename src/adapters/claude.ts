@@ -1,6 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { commandExists } from "../util/exec.js";
 import { spawnInteractive, spawnLogged } from "../util/spawn.js";
-import type { AdapterConfig } from "../config.js";
+import type { AdapterConfig, ModelSpec } from "../config.js";
 import { runStructuredHeadless } from "./headless.js";
 import type {
   HarnessAdapter,
@@ -9,13 +10,26 @@ import type {
   InteractivePlanContext,
   InteractivePlanResult,
   RunContext,
-  ReviewContext,
   RunResult,
 } from "./types.js";
 
 const WIN = process.platform === "win32";
 
-export function buildClaudeTaskArgs(model?: string): string[] {
+/** Append the harness-native model/effort flags for a resolved spec. Pure. */
+function claudeModelArgs(spec?: ModelSpec): string[] {
+  const args: string[] = [];
+  if (spec?.model !== undefined) args.push("--model", spec.model);
+  if (spec?.effort !== undefined) args.push("--effort", spec.effort);
+  return args;
+}
+
+/** A Claude conversation to start under a chosen id, or to resume. */
+export interface ClaudeSession {
+  id: string;
+  resume: boolean;
+}
+
+export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession): string[] {
   const args = [
     "-p",
     "--output-format",
@@ -26,8 +40,26 @@ export function buildClaudeTaskArgs(model?: string): string[] {
     "--allowedTools",
     "Read,Edit,Write,Bash",
   ];
-  if (model !== undefined) args.push("--model", model);
-  return args;
+  if (session) args.push(session.resume ? "--resume" : "--session-id", session.id);
+  return [...args, ...claudeModelArgs(model)];
+}
+
+/**
+ * Claude argv for a read-only reviewer session. Edit/Write/Bash are denied outright
+ * (not merely un-allowed) so a user-level allow rule cannot re-enable them. Pure.
+ */
+export function buildClaudeReviewArgs(model?: ModelSpec): string[] {
+  return [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--allowedTools",
+    "Read,Grep,Glob",
+    "--disallowedTools",
+    "Edit,Write,Bash,NotebookEdit",
+    ...claudeModelArgs(model),
+  ];
 }
 
 /** Reduce Claude stream-json output to the final result text. Pure. */
@@ -47,10 +79,9 @@ export function resultTextFromClaudeStreamJson(logText: string): string {
 }
 
 /** Build Claude argv for an interactive planning session. Pure. */
-export function buildClaudeInteractivePlanArgs(model: string | undefined, seed: string): string[] {
+export function buildClaudeInteractivePlanArgs(model: ModelSpec | undefined, seed: string): string[] {
   const args = ["--append-system-prompt", seed, "--allowedTools", "Read", "Grep", "Glob", "Write"];
-  if (model !== undefined) args.push("--model", model);
-  return args;
+  return [...args, ...claudeModelArgs(model)];
 }
 
 /** Drives Claude Code in headless (`-p`) mode. */
@@ -64,7 +95,11 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async runTask(ctx: RunContext): Promise<RunResult> {
     // Prompt on stdin; worktree as cwd. allowedTools kept metachar-free for the shell.
-    const args = buildClaudeTaskArgs(ctx.model);
+    // Claude lets us choose the conversation id up front, so no log parsing is needed.
+    const session: ClaudeSession = ctx.resumeSession
+      ? { id: ctx.resumeSession, resume: true }
+      : { id: randomUUID(), resume: false };
+    const args = buildClaudeTaskArgs(ctx.model, session);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -72,32 +107,19 @@ export class ClaudeAdapter implements HarnessAdapter {
       timeoutMs: ctx.timeoutMs,
       shell: WIN,
     });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
-  }
-
-  async runReview(ctx: ReviewContext): Promise<RunResult> {
-    const args = [
-      "-p",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--permission-mode",
-      "acceptEdits",
-      "--allowedTools",
-      "Read,Bash",
-    ];
-    const r = await spawnLogged(this.cfg.cmd, args, {
-      cwd: ctx.cwd,
-      input: ctx.prompt,
+    return {
+      ok: r.code === 0,
+      code: r.code,
+      durationMs: r.durationMs,
+      timedOut: r.timedOut,
       logFile: ctx.logFile,
-      timeoutMs: ctx.timeoutMs,
-      shell: WIN,
-    });
-    return { ok: r.code === 0, code: r.code, durationMs: r.durationMs, timedOut: r.timedOut, logFile: ctx.logFile };
+      sessionId: session.id,
+    };
   }
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
-    return runStructuredHeadless(this.cfg.cmd, buildClaudeTaskArgs(ctx.model), ctx, resultTextFromClaudeStreamJson);
+    const args = ctx.readOnly ? buildClaudeReviewArgs(ctx.model) : buildClaudeTaskArgs(ctx.model);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromClaudeStreamJson);
   }
 
   runInteractivePlan(ctx: InteractivePlanContext): Promise<InteractivePlanResult> {

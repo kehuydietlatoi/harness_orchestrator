@@ -21,6 +21,19 @@ describe("merge gate policy", () => {
     expect(reasons.some((r) => /other harness/.test(r))).toBe(true);
   });
 
+  it("accepts a fallback self-review only under cross-or-self and only when marked self", () => {
+    const self = { ...base, author: "claude", reviewers: ["claude"], selfReviewers: ["claude"] };
+    expect(evaluateGate({ ...self, reviewPolicy: "cross-or-self" })).toHaveLength(0);
+    expect(evaluateGate({ ...self, reviewPolicy: "cross" }).some((r) => /other harness/.test(r))).toBe(true);
+    expect(evaluateGate({ ...self, reviewPolicy: undefined }).some((r) => /other harness/.test(r))).toBe(true);
+    // An unmarked approval by the author never counts, whatever the policy.
+    const unmarked = { ...base, author: "claude", reviewers: ["claude"], selfReviewers: [], reviewPolicy: "cross-or-self" as const };
+    expect(evaluateGate(unmarked).some((r) => /other harness/.test(r))).toBe(true);
+    // A self mark for someone who is not the author does not satisfy the gate either.
+    const wrongMark = { ...unmarked, reviewers: ["codex"], selfReviewers: ["codex"], author: "claude" };
+    expect(evaluateGate({ ...wrongMark, reviewers: [] }).some((r) => /other harness/.test(r))).toBe(true);
+  });
+
   it("allows a PR approved by the OTHER harness with green CI", () => {
     const reasons = evaluateGate({ ...base, author: "claude", reviewers: ["codex"] });
     expect(reasons).toHaveLength(0);

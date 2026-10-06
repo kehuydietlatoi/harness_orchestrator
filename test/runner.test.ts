@@ -16,24 +16,37 @@ function issue(labels: string[] = []): Issue {
 
 describe("resolveTaskModel", () => {
   it.each([
-    ["claude", "easy", "sonnet"],
-    ["claude", "hard", "opus"],
-    ["codex", "easy", "low"],
-    ["codex", "hard", "high"],
-  ])("maps %s effort:%s to %s", (agent, tier, expected) => {
-    expect(resolveTaskModel(agent, issue([`effort:${tier}`]), DEFAULT_CONFIG)).toBe(expected);
+    ["claude", "easy", { model: "claude-sonnet-5-5", effort: "medium" }],
+    ["claude", "hard", { model: "claude-sonnet-5-5", effort: "medium" }],
+    ["codex", "easy", { model: "gpt-6.1-sol", effort: "medium" }],
+    ["codex", "hard", { model: "gpt-6.1-sol", effort: "medium" }],
+  ])("maps %s effort:%s to %j", (agent, tier, expected) => {
+    expect(resolveTaskModel(agent, issue([`effort:${tier}`]), DEFAULT_CONFIG)).toEqual(expected);
+  });
+
+  it("resolves distinct specs when the tiers are configured differently", () => {
+    const cfg: OrchConfig = {
+      ...DEFAULT_CONFIG,
+      adapters: {
+        ...DEFAULT_CONFIG.adapters,
+        claude: { cmd: "claude", models: { easy: { model: "a", effort: "low" }, hard: { model: "b", effort: "high" } } },
+      },
+    };
+
+    expect(resolveTaskModel("claude", issue(["effort:easy"]), cfg)).toEqual({ model: "a", effort: "low" });
+    expect(resolveTaskModel("claude", issue(["effort:hard"]), cfg)).toEqual({ model: "b", effort: "high" });
   });
 
   it("uses the configured default effort when the issue has no effort label", () => {
     const cfg: OrchConfig = { ...DEFAULT_CONFIG, defaultEffort: "easy" };
 
-    expect(resolveTaskModel("claude", issue(), cfg)).toBe("sonnet");
+    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.easy);
   });
 
   it("falls back to hard when neither the issue nor config specifies an effort", () => {
     const cfg: OrchConfig = { ...DEFAULT_CONFIG, defaultEffort: undefined };
 
-    expect(resolveTaskModel("claude", issue(), cfg)).toBe("opus");
+    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.hard);
   });
 
   it("returns undefined when the agent has no models map", () => {

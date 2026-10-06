@@ -4,7 +4,13 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { log } from "../util/log.js";
 
+/** Which part of the task loop produced a run record (absent on records written before the loop). */
+export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review";
+
 export interface RunRecord {
+  /** Loop phase and 1-based fix round, so cost and rounds-to-approval can be measured. */
+  phase?: RunPhase;
+  round?: number;
   ts: string;
   project: string;
   issue: number;
@@ -180,8 +186,18 @@ export function projectId(cwd: string): string {
   return basename(resolve(cwd));
 }
 
+/** Root of orch's per-user state. `ORCH_HOME` relocates it (tests, sandboxes). */
+export function orchHome(): string {
+  return process.env.ORCH_HOME || join(homedir(), ".orch");
+}
+
+/** Per-project state directory under the orch home (runs, availability, ...). */
+export function projectStateDir(cwd: string): string {
+  return join(orchHome(), projectId(cwd));
+}
+
 export function telemetryPath(cwd: string): string {
-  return join(homedir(), ".orch", projectId(cwd), "runs.jsonl");
+  return join(projectStateDir(cwd), "runs.jsonl");
 }
 
 function nullableNumber(value: unknown): number | null {
@@ -202,7 +218,12 @@ function parseRunRecord(value: unknown): RunRecord | null {
     return null;
   }
 
+  const phase = ["implement", "fix", "resolve-conflict", "review"].includes(obj.phase as string)
+    ? (obj.phase as RunPhase)
+    : undefined;
   return {
+    ...(phase ? { phase } : {}),
+    ...(Number.isInteger(obj.round) ? { round: obj.round as number } : {}),
     ts: obj.ts,
     project: obj.project,
     issue: obj.issue as number,

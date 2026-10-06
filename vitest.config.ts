@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 
 // Default (`npm test`) config: the mocked unit suite. The subprocess e2e suite
@@ -5,6 +8,8 @@ import { configDefaults, defineConfig } from "vitest/config";
 // `vitest run` stays fast and deterministic.
 export default defineConfig({
   test: {
+    // Per-user state (telemetry, harness availability) must never touch the real ~/.orch.
+    env: { ORCH_HOME: mkdtempSync(join(tmpdir(), "orch-home-")) },
     exclude: [...configDefaults.exclude, "test/e2e/**"],
     coverage: {
       provider: "v8",

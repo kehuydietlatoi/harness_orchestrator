@@ -9,6 +9,11 @@ const usage = (over: Partial<Parameters<typeof estimateCost>[0]> = {}) => ({
 });
 
 describe("estimateCost", () => {
+  it("prices the default Sonnet 5.5 model id at the sonnet rates", () => {
+    // 1M input @ $3 + 100k output @ $15/M = 3 + 1.5 = 4.5
+    expect(estimateCost(usage(), "claude-sonnet-5-5", DEFAULT_PRICING)).toBeCloseTo(4.5, 6);
+  });
+
   it("prices opus at the published input/output rates", () => {
     // 1M input @ $5 + 100k output @ $25/M = 5 + 2.5 = 7.5
     expect(estimateCost(usage(), "opus", DEFAULT_PRICING)).toBeCloseTo(7.5, 6);

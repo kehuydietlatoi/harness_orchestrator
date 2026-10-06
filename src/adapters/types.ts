@@ -1,20 +1,16 @@
+import type { ModelSpec } from "../config.js";
+
 export interface RunContext {
   issue: number;
   agent: string;
   worktree: string; // becomes the child process cwd
   prompt: string; // delivered on stdin
-  model?: string; // resolved agent-specific model value
+  model?: ModelSpec; // resolved agent-specific model + effort
   logFile?: string;
   timeoutMs?: number;
-}
-
-export interface ReviewContext {
-  pr: number;
-  agent: string;
-  cwd: string; // where to run the review (repo or worktree)
-  prompt: string;
-  logFile?: string;
-  timeoutMs?: number;
+  /** Continue this earlier conversation (so a fix round keeps the author's context)
+   * instead of starting a new one. Absent = fresh session. */
+  resumeSession?: string;
 }
 
 export interface RunResult {
@@ -23,15 +19,19 @@ export interface RunResult {
   durationMs: number;
   timedOut: boolean;
   logFile?: string;
+  /** Conversation id of this run, when the harness exposes one; persist it to resume later. */
+  sessionId?: string;
 }
 
 /** A prompt run used by the planner and routing judge. */
 export interface HeadlessContext {
   cwd: string;
   prompt: string;
-  model?: string;
+  model?: ModelSpec;
   logFile: string;
   timeoutMs?: number;
+  /** Run without any ability to modify the workspace (reviewers). */
+  readOnly?: boolean;
 }
 
 export interface HeadlessResult {
@@ -46,7 +46,7 @@ export interface HeadlessResult {
 export interface InteractivePlanContext {
   cwd: string;
   seed: string;
-  model?: string;
+  model?: ModelSpec;
 }
 
 export interface InteractivePlanResult {
@@ -60,8 +60,6 @@ export interface HarnessAdapter {
   healthCheck(): Promise<boolean>;
   /** Run a task to completion in an isolated worktree. */
   runTask(ctx: RunContext): Promise<RunResult>;
-  /** Review a PR (read-mostly). */
-  runReview(ctx: ReviewContext): Promise<RunResult>;
   /** Run a structured prompt for planner/judge use. Optional adapter capability. */
   runHeadless?(ctx: HeadlessContext): Promise<HeadlessResult>;
   /** Hand an interactive planning session to the human. Optional adapter capability. */

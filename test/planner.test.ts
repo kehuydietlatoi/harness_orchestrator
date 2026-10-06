@@ -72,7 +72,7 @@ describe("interactive planning builders", () => {
       seenSeed = ctx.seed;
       return { code: 7 };
     };
-    await expect(runInteractivePlanner(adapter, { cwd: ".", seed: "SEED", model: "opus" })).resolves.toEqual({
+    await expect(runInteractivePlanner(adapter, { cwd: ".", seed: "SEED", model: { model: "opus" } })).resolves.toEqual({
       code: 7,
     });
     expect(seenSeed).toBe("SEED");

@@ -98,9 +98,20 @@ dependency. `--max` limits concurrency **per dispatcher**, not across both termi
 Use `orch dispatch <issue>` to run one routed task or `orch run --agent codex --once`
 to process at most one eligible task.
 
-Review and merge are separate steps: `orch review` prints a diff and checklist;
-`review-approve` records a decision. The dispatcher does not automatically drain
-the review queue. Set `requireHumanMerge: true` to require `orch merge <pr> --human`
+**Hands-off mode.** `orch autopilot` runs the whole loop: it claims routed tasks, has the other
+harness review each PR (read-only), sends feedback or a red CI back to the author's **resumed**
+session, has Claude resolve merge conflicts, and squash-merges through the normal gate. It
+escalates to you (`needs-attention` plus a PR comment) after `maxReviewRounds` fix rounds or two
+failed attempts at a step. `orch autopilot --dry-run` shows the next step for every open PR without
+doing anything (it also lists what it would claim and what it would skip); set `requireHumanMerge: true`
+to stop at an approved, green PR. Autopilot **only starts issues that carry an `agent:` label**: unrouted
+backlog is left alone (route it with `orch assign`), and `--no-claim` makes it drive existing PRs only. See
+[ADR-0009](docs/adr/0009-autonomous-task-loop.md).
+
+Review and merge are separate steps. `orch review-run <pr>` reviews a PR headlessly in a
+**read-only** session and records the verdict (see below); or review by hand: `orch review`
+prints a diff and checklist, `review-approve` records a decision. The dispatcher does not
+automatically drain the review queue. Set `requireHumanMerge: true` to require `orch merge <pr> --human`
 or `orch integrate --human` for explicit sign-off.
 
 Watch work with `orch board`, `orch status`, or `orch snapshot --json`.
@@ -134,6 +145,15 @@ naming a configured harness different from the issue's author label. Legacy appr
 Harness identities and `--human` are process signals, not authenticated identities;
 the gate applies to merges through `orch`, not direct GitHub merges.
 
+**Usage limits and self-review.** When a harness runs out of usage (Codex's "You've hit your
+usage limit", Claude's rejected rate-limit event), orch records a cooldown in
+`~/.orch/<project>/availability.json` and stops dispatching to it. `orch review-run` then
+reviews with the other harness when it is available; if every other harness is on cooldown and
+`reviewPolicy` is `"cross-or-self"` (the default), the author's own harness reviews in a
+**fresh read-only session** and the record is marked `mode: "self"`. Self-review is a
+fallback only: it is refused while another harness is available, and `reviewPolicy: "cross"`
+turns it off. See [ADR-0008](docs/adr/0008-self-review-fallback.md).
+
 Reported CI checks must pass or be skipped; **no configured checks also passes**.
 The gate does not establish review quality or prove that distinct underlying
 models performed the work. Issue and PR content can contain prompt injections;
@@ -160,7 +180,9 @@ request checks. Off-machine access would require additional authentication.
 | `orch run [--agent x] [--max n] [--once]` | process eligible tasks in isolated worktrees |
 | `orch dispatch <issue>` | run one routed todo by issue number |
 | `orch review-queue` / `orch review <pr>` | list review work / print a diff and checklist |
-| `orch review-approve <pr>` | record a cross-review approval |
+| `orch autopilot [--max n] [--poll s] [--max-idle min] [--no-claim] [--dry-run]` | run tasks end to end (implement, review, fix, resolve conflicts, merge), escalating to a human when stuck |
+| `orch review-run <pr> [--agent <reviewer>]` | headless read-only review that records the verdict; falls back to a fresh self-review when the other harness is out of usage |
+| `orch review-approve <pr>` | record a cross-review approval (`--self` for the fallback) |
 | `orch review-changes <pr> --notes "..."` | request changes from the author |
 | `orch merge <pr> [--human]` / `orch integrate [--human]` | gated merge of one PR / all passing PRs |
 | `orch repair [issue] [--apply]` | preview lifecycle reconciliation / execute safe repairs |
@@ -181,14 +203,29 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "agents": ["claude", "codex"],
   "lead": "claude",
   "requireCrossReview": true,
+  "reviewPolicy": "cross-or-self",
   "requireHumanMerge": false,
+  "maxReviewRounds": 3,
   "worktreeRoot": "../wt",
   "maxConcurrent": 2,
   "taskTimeoutMs": 1800000,
+  "reviewTimeoutMs": 900000,
   "defaultEffort": "hard",
   "adapters": {
-    "claude": { "cmd": "claude", "models": { "easy": "sonnet", "hard": "opus" } },
-    "codex": { "cmd": "codex", "models": { "easy": "low", "hard": "high" } }
+    "claude": {
+      "cmd": "claude",
+      "models": {
+        "easy": { "model": "claude-sonnet-5-5", "effort": "medium" },
+        "hard": { "model": "claude-sonnet-5-5", "effort": "medium" }
+      }
+    },
+    "codex": {
+      "cmd": "codex",
+      "models": {
+        "easy": { "model": "gpt-6.1-sol", "effort": "medium" },
+        "hard": { "model": "gpt-6.1-sol", "effort": "medium" }
+      }
+    }
   }
 }
 ```
@@ -199,10 +236,16 @@ optional: when omitted, orch uses GitHub's default branch. Set it explicitly
 locally or as `origin/<name>` before work can be claimed, compared, repaired,
 or submitted.
 
-`effort:easy` and `effort:hard` select adapter-specific values: the Claude adapter
-passes a model name, while the Codex adapter sets reasoning effort. Tasks without
-an effort label use `defaultEffort`. Planning and the routing judge use the lead's
-`hard` tier.
+`effort:easy` and `effort:hard` select a `{ model, effort }` spec per adapter: Claude
+gets `--model` and `--effort`, Codex gets `-m` and `-c model_reasoning_effort=`. Either
+field may be omitted to defer to the harness's own default. Both harnesses pin their
+model (Claude `claude-sonnet-5-5`, Codex `gpt-6.1-sol`) so a personal harness default
+never changes cost; override `models.<tier>.model` to change it. Both tiers default to the same model at `medium` effort; raise `hard`
+(e.g. `{ "effort": "high" }`) to make `effort:hard` mean something. Partial specs merge
+per tier over the defaults, and the older string form (`"easy": "sonnet"`) is still read
+(a bare string means a model, except for Codex where it means a reasoning effort). Tasks
+without an effort label use `defaultEffort`. Planning and the routing judge use the
+lead's `hard` tier.
 
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies

@@ -72,6 +72,7 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Run exception / submit uncertainty | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
 | Run, no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | structured COMMENT review bound to the reviewed head |
+| Review (automated) | `runAutomatedReview` (`orch review-run`) | via `approve` / `requestChanges` | via `approve` / `requestChanges` | read-only headless session by the other harness (or a fresh self-review fallback), strict JSON verdict, recorded only if the PR head is unchanged |
 | Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | structured revocation; clears `reviewed-by:*` |
 | Merge | `merge` | `status:done` | `status:in-review` | gate check, squash-merge, safely prune worktree, release lock |
 | Repair preview | `repair [issue]` | — | — | re-observe issue/PR, lock, branch, worktree, and telemetry; print safe idempotent actions only |
@@ -118,10 +119,40 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 
 ## Where routing labels get honored
 
-- `effort:` → `resolveTaskModel(agent, issue, cfg)` at spawn → `RunContext.model` →
-  adapter appends the model flag. No label ⇒ `cfg.defaultEffort` (`hard`).
+- `effort:` → `resolveTaskModel(agent, issue, cfg)` (a `ModelSpec`) at spawn → `RunContext.model` →
+  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`hard`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`. Repair preserves `status:in-progress` and clears `review:needed` while the latest structured decision requests changes on the current head. A new head returns the task to review; stale approval labels are removed. The review queue includes explicit `review:needed` PRs without reading reviews, and otherwise recovers stale approvals or orphaned approval labels while excluding current-head changes requested.
+
+## Autopilot (the autonomous loop)
+
+`orch autopilot` (`src/tasks/coordinator.ts`) only *starts* issues that carry an `agent:` label (`--no-claim`: none), and drives
+every open task PR. It derives each open task PR's next step from facts
+(`decideStep`, `src/tasks/steps.ts`) and performs it; it adds no labels of its own beyond the ones below.
+
+| Step | Trigger (facts) | Effect | Labels it sets / clears |
+|---|---|---|---|
+| review | head has no acceptable approval and no change request | `runAutomatedReview` (read-only, cross or fallback self) | via `approve` / `requestChanges` |
+| fix | change request on the head, or red CI | resume the author's session (fresh session if refused); commit; orch pushes (no force) | sets `status:in-review`, `review:needed`; clears `status:in-progress` |
+| resolve-conflict | PR conflicts with the base | Claude (else the author) merges `origin/<base>` into the branch; orch checks the base is an ancestor, then pushes | same as fix |
+| merge | approved on the head, CI green/none, mergeable | `merge()` through `checkMergeGate` | `status:done`; releases lock, prunes worktree |
+| await-human | as merge, with `requireHumanMerge` | nothing; reported | - |
+| escalate | round budget (`maxReviewRounds`) spent, or a step failed twice in a row | comment on the PR | sets `needs-attention` (the loop then ignores the task until a human clears it) |
+
+Run state lives outside GitHub: `~/.orch/<project>/events.jsonl` (every step start/finish and its signal),
+`sessions/issue-<n>.json` (the author's conversation id), and `availability.json`. None of it is lifecycle
+truth: losing it can only cost a cold start or a blurred statistic. Fix and conflict runs write
+`logs/issue-<n>-fix<k>.jsonl` / `-resolve<k>.jsonl` and `runs.jsonl` records with `phase` and `round`.
+
+## Usage-limit availability and self-review
+
+A failed harness run whose log shows a usage-limit refusal puts that agent on cooldown
+(`src/board/availability.ts`, `~/.orch/<project>/availability.json`, clamped to 1 minute..12 hours;
+default 1 hour when no reset time is given). `processNext` / `dispatchSpecific` will not claim work for
+an agent on cooldown. This is runtime state, not an issue label, and never affects lifecycle derivation.
+Review records carry an optional `mode: "self"`; the gate accepts the author's own approval only when
+`reviewPolicy` is `cross-or-self` **and** that record is marked self. Writing a self record is itself
+guarded (`assertSelfReviewAllowed`: every other harness must currently be on cooldown).
 
 ## Observed health in operator views
 

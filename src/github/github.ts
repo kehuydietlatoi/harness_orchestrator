@@ -330,9 +330,16 @@ export async function listPrs(
   return items.map(parseRestPr);
 }
 
-export async function prDiff(number: number, opts: { cwd?: string } = {}): Promise<string> {
+/**
+ * The PR's unified diff. By default a failure comes back as the text `(diff unavailable: ...)`, which is fine
+ * for a human reading `orch review` but is not a diff: anything that *reviews* must pass `strict: true`, which
+ * throws instead, so a missing diff can never be mistaken for "nothing suspicious in it".
+ */
+export async function prDiff(number: number, opts: { cwd?: string; strict?: boolean } = {}): Promise<string> {
   const r = await exec("gh", ["pr", "diff", String(number)], { cwd: opts.cwd });
-  return r.code === 0 ? r.stdout : `(diff unavailable: ${r.stderr.trim()})`;
+  if (r.code === 0) return r.stdout;
+  if (opts.strict) throw new Error(`could not fetch the diff of PR #${number}: ${r.stderr.trim() || `exit ${r.code}`}`);
+  return `(diff unavailable: ${r.stderr.trim()})`;
 }
 
 /** Are the PR's required checks green? No checks configured counts as pass. */
@@ -366,9 +373,18 @@ export async function prChecksPass(
  * can show an in-progress state. */
 export type ChecksState = "pass" | "fail" | "pending" | "none";
 
+/**
+ * CI roll-up for a PR.
+ *
+ * Lenient by default (the dashboard): output that cannot be read is shown as `fail`. That is the wrong
+ * answer for anything that *acts* on the result, because gh also produces unreadable output when it
+ * could not ask at all (network, auth, rate limit, API error): a healthy PR would look red. Callers that
+ * act pass `strict: true`, which reads whatever JSON gh printed (it exits non-zero while checks fail or
+ * are pending but still prints the results) and throws only when there are no results to read.
+ */
 export async function prChecksState(
   number: number,
-  opts: { cwd?: string } = {},
+  opts: { cwd?: string; strict?: boolean } = {},
 ): Promise<ChecksState> {
   const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,state"], {
     cwd: opts.cwd,
@@ -380,6 +396,10 @@ export async function prChecksState(
   try {
     arr = JSON.parse(r.stdout);
   } catch {
+    if (opts.strict) {
+      const why = (r.stderr || r.stdout).trim() || `exit ${r.code}`;
+      throw new Error(`could not read the checks of PR #${number}: ${why}`);
+    }
     // gh exits non-zero while checks are failing/pending; treat unparseable as fail.
     if (r.code !== 0) return "fail";
   }
@@ -437,4 +457,39 @@ export async function recordPrReview(number: number, head: string, body: string,
     cwd: opts.cwd, input: JSON.stringify({ event: "COMMENT", commit_id: head, body }),
   });
   if (r.code !== 0) throw new Error(`record review #${number} failed: ${r.stderr.trim()}`);
+}
+
+/** Whether a PR can merge into its base right now. `unknown` while GitHub is still computing it. */
+export type Mergeability = "clean" | "conflicting" | "unknown";
+
+export async function prMergeability(number: number, opts: { cwd?: string } = {}): Promise<Mergeability> {
+  const r = await exec("gh", ["pr", "view", String(number), "--json", "mergeable", "--jq", ".mergeable"], {
+    cwd: opts.cwd,
+  });
+  if (r.code !== 0) throw new Error(`gh pr view #${number} mergeable failed: ${r.stderr.trim()}`);
+  switch (r.stdout.trim()) {
+    case "MERGEABLE":
+      return "clean";
+    case "CONFLICTING":
+      return "conflicting";
+    default:
+      return "unknown";
+  }
+}
+
+/** Names of the PR's checks that failed or were cancelled (for the author's fix prompt). */
+export async function failingChecks(number: number, opts: { cwd?: string } = {}): Promise<string[]> {
+  const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,name"], { cwd: opts.cwd });
+  try {
+    const arr = JSON.parse(r.stdout) as { bucket?: string; name?: string }[];
+    return arr.filter((c) => c.bucket === "fail" || c.bucket === "cancel").map((c) => c.name ?? "(unnamed check)");
+  } catch {
+    return [];
+  }
+}
+
+/** Post a plain comment on a PR (used when the loop escalates a task to a human). */
+export async function commentOnPr(number: number, body: string, opts: { cwd?: string } = {}): Promise<void> {
+  const r = await exec("gh", ["pr", "comment", String(number), "--body-file", "-"], { cwd: opts.cwd, input: body });
+  if (r.code !== 0) throw new Error(`comment on PR #${number} failed: ${r.stderr.trim()}`);
 }

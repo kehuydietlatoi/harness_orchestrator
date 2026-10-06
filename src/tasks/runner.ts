@@ -1,7 +1,7 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import type { OrchConfig } from "../config.js";
+import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
@@ -12,8 +12,12 @@ import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
 import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
-import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
+import { appendRun, parseUsage, projectId, type RunPhase, type RunRecord } from "../board/telemetry.js";
+import { appendEvent } from "./events.js";
+import { logSize, readLogSince } from "../util/log-file.js";
 import { estimateCost } from "../board/pricing.js";
+import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { writeSession } from "./sessions.js";
 
 export interface RunSummary {
   issue: number;
@@ -26,7 +30,7 @@ export function resolveTaskModel(
   agent: string,
   issue: Issue,
   cfg: OrchConfig,
-): string | undefined {
+): ModelSpec | undefined {
   const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
   return cfg.adapters[agent]?.models?.[tier];
 }
@@ -34,6 +38,20 @@ export function resolveTaskModel(
 async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Promise<number> {
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   return countCommitsAhead(base.ref, "HEAD", worktree);
+}
+
+/**
+ * Put `agent` on cooldown when a failed run's log shows it ran out of usage. Only the text this
+ * run appended counts (`since` is the log size before it started): the log is shared by every retry,
+ * and an old attempt's usage-limit event must not pause the harness again for a different failure.
+ */
+function noteUsageLimit(agent: string, logFile: string, cwd: string, since: number): void {
+  try {
+    const until = noteUsageLimitFromLog(agent, readLogSince(logFile, since), cwd);
+    if (until) console.log(pc.yellow(`⏸ '${agent}' hit its usage limit — paused until ${until.toLocaleString()}`));
+  } catch {
+    // An unreadable log just means no availability signal; the failure is handled as usual.
+  }
 }
 
 /** Validate that a specific open issue is a routed todo ready for dispatch. */
@@ -57,34 +75,37 @@ export function resolveDispatchAgent(
   return agent;
 }
 
-function recordRun(
+/**
+ * Append one best-effort telemetry record for a finished agent run. `meta.since` is the log size just
+ * before the run: logs are append-only and shared by every retry of a round, so usage must be read from
+ * that run's own range, or a later attempt that reported none would inherit (and re-record) an earlier
+ * attempt's tokens and cost.
+ */
+export function recordRun(
   issue: number,
   agent: string,
-  model: string | undefined,
+  model: ModelSpec | undefined,
   outcome: string,
   durationMs: number,
   logFile: string,
   cwd: string,
   cfg: OrchConfig,
+  meta: { phase?: RunPhase; round?: number; since?: number } = {},
 ): void {
   try {
-    let logText = "";
-    try {
-      logText = readFileSync(logFile, "utf8");
-    } catch {
-      // Preserve one record per completed run even when its log is unavailable.
-    }
-
-    const usage = parseUsage(logText, agent);
+    // A missing log reads as empty text: one record per completed run is preserved regardless.
+    const usage = parseUsage(readLogSince(logFile, meta.since ?? 0), agent);
     // Prefer the harness-reported cost; fall back to a per-token estimate only
     // when pricing exists for this model (subscription agents have none → null).
-    const costUsd = usage.costUsd ?? estimateCost(usage, model ?? null, cfg.pricing);
+    const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
     const rec: RunRecord = {
+      ...(meta.phase ? { phase: meta.phase } : {}),
+      ...(meta.round !== undefined ? { round: meta.round } : {}),
       ts: new Date().toISOString(),
       project: projectId(cwd),
       issue,
       agent,
-      model: model ?? null,
+      model: formatModelSpec(model) ?? null,
       outcome,
       durationMs,
       tokensIn: usage.tokensIn,
@@ -109,9 +130,24 @@ export async function processNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
+  opts: {
+    requireRouted?: boolean;
+    /**
+     * Called as soon as a task is claimed, before the harness starts. The agent may open its PR
+     * (`orch submit`) while this call is still running, so a caller that also acts on open PRs needs
+     * to know which issue is still being implemented in order to leave it alone until we return.
+     */
+    onClaimed?: (issue: number) => void;
+  } = {},
 ): Promise<RunSummary | null> {
-  const task = await claimNext(agent, cfg, cwd);
+  const pausedUntil = unavailableUntil(agent, cwd);
+  if (pausedUntil) {
+    log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
+    return null;
+  }
+  const task = await claimNext(agent, cfg, cwd, { requireRouted: opts.requireRouted });
   if (!task) return null;
+  opts.onClaimed?.(task.issue.number);
 
   return processClaimed(task, agent, cfg, cwd);
 }
@@ -131,6 +167,10 @@ export async function dispatchSpecific(
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
   const agent = resolveDispatchAgent(issue, open, cfg);
+  const pausedUntil = unavailableUntil(agent, cwd);
+  if (pausedUntil) {
+    throw new Error(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+  }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
 }
@@ -151,14 +191,17 @@ async function processClaimed(
   let telemetryOutcome: string;
   let harnessDurationMs: number | undefined;
   let preserveWorktree = false;
+  let logMark = 0; // log size just before the harness ran (the log is shared by every retry)
 
   try {
     mkdirSync(logDir, { recursive: true });
+    appendEvent({ type: "task.started", issue: n, agent }, cwd);
     await editIssue(n, { cwd, addLabels: [STATUS.inProgress], removeLabels: [STATUS.claimed] });
     console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
     const adapter = makeAdapter(agent, cfg);
     const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
+    logMark = logSize(logFile); // judge this run only by what it appends to the shared log
     const result = await adapter.runTask({
       issue: n,
       agent,
@@ -169,8 +212,10 @@ async function processClaimed(
       timeoutMs: cfg.taskTimeoutMs,
     });
     harnessDurationMs = result.durationMs;
+    if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
     if (!result.ok) {
+      noteUsageLimit(agent, logFile, cwd, logMark);
       await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
       console.log(pc.red(`✗ #${n} ${result.timedOut ? "timed out" : `exited ${result.code}`} — see ${logFile}`));
       summary = { issue: n, outcome: "failed", durationMs: result.durationMs };
@@ -206,7 +251,7 @@ async function processClaimed(
     telemetryOutcome = "failed";
   }
 
-  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg);
+  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark });
   return summary;
 }
 

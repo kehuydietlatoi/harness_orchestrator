@@ -10,11 +10,13 @@ import { abandonCommand } from "./commands/abandon.js";
 import { boardCommand } from "./commands/board.js";
 import { statusCommand } from "./commands/status.js";
 import { runCommand } from "./commands/run.js";
+import { autopilotCommand } from "./commands/autopilot.js";
 import {
   reviewQueueCommand,
   reviewCommand,
   reviewApproveCommand,
   reviewChangesCommand,
+  reviewRunCommand,
 } from "./commands/review.js";
 import { mergeCommand, integrateCommand } from "./commands/merge.js";
 import { briefCommand } from "./commands/brief.js";
@@ -135,6 +137,16 @@ program
   .action(wrap(runCommand));
 
 program
+  .command("autopilot")
+  .description("Run tasks end to end: implement, review, fix feedback in the author's session, resolve conflicts, merge; escalate to a human when stuck")
+  .option("-m, --max <n>", "max concurrent agent runs (defaults to config.maxConcurrent)")
+  .option("--poll <seconds>", "how often to re-check CI and the board when nothing finishes (default 20)")
+  .option("--max-idle <minutes>", "stop after this long with work waiting and no progress (default 30)")
+  .option("--no-claim", "only drive pull requests that already exist; never start new tasks")
+  .option("--dry-run", "show the next step for every open task PR, and which issues it would claim, without doing anything")
+  .action(wrap(autopilotCommand));
+
+program
   .command("dispatch <issue>")
   .description("Claim and drive one routed todo by issue number")
   .action(wrap(dispatchCommand));
@@ -152,11 +164,18 @@ program
   .action(wrap(reviewCommand));
 
 program
+  .command("review-run <pr>")
+  .description("Review a PR headlessly (read-only) and record the verdict; falls back to a fresh self-review when the other harness is out of usage")
+  .option("--agent <agent>", "pin the reviewer (disables the self-review fallback)")
+  .action(wrap(reviewRunCommand));
+
+program
   .command("review-approve <pr>")
   .description("Record a cross-review approval (satisfies the merge gate)")
   .requiredOption("--head <sha>", "full commit OID printed by orch review")
   .option(agentOpt, agentDesc)
   .option("-n, --notes <text>", "optional approval note")
+  .option("--self", "record a fallback self-review (only while every other harness is out of usage)")
   .action(wrap(reviewApproveCommand));
 
 program
@@ -164,6 +183,7 @@ program
   .description("Request changes and bounce the issue back to its author")
   .option(agentOpt, agentDesc)
   .option("-n, --notes <text>", "what needs to change (required)")
+  .option("--self", "record a fallback self-review (only while every other harness is out of usage)")
   .action(wrap(reviewChangesCommand));
 
 program

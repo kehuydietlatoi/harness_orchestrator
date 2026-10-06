@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { byNumber, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
+import { byNumber, claimableBy, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
 import type { Issue } from "../src/github/github.js";
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
@@ -62,5 +62,27 @@ describe("openDepsFromMap", () => {
   });
   it("returns [] when the issue has no deps", () => {
     expect(openDepsFromMap(issue(9), open)).toEqual([]);
+  });
+});
+
+describe("claimableBy", () => {
+  const routed = (agent: string) => issue(1, { labels: [`agent:${agent}`] });
+  const unrouted = issue(2, { labels: ["enhancement"] });
+
+  it("lets an agent take work pinned to it and never work pinned to another", () => {
+    expect(claimableBy(routed("claude"), "claude")).toBe(true);
+    expect(claimableBy(routed("codex"), "claude")).toBe(false);
+    expect(claimableBy(routed("codex"), "claude", { requireRouted: true })).toBe(false);
+    expect(claimableBy(routed("claude"), "claude", { requireRouted: true })).toBe(true);
+  });
+
+  it("takes unrouted work by default, as `orch run` always has", () => {
+    expect(claimableBy(unrouted, "claude")).toBe(true);
+    expect(claimableBy(unrouted, "codex", {})).toBe(true);
+  });
+
+  it("refuses unrouted work when routing is required", () => {
+    expect(claimableBy(unrouted, "claude", { requireRouted: true })).toBe(false);
+    expect(claimableBy(unrouted, "claude", { requireRouted: false })).toBe(true);
   });
 });
