@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 export interface ExecResult {
   code: number;
@@ -31,6 +32,13 @@ export function exec(
     let stderr = "";
     let bytes = 0;
     let overflowed = false;
+    // Decode via StringDecoder so a multi-byte UTF-8 character split across two
+    // stream chunks (chunks break at the ~64 KiB highWaterMark, not char
+    // boundaries) is reassembled rather than turned into U+FFFD — otherwise a
+    // large `gh api` JSON page with emoji/accents/CJK could corrupt or fail to
+    // parse. One decoder per stream since they carry independent partial state.
+    const outDecoder = new StringDecoder("utf8");
+    const errDecoder = new StringDecoder("utf8");
 
     // Count raw bytes across both streams; once the cap is hit, stop buffering
     // and kill the child so a runaway process can't grow this unboundedly.
@@ -46,13 +54,19 @@ export function exec(
     };
 
     child.stdout.on("data", (d: Buffer) => {
-      if (accept(d)) stdout += d.toString();
+      if (accept(d)) stdout += outDecoder.write(d);
     });
     child.stderr.on("data", (d: Buffer) => {
-      if (accept(d)) stderr += d.toString();
+      if (accept(d)) stderr += errDecoder.write(d);
     });
     child.on("error", (err) => resolve({ code: 127, stdout, stderr: stderr + String(err) }));
     child.on("close", (code) => {
+      // Flush any bytes the decoders are still holding (a valid stream leaves
+      // nothing pending; a truncated one emits the trailing replacement char).
+      if (!overflowed) {
+        stdout += outDecoder.end();
+        stderr += errDecoder.end();
+      }
       if (overflowed) {
         resolve({
           code: code && code !== 0 ? code : 1,
