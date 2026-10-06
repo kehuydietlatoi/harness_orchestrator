@@ -23,8 +23,10 @@ export function formatFixPrompt(params: {
   failingChecks: readonly string[];
   resumed: boolean;
   baseName: string;
+  /** Guidance from a lead triage that granted this extra round (ADR-0010). */
+  leadGuidance?: string | null;
 }): string {
-  const { issue, pr, worktree, reason, notes, failingChecks, resumed, baseName } = params;
+  const { issue, pr, worktree, reason, notes, failingChecks, resumed, baseName, leadGuidance } = params;
   const why =
     reason === "review"
       ? ["A reviewer requested changes on your pull request:", "", notes?.trim() || "(the reviewer left no notes - re-read the diff critically)"]
@@ -46,6 +48,16 @@ export function formatFixPrompt(params: {
     "## Why you are back",
     ...why,
     "",
+    ...(leadGuidance?.trim()
+      ? [
+          "## Guidance from the lead",
+          "The round budget ran out, and the lead reviewed the task and granted this one extra round. Follow this guidance;",
+          "where it declines part of the feedback as out of scope, decline it (say why in your commit message) instead of doing it.",
+          "",
+          leadGuidance.trim(),
+          "",
+        ]
+      : []),
     ...(resumed ? [] : ["## Original spec", issue.body.trim() || "_(no description)_", ""]),
     "## Rules",
     ...FOLLOW_UP_RULES,

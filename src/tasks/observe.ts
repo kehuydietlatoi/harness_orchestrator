@@ -1,6 +1,7 @@
 import {
   listIssues,
   listOpenPrs,
+  listPrComments,
   listPrReviews,
   prChecksState,
   prMergeability,
@@ -16,6 +17,7 @@ import type { OrchConfig } from "../config.js";
 import { log } from "../util/log.js";
 import { fixRoundsFor, readEvents } from "./events.js";
 import { decideStep, type ChecksFact, type MergeableFact, type Step, type StepFacts } from "./steps.js";
+import { triageFacts, type TriageFacts } from "./triage.js";
 
 /** Everything the loop knows about one in-flight task, observed fresh from GitHub. */
 export interface TaskObservation {
@@ -28,6 +30,8 @@ export interface TaskObservation {
   step: Step;
   /** Reviewer's notes when the latest decision on the current head requests changes. */
   feedback: string | null;
+  /** The lead's guidance from the newest triage that granted another round (ADR-0010), for the fix prompt. */
+  guidance?: string | null;
 }
 
 /**
@@ -43,8 +47,10 @@ export function assembleFacts(params: {
   mergeable: MergeableFact;
   localRounds: number;
   cfg: OrchConfig;
+  /** Triage records on the PR; read only once the round budget is reached (absent: none). */
+  triage?: TriageFacts;
 }): StepFacts {
-  const { issue, author, pr, reviews, checks, mergeable, localRounds, cfg } = params;
+  const { issue, author, pr, reviews, checks, mergeable, localRounds, cfg, triage } = params;
   const rs = reviewState(reviews, pr.number, pr.headSha);
   const approved =
     !cfg.requireCrossReview ||
@@ -66,6 +72,9 @@ export function assembleFacts(params: {
     rounds: Math.max(answeredChangeRequestRounds(reviews, pr.number, pr.headSha), localRounds),
     maxRounds: cfg.maxReviewRounds,
     requireHumanMerge: cfg.requireHumanMerge,
+    triages: triage?.triages ?? 0,
+    maxTriages: cfg.maxLeadTriage,
+    extraRounds: triage?.extraRounds ?? 0,
   };
 }
 
@@ -126,12 +135,18 @@ export async function observeTasks(
         prChecksState(pr.number, { cwd, strict: true }), // a failed lookup must be 'unobserved', never 'red'
         prMergeability(pr.number, { cwd }),
       ]);
-      const facts = assembleFacts({
-        issue, author, pr, reviews, checks, mergeable, localRounds: fixRoundsFor(events, n), cfg,
-      });
+      const base = { issue, author, pr, reviews, checks, mergeable, localRounds: fixRoundsFor(events, n), cfg };
+      let facts = assembleFacts(base);
+      // Triage records matter only once the round budget is reached, so the common path reads no comments.
+      let triage: TriageFacts | undefined;
+      if (cfg.maxLeadTriage > 0 && facts.rounds >= facts.maxRounds) {
+        triage = triageFacts(await listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
+        facts = assembleFacts({ ...base, triage });
+      }
       out.push({
         issue, author, pr, reviews, facts, step: decideStep(facts),
         feedback: latestChangeRequestNotes(reviews, pr.number, pr.headSha),
+        guidance: triage?.guidance ?? null,
       });
     } catch (error) {
       unobserved.push(pr.number);

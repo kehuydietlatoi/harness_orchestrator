@@ -147,6 +147,14 @@ describe("loadConfig", () => {
     }
   });
 
+  it("defaults to one lead triage per task, allows 0 to disable it, and rejects an invalid budget", () => {
+    expect(loadConfig(writeConfig({})).maxLeadTriage).toBe(1);
+    expect(loadConfig(writeConfig({ maxLeadTriage: 0 })).maxLeadTriage).toBe(0);
+    for (const maxLeadTriage of [-1, 1.5, "1", null]) {
+      expect(() => loadConfig(writeConfig({ maxLeadTriage }))).toThrow(/maxLeadTriage/);
+    }
+  });
+
   it("defaults and overrides the disposable ignored allowlist, rejecting malformed values", () => {
     expect(loadConfig(writeConfig({})).disposableIgnored).toEqual(["node_modules/", "dist/", "coverage/", "logs/"]);
     rmSync(dir, { recursive: true, force: true });

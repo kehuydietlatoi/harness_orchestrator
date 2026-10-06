@@ -5,7 +5,10 @@ import { basename, dirname, join, resolve } from "node:path";
 import { log } from "../util/log.js";
 
 /** Which part of the task loop produced a run record (absent on records written before the loop). */
-export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review";
+export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "triage";
+
+/** Every phase a record may carry; anything else is dropped when reading (one list, so a new phase cannot be forgotten). */
+export const RUN_PHASES: readonly RunPhase[] = ["implement", "fix", "resolve-conflict", "review", "triage"];
 
 export interface RunRecord {
   /** Loop phase and 1-based fix round, so cost and rounds-to-approval can be measured. */
@@ -218,7 +221,7 @@ function parseRunRecord(value: unknown): RunRecord | null {
     return null;
   }
 
-  const phase = ["implement", "fix", "resolve-conflict", "review"].includes(obj.phase as string)
+  const phase = RUN_PHASES.includes(obj.phase as RunPhase)
     ? (obj.phase as RunPhase)
     : undefined;
   return {

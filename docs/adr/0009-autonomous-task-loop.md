@@ -28,7 +28,7 @@ context on every round.
 | head has no acceptable approval | `review` |
 | CI pending / mergeability unknown | `wait` |
 | approved, green, clean | `merge`, or `await-human` under `requireHumanMerge` |
-| any fix-type step with the round budget spent | `escalate` |
+| any fix-type step with the round budget spent | `escalate` (`triage` first, see ADR-0010) |
 
 When a step finishes, its result (`review.approved`, `fix.pushed`, `step.failed`, ...) wakes the loop
 immediately, so a review starts the moment a PR opens and a fix starts the moment a review lands -

@@ -57,9 +57,25 @@ stops with *plan complete* when every scoped issue is closed or handed to a huma
 stops the pipeline on failure and prints the command that resumes it, so nothing runs on a
 half-created or unrouted plan.
 
+**A stuck task is triaged before it reaches a human.** When a task spends its round budget, the
+loop asks the lead once (`maxLeadTriage`, default 1) instead of escalating at once. The lead reads a
+read-only checkout of exactly the PR head, the spec with its plan context, every round's review notes,
+CI state, and the changed files, and returns one of two decisions: `retry` grants one more fix round
+with concrete guidance for the author (which feedback to act on, which to decline as out of scope, how
+to verify), optionally moving an easy task to the hard tier; `escalate` hands it to a human with a
+diagnosis and the one question the human must answer. The decision is recorded as an `orch-triage:v1`
+PR comment and the loop derives the triage count and the granted rounds from those records, so a crash
+cannot cause a second triage, and the granted rounds are capped by the budget however many records
+exist. Triage is fail-closed: a paused lead, a failed or timed-out run, or a reply that is not one valid
+decision escalates exactly as before. Triage changes nothing else: approval, CI and the merge gate are
+untouched, and the extra round is still re-reviewed.
+
 ## Consequences
 
-- The operator's work is: brainstorm, approve once, and handle escalations.
+- The operator's work is: brainstorm, approve once, and handle escalations, which now arrive with
+  the lead's diagnosis and a specific question, or not at all when one guided round was enough.
+- A stuck task costs at most `maxReviewRounds + maxLeadTriage` fix rounds and `maxLeadTriage` lead
+  runs before a human sees it.
 - Routing from an approved plan carries no `assigned-by:brain` label: the operator approved it
   with the plan. Routing the judge adds still does.
 - A scoped run never routes or claims unrelated backlog. An issue it cannot finish (blocked on

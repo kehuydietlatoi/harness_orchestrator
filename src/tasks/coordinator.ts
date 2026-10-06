@@ -7,12 +7,12 @@ import { appendEvent, type OrchEvent } from "./events.js";
 import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
 import { processNext, type RunSummary } from "./runner.js";
 import {
-  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, type StepResult,
+  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
 } from "./step-exec.js";
 import type { Step } from "./steps.js";
 
 /** Steps the coordinator performs (the rest of `Step` is "do nothing, just report"). */
-export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "escalate" }>;
+export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" }>;
 
 export interface AutopilotOptions {
   /** Agent runs in flight at once. */
@@ -39,6 +39,8 @@ export interface AutopilotOptions {
 export interface AutopilotSummary {
   merged: number[];
   escalated: number[];
+  /** Tasks the lead triaged and granted another round (ADR-0010). */
+  triaged: number[];
   /** Tasks the loop implemented and submitted for review. */
   submitted: number[];
   /** Approved and green but waiting for a human because `requireHumanMerge` is on. */
@@ -81,7 +83,7 @@ export interface CoordinatorDeps {
 
 /** Finish work before starting new work, and cheap decisive steps before slow agent runs. */
 const PRIORITY: Record<ActionableStep["kind"], number> = {
-  merge: 0, escalate: 1, fix: 2, "resolve-conflict": 3, review: 4,
+  merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
 };
 
 /** Consecutive failed attempts at a task's step before a human is called in. */
@@ -104,6 +106,7 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
         case "fix": return executeFix(obs, step.reason, cfg, cwd);
         case "resolve-conflict": return executeResolveConflict(obs, cfg, cwd);
         case "merge": return executeMerge(obs, cfg, cwd);
+        case "triage": return executeTriage(obs, step.reason, cfg, cwd);
         case "escalate": return executeEscalate(obs, step.reason, cwd);
       }
     },
@@ -150,7 +153,7 @@ async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): 
 
 function isActionable(step: Step): step is ActionableStep {
   return step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
-    step.kind === "merge" || step.kind === "escalate";
+    step.kind === "merge" || step.kind === "triage" || step.kind === "escalate";
 }
 
 function describe(step: ActionableStep): string {
@@ -169,7 +172,9 @@ function describe(step: ActionableStep): string {
  */
 export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps): Promise<AutopilotSummary> {
   const max = Math.max(1, opts.max);
-  const summary: AutopilotSummary = { merged: [], escalated: [], submitted: [], awaitingHuman: [], ambiguous: [], escalationFailed: [], failures: 0, stopped: "drained" };
+  const summary: AutopilotSummary = {
+    merged: [], escalated: [], triaged: [], submitted: [], awaitingHuman: [], ambiguous: [], escalationFailed: [], failures: 0, stopped: "drained",
+  };
   const inflight = new Map<string, Promise<void>>();
   /** Consecutive failures of ONE step on an issue. A different step starts a fresh count: a failed review followed
    * by an external approval and one failed merge is a first failure of the merge, not a second failure. */
@@ -246,6 +251,11 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         failing.delete(issue);
         retryAt.delete(issue);
         lastUnavailable.delete(issue);
+        break;
+      case "triage.retry":
+        if (!summary.triaged.includes(issue)) summary.triaged.push(issue);
+        failing.delete(issue);
+        retryAt.delete(issue);
         break;
       default:
         failing.delete(issue);

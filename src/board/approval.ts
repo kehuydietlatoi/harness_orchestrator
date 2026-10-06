@@ -79,6 +79,11 @@ export function answeredChangeRequestRounds(reviews: readonly PrReview[], pr: nu
   return heads.size;
 }
 
+/** A recorded review's human-readable notes: its body without the trailing record marker. Pure. */
+export function reviewNotes(review: PrReview): string {
+  return review.body.replace(/\n*<!-- orch-review:v1 .* -->\s*$/, "").trim();
+}
+
 /**
  * The reviewer's notes from the newest request-changes record bound to `head`, or null when
  * the latest decision on that head is not a request for changes. Pure.
@@ -88,7 +93,7 @@ export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: numbe
   for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
     const r = parseReview(review);
     if (!r || r.pr !== pr) continue;
-    latest = { decision: r.decision, head: r.head, notes: review.body.replace(/\n*<!-- orch-review:v1 .* -->\s*$/, "").trim() };
+    latest = { decision: r.decision, head: r.head, notes: reviewNotes(review) };
   }
   return latest && latest.decision === "request-changes" && latest.head === head ? latest.notes : null;
 }

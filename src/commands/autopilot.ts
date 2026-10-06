@@ -31,7 +31,7 @@ function formatIssues(numbers: Iterable<number>): string {
 function describeStep(step: Step): string {
   switch (step.kind) {
     case "fix": return `fix (${step.reason})`;
-    case "none": case "wait": case "await-human": case "escalate": return `${step.kind}: ${step.reason}`;
+    case "none": case "wait": case "await-human": case "triage": case "escalate": return `${step.kind}: ${step.reason}`;
     default: return step.kind;
   }
 }
@@ -90,6 +90,7 @@ export async function autopilotCommand(opts: {
       pc.dim(
         ` — up to ${max} concurrent, polling every ${pollMs / 1000}s, ${cfg.maxReviewRounds} fix round(s) per task` +
           (cfg.requireHumanMerge ? ", human merges" : ", auto-merge") +
+          (cfg.maxLeadTriage > 0 ? `, lead triage before escalating (${cfg.maxLeadTriage})` : "") +
           (opts.claim === false ? ", no new tasks" : ", claims only issues with an agent: label") +
           (scope ? `, scoped to ${formatIssues(scope)}` : ""),
       ),
@@ -121,6 +122,9 @@ export async function autopilotCommand(opts: {
   }
   if (summary.escalationFailed.length) {
     console.log(pc.red(`  COULD NOT ESCALATE (writes kept failing): ${summary.escalationFailed.map((n) => `#${n}`).join(", ")}  (needs you, unlabelled)`));
+  }
+  if (summary.triaged.length) {
+    console.log(`  triaged:   ${formatIssues(summary.triaged)}  (the lead granted one more guided round)`);
   }
   if (summary.escalated.length) {
     console.log(pc.red(`  escalated to you:    ${summary.escalated.map((n) => `#${n}`).join(", ")}  (needs-attention)`));

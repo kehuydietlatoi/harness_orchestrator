@@ -30,6 +30,12 @@ export interface StepFacts {
   rounds: number;
   maxRounds: number;
   requireHumanMerge: boolean;
+  /** Lead triages already recorded on this PR (ADR-0010). Absent counts as 0. */
+  triages?: number;
+  /** Triages allowed before a stuck task goes to a human (`maxLeadTriage`). Absent counts as 0: no triage. */
+  maxTriages?: number;
+  /** Extra fix rounds granted by triage decisions. Absent counts as 0. */
+  extraRounds?: number;
 }
 
 export type Step =
@@ -46,27 +52,33 @@ export type Step =
   | { kind: "await-human"; reason: string }
   /** Something external (CI, GitHub's mergeability computation) must settle first. */
   | { kind: "wait"; reason: string }
+  /** Too many rounds without converging: ask the lead whether one more guided round can finish it. */
+  | { kind: "triage"; reason: string }
   /** Too many rounds without converging: hand the task to a human. */
   | { kind: "escalate"; reason: string };
 
 /** Steps that spend an agent run (and count toward the round budget when they change code). */
-export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["review", "fix", "resolve-conflict"]);
+export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["review", "fix", "resolve-conflict", "triage"]);
 
 /**
  * Precedence, highest first:
  *   needs-attention -> no PR -> changes requested -> red CI -> conflict -> review -> settle -> merge.
  * Conflicts are resolved *before* review so a head that is about to change is never reviewed,
- * and review happens before waiting on CI so the two overlap.
+ * and review happens before waiting on CI so the two overlap. A fix-type step whose round
+ * budget (`maxRounds` plus any rounds a triage granted) is spent goes to the lead for triage
+ * while its triage budget lasts, and to a human after that.
  */
 export function decideStep(f: StepFacts): Step {
   if (f.attention) return { kind: "none", reason: "needs-attention: a human owns this task" };
   const pr = f.pr;
   if (!pr) return { kind: "none", reason: "no open pull request" };
 
-  const exhausted = f.rounds >= f.maxRounds;
+  const extra = f.extraRounds ?? 0;
+  const exhausted = f.rounds >= f.maxRounds + extra;
   const spent = (what: string): Step => ({
-    kind: "escalate",
-    reason: `${what} after ${f.rounds} fix round${f.rounds === 1 ? "" : "s"} (limit ${f.maxRounds})`,
+    kind: (f.triages ?? 0) < (f.maxTriages ?? 0) ? "triage" : "escalate",
+    reason: `${what} after ${f.rounds} fix round${f.rounds === 1 ? "" : "s"} ` +
+      `(limit ${f.maxRounds}${extra ? ` + ${extra} granted by triage` : ""})`,
   });
 
   if (f.review.changesRequested) {

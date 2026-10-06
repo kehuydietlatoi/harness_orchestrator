@@ -494,6 +494,21 @@ export async function failingChecks(number: number, opts: { cwd?: string } = {})
   }
 }
 
+/** A conversation comment on an issue or PR (REST `issues/<n>/comments`). */
+export interface IssueComment {
+  id: number;
+  body: string;
+  created_at: string;
+}
+
+/** Every conversation comment on a PR, oldest first (paginated: a fixed limit would hide later ones). */
+export async function listPrComments(number: number, opts: { cwd?: string } = {}): Promise<IssueComment[]> {
+  const raw = await paginatedApi<{ id: number; body?: string | null; created_at?: string }>(
+    `repos/{owner}/{repo}/issues/${number}/comments`, {}, opts,
+  );
+  return raw.map((c) => ({ id: c.id, body: c.body ?? "", created_at: c.created_at ?? "" })).sort((a, b) => a.id - b.id);
+}
+
 /** Post a plain comment on a PR (used when the loop escalates a task to a human). */
 export async function commentOnPr(number: number, body: string, opts: { cwd?: string } = {}): Promise<void> {
   const r = await exec("gh", ["pr", "comment", String(number), "--body-file", "-"], { cwd: opts.cwd, input: body });
