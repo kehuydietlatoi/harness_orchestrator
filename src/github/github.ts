@@ -330,9 +330,16 @@ export async function listPrs(
   return items.map(parseRestPr);
 }
 
-export async function prDiff(number: number, opts: { cwd?: string } = {}): Promise<string> {
+/**
+ * The PR's unified diff. By default a failure comes back as the text `(diff unavailable: ...)`, which is fine
+ * for a human reading `orch review` but is not a diff: anything that *reviews* must pass `strict: true`, which
+ * throws instead, so a missing diff can never be mistaken for "nothing suspicious in it".
+ */
+export async function prDiff(number: number, opts: { cwd?: string; strict?: boolean } = {}): Promise<string> {
   const r = await exec("gh", ["pr", "diff", String(number)], { cwd: opts.cwd });
-  return r.code === 0 ? r.stdout : `(diff unavailable: ${r.stderr.trim()})`;
+  if (r.code === 0) return r.stdout;
+  if (opts.strict) throw new Error(`could not fetch the diff of PR #${number}: ${r.stderr.trim() || `exit ${r.code}`}`);
+  return `(diff unavailable: ${r.stderr.trim()})`;
 }
 
 /** Are the PR's required checks green? No checks configured counts as pass. */

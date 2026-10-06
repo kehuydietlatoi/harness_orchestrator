@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { prepareReviewCheckout } from "../src/board/review-run.js";
+import { prepareReviewCheckout, stageDiffArtifact } from "../src/board/review-run.js";
 
 const git = (cwd: string, ...args: string[]): string =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -111,5 +111,35 @@ describe("prepareReviewCheckout", () => {
     await expect(prepareReviewCheckout({ number: 7, headSha: first }, repo, lying)).rejects.toThrow(
       /is not at the PR head/,
     );
+  });
+});
+
+describe("stageDiffArtifact", () => {
+  let dir = "";
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "orch-stage-")); });
+  afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+  it("writes the complete diff, however large, where the reviewer can read it", () => {
+    const diff = `diff --git a/x b/x\n${"+line of a very large diff\n".repeat(30_000)}`; // ~800 kB
+    const staged = stageDiffArtifact(dir, 75, diff);
+
+    expect(staged.relativePath).toBe(".orch-review/pr-75.diff");
+    expect(staged.absolutePath.replace(/\\/g, "/")).toBe(join(dir, ".orch-review", "pr-75.diff").replace(/\\/g, "/"));
+    expect(readFileSync(staged.absolutePath, "utf8")).toBe(diff); // not a byte lost
+  });
+
+  it("stages each PR separately and overwrites a stale copy", () => {
+    stageDiffArtifact(dir, 1, "first");
+    const second = stageDiffArtifact(dir, 2, "second");
+    const again = stageDiffArtifact(dir, 1, "replaced");
+
+    expect(readFileSync(second.absolutePath, "utf8")).toBe("second");
+    expect(readFileSync(again.absolutePath, "utf8")).toBe("replaced");
+  });
+
+  it("throws when it cannot write, so the caller can fail closed", () => {
+    const file = join(dir, "not-a-directory");
+    writeFileSync(file, "x");
+    expect(() => stageDiffArtifact(file, 1, "diff")).toThrow();
   });
 });

@@ -42,6 +42,14 @@ missing. Issue #71 was interrupted exactly this way.
   cooldown are caller-supplied process state under one shared identity.
 - Reviewer sessions are fresh by construction (a new process per review), so no author context
   leaks into the review. Resuming the *author's* session after a review is separate work.
+- The reviewer is never given a partial diff. Up to `MAX_DIFF_CHARS` (120k) the diff is inlined; a
+  larger one is written in full to `.orch-review/pr-<n>.diff` inside the review checkout and the prompt
+  lists every changed file (added, deleted, renamed, modified, with line counts) and tells the reviewer
+  to read all of it or answer request-changes saying what it did not cover. Deleted files and removed
+  lines exist *only* in the diff (the checkout cannot show them), so they must never fall off the end.
+  The diff is fetched once, strictly (`prDiff(..., { strict: true })`): if it cannot be fetched or staged,
+  or is empty, the review fails closed and records nothing. An earlier version cut the diff at the limit
+  and still recorded verdicts; for a 360k-character diff that hid 36 of 61 files.
 - The verdict is recorded against the PR head SHA, so the reviewer reads a throwaway detached
   checkout of exactly that commit (`prepareReviewCheckout`), created before the run and removed
   after it. The author's worktree (possibly ahead, behind, dirty or on another branch) and the

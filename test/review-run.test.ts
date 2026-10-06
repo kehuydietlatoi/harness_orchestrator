@@ -15,7 +15,9 @@ vi.mock("../src/tasks/runner.js", () => ({ resolveTaskModel: () => ({ model: "m"
 
 import * as gh from "../src/github/github.js";
 import { availabilityPath, markUnavailable, unavailableUntil } from "../src/board/availability.js";
-import { formatReviewPrompt, parseVerdict, runAutomatedReview, type ReviewRunDeps } from "../src/board/review-run.js";
+import {
+  formatReviewPrompt, listChangedFiles, MAX_DIFF_CHARS, parseVerdict, runAutomatedReview, type ReviewRunDeps,
+} from "../src/board/review-run.js";
 import { checkMergeGate } from "../src/board/review.js";
 
 const head = "a".repeat(40);
@@ -39,7 +41,12 @@ function runner(results: Array<{ code?: number; text?: string; raw?: string; tim
     checkouts.push(c);
     return { path: c.path, release: async () => { c.released = true; } };
   };
-  return { deps: { runner: fn, checkout, now: () => new Date() } satisfies ReviewRunDeps, calls, checkouts };
+  const staged: Array<{ checkoutPath: string; prNumber: number; diff: string }> = [];
+  const stageDiff: ReviewRunDeps["stageDiff"] = (checkoutPath, prNumber, diff) => {
+    staged.push({ checkoutPath, prNumber, diff });
+    return { relativePath: `.orch-review/pr-${prNumber}.diff`, absolutePath: `${checkoutPath}/.orch-review/pr-${prNumber}.diff` };
+  };
+  return { deps: { runner: fn, checkout, stageDiff, now: () => new Date() } satisfies ReviewRunDeps, calls, checkouts, staged };
 }
 
 describe("parseVerdict", () => {
@@ -57,6 +64,20 @@ describe("parseVerdict", () => {
   });
 });
 
+/** A small, ordinary diff. */
+const SMALL_DIFF = [
+  "diff --git a/src/a.ts b/src/a.ts", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -1 +1 @@", "-const old = 0;", "+const added = 1;",
+  "diff --git a/src/gone.ts b/src/gone.ts", "deleted file mode 100644", "--- a/src/gone.ts", "+++ /dev/null", "@@ -1 +0,0 @@", "-export const gone = 1;",
+].join("\n");
+
+/** A diff far beyond the old 120k cutoff whose LAST file is a deletion: reading the checkout cannot reveal it. */
+const BIG_DIFF = [
+  "diff --git a/src/big.ts b/src/big.ts", "--- a/src/big.ts", "+++ b/src/big.ts", "@@ -1 +1,6000 @@",
+  ...Array.from({ length: 6000 }, (_, i) => `+const line${i} = ${i}; // padding to push the diff well past the old cutoff`),
+  "diff --git a/src/removed-late.ts b/src/removed-late.ts", "deleted file mode 100644", "--- a/src/removed-late.ts", "+++ /dev/null",
+  "@@ -1,2 +0,0 @@", "-export const removedLate = 1;", "-export const alsoRemoved = 2;",
+].join("\n");
+
 describe("formatReviewPrompt", () => {
   const base = { issue, pr, diff: "diff --git a b", author: "claude", reviewer: "codex", mode: "cross" as const };
 
@@ -73,8 +94,63 @@ describe("formatReviewPrompt", () => {
     expect(formatReviewPrompt({ ...base, reviewer: "claude", mode: "self" })).toContain("fresh, independent session");
   });
 
-  it("truncates an oversized diff", () => {
-    expect(formatReviewPrompt({ ...base, diff: "x".repeat(200_000) })).toContain("diff truncated");
+  it("inlines a small diff in full and lists the files it changes", () => {
+    const prompt = formatReviewPrompt({ ...base, diff: SMALL_DIFF });
+    expect(prompt).toContain("+const added = 1;");
+    expect(prompt).toContain('<changed-files count="2">');
+    expect(prompt).toContain("- src/a.ts (modified, +1 -1)");
+    expect(prompt).toContain("- src/gone.ts (deleted, +0 -1)");
+    expect(prompt).not.toContain("too large to inline");
+  });
+
+  it("refuses to build a prompt that would truncate an oversized diff", () => {
+    expect(() => formatReviewPrompt({ ...base, diff: BIG_DIFF })).toThrow(/must be staged as a file; refusing to truncate it/);
+  });
+
+  it("points an oversized diff at the staged file instead of inlining part of it", () => {
+    const prompt = formatReviewPrompt({
+      ...base, diff: BIG_DIFF, artifact: { relativePath: ".orch-review/pr-62.diff", absolutePath: "/co/.orch-review/pr-62.diff" },
+    });
+
+    expect(prompt).toContain(".orch-review/pr-62.diff");
+    expect(prompt).toContain("/co/.orch-review/pr-62.diff");
+    expect(prompt).toContain("Read ALL of it");
+    expect(prompt).toContain("request-changes and say exactly what you did not review");
+    expect(prompt).not.toContain("const line5999"); // none of the diff body is inlined, so none of it is silently cut off
+    expect(prompt.length).toBeLessThan(MAX_DIFF_CHARS / 4);
+    // The file that sits entirely beyond the old cutoff - and cannot be recovered by reading the checkout - is listed.
+    expect(prompt).toContain("- src/removed-late.ts (deleted, +0 -2)");
+  });
+});
+
+describe("listChangedFiles", () => {
+  it("reports added, deleted, renamed, modified and binary files with line counts", () => {
+    const diff = [
+      "diff --git a/src/new.ts b/src/new.ts", "new file mode 100644", "--- /dev/null", "+++ b/src/new.ts", "@@ -0,0 +2 @@", "+one", "+two",
+      "diff --git a/src/old.ts b/src/old.ts", "deleted file mode 100644", "--- a/src/old.ts", "+++ /dev/null", "@@ -1,3 +0,0 @@", "-a", "-b", "-c",
+      "diff --git a/src/before.ts b/src/after.ts", "similarity index 90%", "rename from src/before.ts", "rename to src/after.ts", "@@ -1 +1 @@", "-x", "+y",
+      "diff --git a/src/mod.ts b/src/mod.ts", "--- a/src/mod.ts", "+++ b/src/mod.ts", "@@ -1,2 +1,2 @@", " keep", "-old", "+new",
+      "diff --git a/img/logo.png b/img/logo.png", "Binary files a/img/logo.png and b/img/logo.png differ",
+    ].join("\n");
+
+    expect(listChangedFiles(diff)).toEqual([
+      { path: "src/new.ts", status: "added", binary: false, additions: 2, deletions: 0 },
+      { path: "src/old.ts", status: "deleted", binary: false, additions: 0, deletions: 3 },
+      { path: "src/after.ts", status: "renamed", from: "src/before.ts", binary: false, additions: 1, deletions: 1 },
+      { path: "src/mod.ts", status: "modified", binary: false, additions: 1, deletions: 1 },
+      { path: "img/logo.png", status: "modified", binary: true, additions: 0, deletions: 0 },
+    ]);
+  });
+
+  it("does not count the +++/--- headers, and handles paths with spaces", () => {
+    const diff = ["diff --git a/my file.ts b/my file.ts", "--- a/my file.ts", "+++ b/my file.ts", "@@ -1 +1 @@", "-a", "+b"].join("\n");
+    expect(listChangedFiles(diff)).toEqual([{ path: "my file.ts", status: "modified", binary: false, additions: 1, deletions: 1 }]);
+  });
+
+  it("copes with empty and malformed input", () => {
+    expect(listChangedFiles("")).toEqual([]);
+    expect(listChangedFiles("diff --git a b")).toEqual([]);
+    expect(listChangedFiles("not a diff at all\n+ looks like an addition")).toEqual([]);
   });
 });
 
@@ -158,6 +234,74 @@ describe("runAutomatedReview", () => {
 
       await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
       expect(seen).toEqual([head]);
+    });
+  });
+
+  describe("the reviewer is never given a partial diff", () => {
+    it("inlines a small diff and stages nothing", async () => {
+      vi.mocked(gh.prDiff).mockResolvedValue(SMALL_DIFF);
+      const { deps, calls, staged } = runner([{ text: approveText }]);
+
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+      expect(staged).toEqual([]);
+      expect(calls[0].prompt).toContain("+const added = 1;");
+    });
+
+    it("stages an oversized diff IN FULL and lists a deleted file that sits beyond the old cutoff", async () => {
+      expect(BIG_DIFF.length).toBeGreaterThan(MAX_DIFF_CHARS * 1.2);
+      expect(BIG_DIFF.indexOf("src/removed-late.ts")).toBeGreaterThan(MAX_DIFF_CHARS); // invisible under the old truncation
+      vi.mocked(gh.prDiff).mockResolvedValue(BIG_DIFF);
+      const { deps, calls, staged, checkouts } = runner([{ text: approveText }]);
+
+      const out = await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+      expect(staged).toHaveLength(1);
+      expect(staged[0].diff).toBe(BIG_DIFF); // the complete diff, byte for byte
+      expect(staged[0].checkoutPath).toBe(checkouts[0].path); // inside the exact-head checkout the reviewer runs in
+      expect(calls[0].prompt).toContain(".orch-review/pr-62.diff");
+      expect(calls[0].prompt).toContain("- src/removed-late.ts (deleted, +0 -2)");
+      expect(calls[0].prompt).not.toContain("const line5999");
+      expect(out.decision).toBe("approve");
+    });
+
+    it("fails closed when an oversized diff cannot be staged: no review, nothing recorded, checkout released", async () => {
+      vi.mocked(gh.prDiff).mockResolvedValue(BIG_DIFF);
+      const { deps, calls, checkouts } = runner([{ text: approveText }]);
+      deps.stageDiff = () => { throw new Error("disk full"); };
+
+      await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("disk full");
+
+      expect(calls).toHaveLength(0);
+      expect(gh.recordPrReview).not.toHaveBeenCalled();
+      expect(checkouts[0].released).toBe(true);
+    });
+
+    it("fails closed when the diff cannot be fetched, before any checkout or reviewer run", async () => {
+      vi.mocked(gh.prDiff).mockRejectedValue(new Error("could not fetch the diff of PR #62: HTTP 406 diff too large"));
+      const { deps, calls, checkouts } = runner([{ text: approveText }]);
+
+      await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("could not fetch the diff of PR #62");
+
+      expect(calls).toHaveLength(0);
+      expect(checkouts).toHaveLength(0);
+      expect(gh.recordPrReview).not.toHaveBeenCalled();
+    });
+
+    it("refuses to review an empty diff rather than approving nothing", async () => {
+      vi.mocked(gh.prDiff).mockResolvedValue("  \n");
+      const { deps, calls } = runner([{ text: approveText }]);
+
+      await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("nothing to review");
+      expect(calls).toHaveLength(0);
+    });
+
+    it("asks for the diff strictly, and only once even when it falls back to another reviewer", async () => {
+      const { deps } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
+      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+      expect(gh.prDiff).toHaveBeenCalledTimes(1);
+      expect(gh.prDiff).toHaveBeenCalledWith(62, { cwd, strict: true });
     });
   });
 

@@ -4,7 +4,33 @@ const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
-const { mergePr, recordPrReview, listPrReviews, prChecksState } = await import("../src/github/github.js");
+const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff } = await import("../src/github/github.js");
+
+describe("prDiff", () => {
+  beforeEach(() => execMock.mockReset());
+
+  it("returns the diff on success, strict or not", async () => {
+    for (const strict of [false, true]) {
+      execMock.mockResolvedValueOnce({ code: 0, stdout: "diff --git a/x b/x\n", stderr: "" });
+      expect(await prDiff(7, { strict })).toBe("diff --git a/x b/x\n");
+    }
+  });
+
+  it("hands a human reader a readable message on failure, but a reviewer an ERROR (never fake diff text)", async () => {
+    const failure = { code: 1, stdout: "", stderr: "HTTP 406: diff exceeded the maximum number of lines (20000)" };
+
+    execMock.mockResolvedValueOnce(failure);
+    expect(await prDiff(7)).toBe("(diff unavailable: HTTP 406: diff exceeded the maximum number of lines (20000))");
+
+    execMock.mockResolvedValueOnce(failure);
+    await expect(prDiff(7, { strict: true })).rejects.toThrow(/could not fetch the diff of PR #7: HTTP 406/);
+  });
+
+  it("strict mode names the exit code when gh said nothing", async () => {
+    execMock.mockResolvedValueOnce({ code: 137, stdout: "", stderr: "" });
+    await expect(prDiff(7, { strict: true })).rejects.toThrow("exit 137");
+  });
+});
 
 describe("prChecksState", () => {
   const results = (...buckets: string[]) => JSON.stringify(buckets.map((bucket) => ({ bucket, state: "X" })));
