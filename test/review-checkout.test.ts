@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { prepareReviewCheckout, stageDiffArtifact } from "../src/board/review-run.js";
 
@@ -59,7 +59,8 @@ describe("prepareReviewCheckout", () => {
 
   it("removes the directory and unregisters the worktree on release", async () => {
     const checkout = await prepareReviewCheckout({ number: 7, headSha: first }, repo);
-    expect(git(repo, "worktree", "list")).toContain(checkout.path.replace(/\\/g, "/"));
+    // Compare the unique directory name: Windows runners spell the same temp path two ways (8.3 short vs long).
+    expect(git(repo, "worktree", "list")).toContain(basename(checkout.path));
 
     await checkout.release();
 
