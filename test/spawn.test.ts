@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnInteractive, spawnLogged } from "../src/util/spawn.js";
@@ -57,6 +57,34 @@ describe("spawnLogged", () => {
     expect(r.timedOut).toBe(true);
     expect(r.code).toBe(124);
   });
+
+  // Windows launches harnesses through cmd.exe, so the direct child is a shell wrapper. A timeout that only
+  // killed it left the real harness (and whatever it spawned) running: a review reported as timed out kept
+  // working for 44 more minutes and its verdict was thrown away. Real processes, because only they can show it.
+  it.runIf(process.platform === "win32")(
+    "a timeout kills the whole process tree behind the shell wrapper, not just the wrapper",
+    async () => {
+      const d = tmp();
+      const beat = join(d, "heartbeat.txt");
+      writeFileSync(join(d, "grandchild.js"),
+        `setInterval(() => require("node:fs").appendFileSync(${JSON.stringify(beat)}, "x"), 50);`);
+      writeFileSync(join(d, "parent.js"),
+        `require("node:child_process").spawn(process.execPath, [${JSON.stringify(join(d, "grandchild.js"))}], { stdio: "ignore" });
+` +
+        "setInterval(() => {}, 1000);");
+
+      const r = await spawnLogged(process.execPath, [join(d, "parent.js")], { timeoutMs: 1200, shell: true });
+      expect(r.timedOut).toBe(true);
+      const alive = statSync(beat).size;
+      expect(alive).toBeGreaterThan(0); // the grandchild really was running while the parent was
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      const afterKill = statSync(beat).size;
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      expect(statSync(beat).size).toBe(afterKill); // nothing is still writing: the whole tree is gone
+    },
+    20_000,
+  );
 
   it("returns 127 when the command cannot start", async () => {
     const r = await spawnLogged("definitely-not-a-real-command-xyz", []);

@@ -104,6 +104,16 @@ describe("loadConfig", () => {
     }
   });
 
+  it("gives automated reviews their own, shorter timeout and rejects an invalid one", () => {
+    const config = loadConfig(writeConfig({}));
+    expect(config.reviewTimeoutMs).toBe(900_000);
+    expect(config.reviewTimeoutMs).toBeLessThan(config.taskTimeoutMs);
+    expect(loadConfig(writeConfig({ reviewTimeoutMs: 120_000 })).reviewTimeoutMs).toBe(120_000);
+    for (const reviewTimeoutMs of [0, -5, 1.5, "900000", null]) {
+      expect(() => loadConfig(writeConfig({ reviewTimeoutMs }))).toThrow(/reviewTimeoutMs/);
+    }
+  });
+
   it("defaults the review round budget and rejects an invalid one", () => {
     expect(loadConfig(writeConfig({})).maxReviewRounds).toBe(3);
     expect(loadConfig(writeConfig({ maxReviewRounds: 5 })).maxReviewRounds).toBe(5);

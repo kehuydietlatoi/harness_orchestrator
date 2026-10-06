@@ -1,5 +1,25 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
+
+/**
+ * Kill `child` and everything it started.
+ *
+ * On Windows the harnesses are launched through `cmd.exe` (so `.cmd` shims resolve), which makes the direct
+ * child a shell wrapper: killing only it leaves the real harness, and anything it spawned, running. That is
+ * not hypothetical - a review that hit its timeout was reported as failed while Codex carried on for another
+ * 44 minutes, burning usage, and its verdict was lost. `taskkill /T` takes the whole tree. On POSIX the
+ * harness is the direct child (no shell), so killing it directly is already right.
+ */
+export function killProcessTree(child: ChildProcess): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    killer.on("error", () => child.kill("SIGKILL")); // taskkill missing: at least stop the wrapper
+    return;
+  }
+  child.kill("SIGKILL");
+}
 
 export interface SpawnResult {
   code: number; // 124 = timed out, 127 = failed to start
@@ -57,7 +77,7 @@ export function spawnLogged(
     const timer = opts.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill("SIGKILL");
+          killProcessTree(child);
         }, opts.timeoutMs)
       : undefined;
 

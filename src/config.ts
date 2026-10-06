@@ -61,6 +61,12 @@ export interface OrchConfig {
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
+  /**
+   * How long one automated review may run. Much shorter than a task: reading a diff takes minutes, and a
+   * review that has not answered in this long is stuck (for instance waiting on sub-agents it spawned itself),
+   * which is better failed and retried than waited on for the full task budget.
+   */
+  reviewTimeoutMs: number;
   defaultEffort?: "easy" | "hard";
   adapters: Record<string, AdapterConfig>;
   /** Per-million-token USD rates keyed by resolved model string, for computing a
@@ -89,6 +95,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
   worktreeRoot: "../wt",
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
+  reviewTimeoutMs: 900_000, // 15 minutes
   defaultEffort: "hard",
   // Both tiers default to the same capable model at medium effort; set `models.hard`
   // (and `effort:` labels) to opt individual tasks into something stronger. Codex pins
@@ -153,6 +160,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
       !raw.disposableIgnored.every((p) => typeof p === "string" && p.trim().length > 0))
   ) {
     throw new Error("disposableIgnored must be an array of non-empty path strings when configured");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "reviewTimeoutMs") &&
+    (!Number.isInteger(raw.reviewTimeoutMs) || (raw.reviewTimeoutMs as number) < 1)
+  ) {
+    throw new Error("reviewTimeoutMs must be a positive integer (milliseconds)");
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {

@@ -209,6 +209,7 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "worktreeRoot": "../wt",
   "maxConcurrent": 2,
   "taskTimeoutMs": 1800000,
+  "reviewTimeoutMs": 900000,
   "defaultEffort": "hard",
   "adapters": {
     "claude": {

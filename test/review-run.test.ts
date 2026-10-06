@@ -29,10 +29,10 @@ const limitRaw =
   '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}';
 
 function runner(results: Array<{ code?: number; text?: string; raw?: string; timedOut?: boolean }>) {
-  const calls: Array<{ reviewer: string; prompt: string; runCwd: string }> = [];
+  const calls: Array<{ reviewer: string; prompt: string; runCwd: string; timeoutMs: number }> = [];
   const checkouts: Array<{ path: string; released: boolean }> = [];
   const fn: ReviewRunDeps["runner"] = async (args) => {
-    calls.push({ reviewer: args.reviewer, prompt: args.prompt, runCwd: args.runCwd });
+    calls.push({ reviewer: args.reviewer, prompt: args.prompt, runCwd: args.runCwd, timeoutMs: args.timeoutMs });
     const r = results[calls.length - 1] ?? {};
     return { code: r.code ?? 0, timedOut: r.timedOut ?? false, text: r.text ?? "", raw: r.raw ?? "" };
   };
@@ -88,6 +88,12 @@ describe("formatReviewPrompt", () => {
     expect(prompt).toContain("diff --git a b");
     expect(prompt).toContain('"decision"');
     expect(prompt).toContain("READ-ONLY");
+  });
+
+  it("tells the reviewer to do the whole review itself instead of delegating to sub-agents", () => {
+    const prompt = formatReviewPrompt(base);
+    expect(prompt).toContain("Do the whole review yourself, in this session");
+    expect(prompt).toContain("Do NOT spawn, message, or wait for other agents or sub-agents");
   });
 
   it("tells a self-reviewer to stay independent", () => {
@@ -235,6 +241,22 @@ describe("runAutomatedReview", () => {
       await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
       expect(seen).toEqual([head]);
     });
+  });
+
+  it("gives the reviewer its own timeout, not the (much longer) task timeout", async () => {
+    const cfg: OrchConfig = { ...DEFAULT_CONFIG, reviewTimeoutMs: 123_456, taskTimeoutMs: 9_999_999 };
+    const { deps, calls } = runner([{ text: approveText }]);
+
+    await runAutomatedReview(62, cfg, cwd, {}, deps);
+
+    expect(calls[0].timeoutMs).toBe(123_456);
+  });
+
+  it("reports a timed-out review as a failure and records nothing, even if the harness later answered", async () => {
+    const { deps } = runner([{ code: 124, timedOut: true, text: approveText }]);
+
+    await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps)).rejects.toThrow("timed out");
+    expect(gh.recordPrReview).not.toHaveBeenCalled();
   });
 
   describe("the reviewer is never given a partial diff", () => {

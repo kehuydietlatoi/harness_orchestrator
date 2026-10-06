@@ -42,6 +42,12 @@ missing. Issue #71 was interrupted exactly this way.
   cooldown are caller-supplied process state under one shared identity.
 - Reviewer sessions are fresh by construction (a new process per review), so no author context
   leaks into the review. Resuming the *author's* session after a review is separate work.
+- A review has its own, shorter timeout (`reviewTimeoutMs`, 15 min) and the reviewer is told to do the whole
+  review itself. Measured on a real incident: the review work took under 2 minutes, then Codex (whose
+  multi-agent collaboration is on by default for `gpt-6.1-sol`) spawned two sub-agents and waited 71.5
+  minutes for them; orch's timeout only killed the Windows `cmd.exe` wrapper, so the harness ran on for
+  44 more minutes and its valid verdict was discarded. `spawnLogged` now kills the whole process tree on a
+  timeout (`taskkill /T`), so a stuck review fails when it times out instead of lingering.
 - The reviewer is never given a partial diff. Up to `MAX_DIFF_CHARS` (120k) the diff is inlined; a
   larger one is written in full to `.orch-review/pr-<n>.diff` inside the review checkout and the prompt
   lists every changed file (added, deleted, renamed, modified, with line counts) and tells the reviewer
