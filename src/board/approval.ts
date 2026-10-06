@@ -62,3 +62,27 @@ export function reviewState(reviews: readonly PrReview[], pr: number, head: stri
     staleApproval: [...approved.values()].some((a) => a.head !== head),
   };
 }
+
+/** How many times changes were requested on this PR, across every head. Durable round evidence. */
+export function countChangeRequests(reviews: readonly PrReview[], pr: number): number {
+  let n = 0;
+  for (const review of reviews) {
+    const r = parseReview(review);
+    if (r && r.pr === pr && r.decision === "request-changes") n += 1;
+  }
+  return n;
+}
+
+/**
+ * The reviewer's notes from the newest request-changes record bound to `head`, or null when
+ * the latest decision on that head is not a request for changes. Pure.
+ */
+export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: number, head: string): string | null {
+  let latest: { notes: string; decision: ReviewRecord["decision"]; head: string } | null = null;
+  for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
+    const r = parseReview(review);
+    if (!r || r.pr !== pr) continue;
+    latest = { decision: r.decision, head: r.head, notes: review.body.replace(/\n*<!-- orch-review:v1 .* -->\s*$/, "").trim() };
+  }
+  return latest && latest.decision === "request-changes" && latest.head === head ? latest.notes : null;
+}

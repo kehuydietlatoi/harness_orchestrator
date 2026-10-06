@@ -56,6 +56,8 @@ export interface OrchConfig {
   requireCrossReview: boolean;
   reviewPolicy: ReviewPolicy;
   requireHumanMerge: boolean;
+  /** Fix/conflict rounds the autonomous loop may spend on one task before handing it to a human. */
+  maxReviewRounds: number;
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
@@ -75,6 +77,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
   requireCrossReview: true,
   reviewPolicy: "cross-or-self",
   requireHumanMerge: false,
+  maxReviewRounds: 3,
   worktreeRoot: "../wt",
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
@@ -128,6 +131,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     raw.reviewPolicy !== "cross-or-self"
   ) {
     throw new Error('reviewPolicy must be "cross" or "cross-or-self"');
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(raw, "maxReviewRounds") &&
+    (!Number.isInteger(raw.maxReviewRounds) || (raw.maxReviewRounds as number) < 1)
+  ) {
+    throw new Error("maxReviewRounds must be a positive integer");
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {

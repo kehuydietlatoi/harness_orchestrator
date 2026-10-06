@@ -104,6 +104,14 @@ describe("loadConfig", () => {
     }
   });
 
+  it("defaults the review round budget and rejects an invalid one", () => {
+    expect(loadConfig(writeConfig({})).maxReviewRounds).toBe(3);
+    expect(loadConfig(writeConfig({ maxReviewRounds: 5 })).maxReviewRounds).toBe(5);
+    for (const maxReviewRounds of [0, -1, 1.5, "3", null]) {
+      expect(() => loadConfig(writeConfig({ maxReviewRounds }))).toThrow(/maxReviewRounds/);
+    }
+  });
+
   it("leaves baseBranch unset so repositories use their GitHub default", () => {
     const config = loadConfig(writeConfig({}));
 

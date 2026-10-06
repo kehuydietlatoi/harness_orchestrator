@@ -438,3 +438,38 @@ export async function recordPrReview(number: number, head: string, body: string,
   });
   if (r.code !== 0) throw new Error(`record review #${number} failed: ${r.stderr.trim()}`);
 }
+
+/** Whether a PR can merge into its base right now. `unknown` while GitHub is still computing it. */
+export type Mergeability = "clean" | "conflicting" | "unknown";
+
+export async function prMergeability(number: number, opts: { cwd?: string } = {}): Promise<Mergeability> {
+  const r = await exec("gh", ["pr", "view", String(number), "--json", "mergeable", "--jq", ".mergeable"], {
+    cwd: opts.cwd,
+  });
+  if (r.code !== 0) throw new Error(`gh pr view #${number} mergeable failed: ${r.stderr.trim()}`);
+  switch (r.stdout.trim()) {
+    case "MERGEABLE":
+      return "clean";
+    case "CONFLICTING":
+      return "conflicting";
+    default:
+      return "unknown";
+  }
+}
+
+/** Names of the PR's checks that failed or were cancelled (for the author's fix prompt). */
+export async function failingChecks(number: number, opts: { cwd?: string } = {}): Promise<string[]> {
+  const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,name"], { cwd: opts.cwd });
+  try {
+    const arr = JSON.parse(r.stdout) as { bucket?: string; name?: string }[];
+    return arr.filter((c) => c.bucket === "fail" || c.bucket === "cancel").map((c) => c.name ?? "(unnamed check)");
+  } catch {
+    return [];
+  }
+}
+
+/** Post a plain comment on a PR (used when the loop escalates a task to a human). */
+export async function commentOnPr(number: number, body: string, opts: { cwd?: string } = {}): Promise<void> {
+  const r = await exec("gh", ["pr", "comment", String(number), "--body-file", "-"], { cwd: opts.cwd, input: body });
+  if (r.code !== 0) throw new Error(`comment on PR #${number} failed: ${r.stderr.trim()}`);
+}

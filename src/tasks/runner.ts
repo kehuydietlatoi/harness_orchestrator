@@ -12,7 +12,8 @@ import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
 import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
-import { appendRun, parseUsage, projectId, type RunRecord } from "../board/telemetry.js";
+import { appendRun, parseUsage, projectId, type RunPhase, type RunRecord } from "../board/telemetry.js";
+import { appendEvent } from "./events.js";
 import { estimateCost } from "../board/pricing.js";
 import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
 import { writeSession } from "./sessions.js";
@@ -69,7 +70,8 @@ export function resolveDispatchAgent(
   return agent;
 }
 
-function recordRun(
+/** Append one best-effort telemetry record for a finished agent run. */
+export function recordRun(
   issue: number,
   agent: string,
   model: ModelSpec | undefined,
@@ -78,6 +80,7 @@ function recordRun(
   logFile: string,
   cwd: string,
   cfg: OrchConfig,
+  meta: { phase?: RunPhase; round?: number } = {},
 ): void {
   try {
     let logText = "";
@@ -92,6 +95,8 @@ function recordRun(
     // when pricing exists for this model (subscription agents have none → null).
     const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
     const rec: RunRecord = {
+      ...(meta.phase ? { phase: meta.phase } : {}),
+      ...(meta.round !== undefined ? { round: meta.round } : {}),
       ts: new Date().toISOString(),
       project: projectId(cwd),
       issue,
@@ -175,6 +180,7 @@ async function processClaimed(
 
   try {
     mkdirSync(logDir, { recursive: true });
+    appendEvent({ type: "task.started", issue: n, agent }, cwd);
     await editIssue(n, { cwd, addLabels: [STATUS.inProgress], removeLabels: [STATUS.claimed] });
     console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
@@ -229,7 +235,7 @@ async function processClaimed(
     telemetryOutcome = "failed";
   }
 
-  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg);
+  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement" });
   return summary;
 }
 

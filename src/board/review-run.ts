@@ -17,6 +17,14 @@ import { pickReviewer } from "./reviewer.js";
 /** Keep prompts bounded; the reviewer can still Read any file for more context. */
 export const MAX_DIFF_CHARS = 120_000;
 
+/** No harness can review right now (all on cooldown, or the policy forbids self-review). Retry later. */
+export class NoReviewerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NoReviewerError";
+  }
+}
+
 export interface Verdict {
   decision: "approve" | "request-changes";
   notes: string;
@@ -151,7 +159,7 @@ export async function runAutomatedReview(
           unavailable: new Set([...unavailableAgents(cfg.agents, cwd, now), ...tried]),
         });
     if (!pick) {
-      throw new Error(
+      throw new NoReviewerError(
         `no reviewer available for PR #${prNum} (author '${author ?? "?"}'): ` +
           `every eligible harness is on a usage-limit cooldown or reviewPolicy is "${cfg.reviewPolicy}". Try again later.`,
       );
