@@ -91,7 +91,7 @@ describe("prepareReviewCheckout", () => {
   it("fails closed and cleans up when the checkout cannot be created", async () => {
     // A real commit that is not a valid worktree target: the git runner reports a failed `worktree add`.
     const calls: string[][] = [];
-    const failing = async (args: string[], cwd: string) => {
+    const failing = async (args: string[]) => {
       calls.push(args);
       if (args[0] === "worktree" && args[1] === "add") return { code: 128, stdout: "", stderr: "fatal: boom" };
       return { code: 0, stdout: "", stderr: "" };
