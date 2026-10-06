@@ -22,7 +22,7 @@ export async function reviewQueueCommand(opts: { agent?: string }): Promise<void
   const cfg = loadConfig(cwd);
   const agent = resolveAgent(opts.agent, cfg);
 
-  const items = await reviewQueue(agent, cwd);
+  const items = await reviewQueue(agent, cwd, cfg.reviewPolicy);
   console.log(pc.bold(`Review queue for '${agent}'\n`));
   if (!items.length) {
     console.log(pc.dim("  (nothing awaiting your review)"));

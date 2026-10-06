@@ -1,3 +1,4 @@
+import type { ReviewPolicy } from "../config.js";
 import type { PrReview } from "../github/github.js";
 
 export type ReviewMode = "cross" | "self";
@@ -90,4 +91,21 @@ export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: numbe
     latest = { decision: r.decision, head: r.head, notes: review.body.replace(/\n*<!-- orch-review:v1 .* -->\s*$/, "").trim() };
   }
   return latest && latest.decision === "request-changes" && latest.head === head ? latest.notes : null;
+}
+
+/**
+ * Which of a head's current approvers actually count, under `policy`. The one definition shared by the merge
+ * gate's view of "approved", the review queue, `repair`'s label projection, and the board, so they cannot
+ * disagree about the same PR. Another harness always counts. The author counts only as a *marked* fallback
+ * self-review (`mode: "self"`) and only under `cross-or-self`; an unmarked author approval never does. With no
+ * policy given, only cross-review counts (the original, strict behaviour).
+ */
+export function acceptedReviewers(
+  state: { reviewers: readonly string[]; selfReviewers: readonly string[] },
+  author: string | null,
+  policy?: ReviewPolicy,
+): string[] {
+  return state.reviewers.filter(
+    (reviewer) => reviewer !== author || (policy === "cross-or-self" && state.selfReviewers.includes(reviewer)),
+  );
 }

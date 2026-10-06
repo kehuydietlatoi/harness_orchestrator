@@ -1,3 +1,4 @@
+import { acceptedReviewers } from "../board/approval.js";
 import { prFact, reviewFact, telemetryFact } from "./facts.js";
 import { issueAgent } from "../board/board.js";
 import { existsSync, realpathSync } from "node:fs";
@@ -78,6 +79,8 @@ export interface RepairObservation {
   branch: TaskFacts["branch"];
   prs: Pr[];
   reviews: PrReview[];
+  /** How approvals are counted (`cfg.reviewPolicy`); absent means cross-review only. */
+  reviewPolicy?: OrchConfig["reviewPolicy"];
   telemetry: TaskFacts["telemetry"];
   /** Set only when an open PR targets an existing local expected branch. */
   prHead?: PrHeadRelation;
@@ -443,7 +446,7 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
     );
 
     const review = reviewFact(pr, observation.reviews);
-    const reviewers = review.reviewers.filter((reviewer) => reviewer !== issueAgent(issue));
+    const reviewers = acceptedReviewers(review, issueAgent(issue), observation.reviewPolicy);
     const reviewLabels = reviewers.map(reviewedByLabel);
     remove.push(...issue.labels.filter((label) => label.startsWith(REVIEWED_BY_PREFIX) && !reviewLabels.includes(label)));
     add.push(...reviewLabels.filter((label) => !issue.labels.includes(label)));
@@ -514,6 +517,7 @@ async function observeRepair(
     branch,
     prs,
     reviews,
+    reviewPolicy: cfg.reviewPolicy,
     telemetry: telemetryFact(records, number),
     ...(prHead ? { prHead } : {}),
   };

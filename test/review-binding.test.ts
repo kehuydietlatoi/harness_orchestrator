@@ -64,6 +64,26 @@ describe("review and merge boundary", () => {
     vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex"] }]);
     expect(await reviewQueue("claude", "/repo")).toEqual([]);
   });
+  it("treats a marked self-approval as done under cross-or-self, and still queues it under cross", async () => {
+    const selfApproval = { id: 3, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", pr: 62, head, timestamp: "2026-09-09T12:00:00Z", decision: "approve", mode: "self" }, "ok") };
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:claude", "reviewed-by:claude"] }]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([selfApproval]);
+
+    expect(await reviewQueue("codex", "/repo", "cross-or-self")).toEqual([]);
+    expect(await reviewQueue("codex", "/repo", "cross")).toHaveLength(1);
+    expect(await reviewQueue("codex", "/repo")).toHaveLength(1); // strict by default
+  });
+  it("never lets an unmarked author approval take a PR out of the queue", async () => {
+    const unmarked = { id: 3, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", pr: 62, head, timestamp: "2026-09-09T12:00:00Z", decision: "approve" }, "ok") };
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:claude", "reviewed-by:claude"] }]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([unmarked]);
+
+    expect(await reviewQueue("codex", "/repo", "cross-or-self")).toHaveLength(1);
+  });
   it("requires structured approval even if a legacy label exists", async () => {
     vi.mocked(gh.listPrReviews).mockResolvedValue([]);
     expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).ok).toBe(false);

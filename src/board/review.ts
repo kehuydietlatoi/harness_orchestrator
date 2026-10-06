@@ -17,7 +17,7 @@ import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
 import type { OrchConfig, ReviewPolicy } from "../config.js";
-import { formatReview, reviewState, type ReviewMode } from "./approval.js";
+import { acceptedReviewers, formatReview, reviewState, type ReviewMode } from "./approval.js";
 import { assertSelfReviewAllowed } from "./reviewer.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
@@ -35,7 +35,7 @@ export interface ReviewItem {
 }
 
 /** PRs awaiting review by `agent` (needs review, and not authored by that agent). */
-export async function reviewQueue(agent: string, cwd: string): Promise<ReviewItem[]> {
+export async function reviewQueue(agent: string, cwd: string, policy?: ReviewPolicy): Promise<ReviewItem[]> {
   const [prs, open] = await Promise.all([
     listOpenPrs({ cwd }),
     listIssues({ cwd, state: "open" }).then(byNumber),
@@ -50,7 +50,7 @@ export async function reviewQueue(agent: string, cwd: string): Promise<ReviewIte
     if (author === agent) continue; // never review your own work
     if (!issue.labels.includes(REVIEW_NEEDED)) {
       const review = reviewState(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
-      if (review.changesRequested || review.reviewers.some((r) => r !== author)) continue;
+      if (review.changesRequested || acceptedReviewers(review, author, policy).length > 0) continue;
       if (!review.staleApproval && !issue.labels.some((label) => label.startsWith(REVIEWED_BY_PREFIX))) continue;
     }
     items.push({ pr, issue, author });
