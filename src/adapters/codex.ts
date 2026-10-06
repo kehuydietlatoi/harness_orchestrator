@@ -66,6 +66,27 @@ export function resultTextFromCodexJson(logText: string): string {
   return result;
 }
 
+/**
+ * Stall guard for single-shot headless runs. Codex's multi-agent mode is on by default and has no switch we
+ * could find; a reviewer that delegates then idles waiting on its own sub-agents (a 71-minute stall, PR #75).
+ * Match only structured delegation events (`collab_tool_call` items, or a tool/name of `spawn_agent`), never
+ * assistant text that merely mentions it. Pure; returns the abort reason or undefined.
+ */
+export function codexDelegation(line: string): string | undefined {
+  if (!line.includes("spawn_agent") && !line.includes("collab_tool_call")) return undefined;
+  try {
+    const event = JSON.parse(line.trim()) as Record<string, unknown>;
+    const item = (event.item ?? event) as Record<string, unknown>;
+    if (item.type === "agent_message" || item.type === "reasoning") return undefined;
+    if (item.type === "collab_tool_call" || item.tool === "spawn_agent" || item.name === "spawn_agent") {
+      return "codex started delegating to sub-agents (spawn_agent); a single-shot run must not wait on them";
+    }
+  } catch {
+    // not a JSON line
+  }
+  return undefined;
+}
+
 /** Drives Codex in headless (`codex exec`) mode. */
 export class CodexAdapter implements HarnessAdapter {
   readonly id = "codex";
@@ -104,6 +125,6 @@ export class CodexAdapter implements HarnessAdapter {
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
     const args = ctx.readOnly ? buildCodexReviewArgs(ctx.model) : buildCodexTaskArgs(ctx.model);
-    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromCodexJson);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromCodexJson, codexDelegation);
   }
 }

@@ -22,9 +22,11 @@ export function killProcessTree(child: ChildProcess): void {
 }
 
 export interface SpawnResult {
-  code: number; // 124 = timed out, 127 = failed to start
+  code: number; // 124 = timed out, 125 = aborted by `abortOn`, 127 = failed to start
   durationMs: number;
   timedOut: boolean;
+  /** Why `abortOn` stopped the child early; absent when it ran to completion or timed out. */
+  aborted?: string;
 }
 
 /**
@@ -44,6 +46,11 @@ export function spawnLogged(
     input?: string;
     env?: NodeJS.ProcessEnv;
     shell?: boolean;
+    /**
+     * Inspect each complete output line; return a reason to kill the child's whole process tree at once.
+     * For failure modes a timeout only catches late (e.g. a harness idling on its own sub-agents).
+     */
+    abortOn?: (line: string) => string | undefined;
   } = {},
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
@@ -67,11 +74,33 @@ export function spawnLogged(
     });
 
     const log = opts.logFile ? createWriteStream(opts.logFile, { flags: "a" }) : null;
-    const onData = (d: Buffer): void => {
-      if (log) log.write(d);
+    let aborted: string | undefined;
+    // Per-stream line buffers: a chunk boundary can fall mid-line, and stdout/stderr must not interleave.
+    const watch = (): ((d: Buffer) => void) => {
+      let pending = "";
+      return (d) => {
+        if (!opts.abortOn || aborted !== undefined) return;
+        const lines = (pending + d.toString("utf8")).split(/\r?\n/);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          const reason = opts.abortOn(line);
+          if (reason === undefined) continue;
+          aborted = reason;
+          killProcessTree(child);
+          return;
+        }
+      };
     };
-    child.stdout?.on("data", onData);
-    child.stderr?.on("data", onData);
+    const onOut = watch();
+    const onErr = watch();
+    child.stdout?.on("data", (d: Buffer) => {
+      if (log) log.write(d);
+      onOut(d);
+    });
+    child.stderr?.on("data", (d: Buffer) => {
+      if (log) log.write(d);
+      onErr(d);
+    });
 
     let timedOut = false;
     const timer = opts.timeoutMs
@@ -84,7 +113,12 @@ export function spawnLogged(
     const finish = (code: number): void => {
       if (timer) clearTimeout(timer);
       const done = (): void =>
-        resolve({ code: timedOut ? 124 : code, durationMs: Date.now() - start, timedOut });
+        resolve({
+          code: timedOut ? 124 : aborted !== undefined ? 125 : code,
+          durationMs: Date.now() - start,
+          timedOut,
+          ...(aborted !== undefined && !timedOut ? { aborted } : {}),
+        });
       if (!log) return done();
       // Resolve only once the log is flushed so callers never read a partial file.
       log.once("close", done);

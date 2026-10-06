@@ -359,7 +359,9 @@ export async function runAutomatedReview(
         continue; // re-pick: another harness, or the author's own fresh session
       }
       throw new Error(
-        run.timedOut
+        run.aborted !== undefined
+          ? `review by '${pick.reviewer}' aborted: ${run.aborted}`
+          : run.timedOut
           ? `review by '${pick.reviewer}' timed out`
           : run.code !== 0
             ? `review by '${pick.reviewer}' exited ${run.code}`
