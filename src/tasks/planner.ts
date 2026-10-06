@@ -29,10 +29,11 @@ const OUTPUT_REMINDER = [
   "Output ONLY one fenced code block tagged json and nothing after it — a JSON array",
   "of ticket objects. Each ticket:",
   '  { "id": "short-slug", "title": "…", "body": "…",',
-  '    "dependsOn": ["earlier-id", …], "files": ["path/hint", …] }',
+  '    "dependsOn": ["earlier-id", …], "after": ["earlier-id", …], "files": ["path/hint", …] }',
   "- `title` is required; the others are optional.",
-  "- `dependsOn` may only reference the `id` of an EARLIER ticket in the array.",
-  "- `files` are ownership hints that minimise overlap between tickets.",
+  "- `dependsOn` and `after` may only reference the `id` of an EARLIER ticket in the array.",
+  "- `dependsOn` is a hard prerequisite; use `after` for advisory ordering that never blocks dispatch.",
+  "- `files` are ownership hints, not proof that tickets are independent.",
   "- Prefer small, independently-shippable tickets ordered so dependencies come first.",
 ].join("\n");
 
@@ -125,7 +126,7 @@ export function ensurePlanSkill(cwd: string): { path: string; created: boolean }
 export function formatInteractiveSeed(outputPath: string): string {
   return [
     "You are in an interactive orch plan session: help the user break a goal into a tickets.json for the orch orchestrator.",
-    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, files).",
+    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files).",
     "Explore the repository with Read/Grep/Glob to ground file-ownership hints in the real structure.",
     "Refine the plan conversationally with the user.",
     `When the user is satisfied, use the Write tool to save the final tickets as a JSON array to the absolute path ${outputPath}, then tell the user it is saved.`,

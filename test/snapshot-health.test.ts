@@ -8,6 +8,17 @@ const issue: Issue = { number: 1, title: "task", state: "OPEN", body: "", labels
 const pr: Pr = { number: 2, title: "pr", state: "CLOSED", headRefName: "task/1-x", body: "", headSha: "a", htmlUrl: "" };
 const run = (outcome: string): SnapshotRun => ({ issue: 1, outcome, ts: "2026-09-09", model: null, tokensTotal: null, costUsd: null });
 describe("lifecycle health projection", () => {
+  it("projects advisory references separately from hard blockers in JSON and terminal output", () => {
+    const snapshot = assemble([
+      { ...issue, body: "Depends-on: #2\nAfter: #3, #4, #99" },
+      { ...issue, number: 2 }, { ...issue, number: 3 }, { ...issue, number: 4, state: "CLOSED" },
+    ], [], [], [], []);
+    expect(snapshot.tasks[0]).toMatchObject({ deps: [2], blockers: [2], after: [3, 4, 99] });
+    expect(snapshot.cycles).toEqual([]);
+    const table = formatSnapshotTable(snapshot);
+    expect(table).toContain("AFTER (advisory)");
+    expect(table.split("\n")[2]).toMatch(/#2\s+#3,#4,#99/);
+  });
   it.each([
     ["ready", [], [], [], [], "absent"],
     ["claimed", [1], [], [], [], "absent"],

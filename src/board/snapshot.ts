@@ -12,7 +12,7 @@ import {
   listPrReviews,
   prChecksState,
 } from "../github/github.js";
-import { issueAgent, parseDeps, openDepsFromMap, byNumber } from "./board.js";
+import { issueAgent, parseDeps, parseAfter, openDepsFromMap, byNumber } from "./board.js";
 import { buildGraph } from "./graph.js";
 import { REVIEW_NEEDED } from "../github/labels.js";
 import { listLocks } from "../git/lock.js";
@@ -36,6 +36,8 @@ export interface TaskView {
   blockers: number[];
   agent: string | null;
   deps: number[];
+  /** Advisory references; never included in blockers. */
+  after: number[];
   prNumber: number | null;
   /** Canonical GitHub web URL for the PR, or null when there is no PR / no URL. */
   prUrl: string | null;
@@ -160,6 +162,7 @@ export function assemble(
       blockers: openDepsFromMap(issue, open),
       agent: issueAgent(issue),
       deps: parseDeps(issue.body),
+      after: parseAfter(issue.body),
       prNumber: pr?.number ?? null,
       prUrl: pr?.htmlUrl || null,
       prChecks: pr ? (checks.get(pr.number) ?? null) : null,

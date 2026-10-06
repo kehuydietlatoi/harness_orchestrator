@@ -17,12 +17,13 @@ function pad(value: string, width: number): string {
 export function formatSnapshotTable(snapshot: Snapshot): string {
   if (snapshot.tasks.length === 0) return pc.dim("  (no open tasks)");
 
-  const headers = ["TASK", "STATUS", "AGENT", "BLOCKERS", "PR", "REVIEWED", "LOCK", "WORKTREE", "LATEST RUN", "RECOVERY"];
+  const headers = ["TASK", "STATUS", "AGENT", "BLOCKERS", "AFTER (advisory)", "PR", "REVIEWED", "LOCK", "WORKTREE", "LATEST RUN", "RECOVERY"];
   const rows = snapshot.tasks.map((task) => [
     `#${task.number} ${task.title}`,
     task.health.kind,
     task.agent ?? "-",
     task.blockers.length > 0 ? task.blockers.map((dep) => `#${dep}`).join(",") : "-",
+    task.after.map((n) => `#${n}`).join(",") || "-",
     task.prNumber === null ? "-" : `#${task.prNumber}`,
     task.reviewedBy.join(",") || "-",
     task.locked ? "yes" : "-",

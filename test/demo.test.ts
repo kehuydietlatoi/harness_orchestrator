@@ -5,6 +5,28 @@ import { applyPlan, selectUnassigned } from "../src/routing/assign.js";
 const CWD = process.cwd();
 
 describe("demo backend", () => {
+  it("preserves advisory plan references on retry and dispatches while the predecessor is claimed", async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDemoDeps();
+      const tickets = [{ id: "a", title: "A" }, { id: "b", title: "B", after: ["a"] },
+        { title: "C", dependsOn: ["a"] }];
+      const first = await deps.createIssues(tickets, CWD);
+      const [a, b, c] = first.created.map((t) => t.number);
+      expect(await deps.createIssues(tickets, CWD)).toMatchObject({ created: [], failed: [], reused: first.created });
+      for (const n of [a, b, c]) await deps.editIssue(n, ["agent:codex"], CWD);
+      await deps.dispatchIssue(a, CWD);
+      const snap = await deps.snapshot(CWD);
+      expect(snap.tasks.find((t) => t.number === b)).toMatchObject({ after: [a], blockers: [] });
+      expect((await deps.listOpenIssues(CWD)).find((i) => i.number === b)?.body).toContain(`After: #${a}`);
+      await expect(deps.dispatchIssue(b, CWD)).resolves.toBeUndefined();
+      await expect(deps.dispatchIssue(c, CWD)).rejects.toThrow(/blocked by/);
+      await expect(deps.dispatchIssue(b, CWD)).rejects.toThrow(/not a todo/);
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("serves a seeded board with work in flight and a review queue", async () => {
     const deps = makeDemoDeps();
     const snap = await deps.snapshot(CWD);

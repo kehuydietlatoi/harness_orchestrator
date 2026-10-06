@@ -47,6 +47,14 @@ describe("resolveTaskModel", () => {
 });
 
 describe("resolveDispatchAgent", () => {
+  it("ignores available advisory predecessors while retaining hard prerequisites", () => {
+    const target = { ...issue(["status:todo", "agent:codex"]), body: "After: #7" };
+    const predecessor = { ...issue(["status:todo"]), number: 7 };
+    const open = new Map([[19, target], [7, predecessor]]);
+    expect(resolveDispatchAgent(target, open, DEFAULT_CONFIG)).toBe("codex");
+    target.body += "\nDepends-on: #7";
+    expect(() => resolveDispatchAgent(target, open, DEFAULT_CONFIG)).toThrow(/blocked by.*#7/);
+  });
   it("returns the routed configured agent for an unblocked todo", () => {
     const target = issue(["status:todo", "agent:codex"]);
     expect(resolveDispatchAgent(target, new Map([[target.number, target]]), DEFAULT_CONFIG)).toBe("codex");

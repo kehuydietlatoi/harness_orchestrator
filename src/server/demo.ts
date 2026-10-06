@@ -6,6 +6,8 @@ import type { Issue } from "../github/github.js";
 import type { ServerDeps } from "./server.js";
 import type { Snapshot, TaskView } from "../board/snapshot.js";
 import { assemble } from "../board/snapshot.js";
+import { byNumber } from "../board/board.js";
+import { resolveDispatchAgent } from "../tasks/runner.js";
 type DemoTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "blockers">;
 
 /**
@@ -56,7 +58,7 @@ const minutesAgo = (m: number): string => new Date(Date.now() - m * 60_000).toIS
 
 /** A fresh, realistic dual-agent board: work in flight, PRs awaiting cross-review, and unrouted todos. */
 function seedTasks(): DemoTask[] {
-  const seeded: Omit<DemoTask, "prUrl" | "prChecks">[] = [
+  const seeded: Omit<DemoTask, "prUrl" | "prChecks" | "after">[] = [
     {
       number: 103,
       title: "Board snapshot projection",
@@ -143,11 +145,11 @@ function seedTasks(): DemoTask[] {
     },
   ];
   // Give the two in-review PRs distinct CI states so the demo shows both badges.
-  const demoChecks = (task: Omit<DemoTask, "prUrl" | "prChecks">): TaskView["prChecks"] => {
+  const demoChecks = (task: Omit<DemoTask, "prUrl" | "prChecks" | "after">): TaskView["prChecks"] => {
     if (task.status !== "status:in-review" || task.prNumber === null) return null;
     return task.number === 104 ? "pending" : "pass";
   };
-  return seeded.map((task) => ({ ...task, prUrl: demoPrUrl(task.prNumber), prChecks: demoChecks(task) }));
+  return seeded.map((task) => ({ ...task, after: [], prUrl: demoPrUrl(task.prNumber), prChecks: demoChecks(task) }));
 }
 
 /** Project one in-memory task to the `Issue` shape the routing logic reads. */
@@ -156,7 +158,10 @@ function toIssue(task: DemoTask): Issue {
   if (task.agent) labels.push(`agent:${task.agent}`);
   for (const reviewer of task.reviewedBy) labels.push(`reviewed-by:${reviewer}`);
   if (task.status === "status:in-review") labels.push("review:needed");
-  const body = task.deps.length ? `Depends-on: ${task.deps.map((d) => `#${d}`).join(", ")}` : "";
+  const body = [
+    task.deps.length ? `Depends-on: ${task.deps.map((d) => `#${d}`).join(", ")}` : "",
+    task.after.length ? `After: ${task.after.map((n) => `#${n}`).join(", ")}` : "",
+  ].filter(Boolean).join("\n\n");
   return { number: task.number, title: task.title, body, state: "OPEN", labels, assignees: [] };
 }
 
@@ -207,6 +212,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
           status: "status:todo",
           agent: null,
           deps,
+          after: (t.after ?? []).map((id) => idToNumber.get(id)).filter((n): n is number => n !== undefined),
           prNumber: null,
           prUrl: null,
           prChecks: null,
@@ -237,12 +243,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);
       if (!task) throw new Error(`#${number} is not an open issue.`);
-      if (task.status !== "status:todo") throw new Error(`#${number} is ${task.status}, not a todo.`);
-      if (!task.agent) throw new Error(`#${number} is not routed to an agent.`);
-      const blockers = task.deps.filter((dep) => tasks.some((candidate) => candidate.number === dep));
-      if (blockers.length) {
-        throw new Error(`#${number} is blocked by open issue(s): ${blockers.map((dep) => `#${dep}`).join(", ")}.`);
-      }
+      resolveDispatchAgent(toIssue(task), byNumber(tasks.map(toIssue)), config);
 
       task.status = "status:claimed";
       task.locked = true;

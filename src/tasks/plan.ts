@@ -4,16 +4,17 @@ import { issueAgent, isEligible } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 
 export interface Ticket {
-  id?: string; // local id other tickets reference in dependsOn
+  id?: string; // local id other tickets reference in dependsOn or after
   title: string;
   body?: string;
   dependsOn?: string[]; // local ids of earlier tickets
+  after?: string[]; // earlier ticket ids: ordering preferences only
   files?: string[]; // file-ownership hints (to minimise overlap)
 }
 
 /** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
  * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
- * `body` must be a string and any present `dependsOn`/`files` must be an array of
+ * `body` must be a string and any present `dependsOn`/`after`/`files` must be an array of
  * strings. Malformed field values are reported (ticket-indexed, all at once) rather
  * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
  * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
@@ -45,6 +46,7 @@ export function parseTickets(raw: string): Ticket[] {
       title: typeof o.title === "string" ? o.title : "",
       body: typeof o.body === "string" ? o.body : undefined,
       dependsOn: stringArray(o.dependsOn, "dependsOn"),
+      after: stringArray(o.after, "after"),
       files: stringArray(o.files, "files"),
     };
   });
@@ -64,6 +66,9 @@ export interface ResolvedTicket {
   dependsOn: string[];
   /** The subset of `dependsOn` that resolves to an earlier ticket (will become #refs). */
   knownDeps: string[];
+  after: string[];
+  /** Advisory ids resolving to earlier tickets (will become After: #refs). */
+  knownAfter: string[];
 }
 
 export interface ResolvedPlan {
@@ -104,11 +109,19 @@ export function resolvePlan(tickets: readonly Ticket[]): ResolvedPlan {
       else knownDeps.push(dep);
     }
 
+    const after = t.after ?? [];
+    const knownAfter: string[] = [];
+    for (const predecessor of after) {
+      if (predecessor === t.id) warnings.push(`ticket ${index} ("${predecessor}") is after itself; dropped`);
+      else if (!seen.has(predecessor)) warnings.push(`ticket ${index} is after unknown/later id "${predecessor}"; dropped`);
+      else knownAfter.push(predecessor);
+    }
+
     const files = t.files ?? [];
     for (const f of files) fileOwners.set(f, [...(fileOwners.get(f) ?? []), index]);
 
     if (t.id) seen.add(t.id);
-    resolved.push({ index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps });
+    resolved.push({ index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps, after, knownAfter });
   });
 
   for (const [file, owners] of fileOwners) {
