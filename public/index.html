@@ -2053,6 +2053,9 @@
         const SVG_NS = "http://www.w3.org/2000/svg";
         const NODE_W = 150;
         const NODE_H = 40;
+        // BEGIN flow-adr-link (pure; exercised by test/flow-adr-link.test.ts)
+        // ADRs ship with orch itself, so links target orch's own docs, never the managed project's repo.
+        const ORCH_DOCS_URL = "https://github.com/kehuydietlatoi/harness_orchestrator/blob/main";
         const ADR_FILES = {
           1: "0001-build-vs-adopt.md",
           2: "0002-atomic-claim-via-git-ref.md",
@@ -2065,6 +2068,12 @@
           9: "0009-autonomous-task-loop.md",
           10: "0010-lead-at-decision-points.md",
         };
+        const flowAdrLink = (adr) => {
+          const file = ADR_FILES[Number(String(adr).replace(/\D/g, ""))];
+          const path = file ? `docs/adr/${file}` : "docs/adr";
+          return { path, href: `${ORCH_DOCS_URL}/${path}` };
+        };
+        // END flow-adr-link
         const flow = {
           model: null,
           nodeEls: new Map(),
@@ -2164,19 +2173,14 @@
           box.append(ref);
           box.append(make("p", "", `${node.kind} · ${node.lane} lane`));
           if (node.adr) {
-            const file = ADR_FILES[Number(String(node.adr).replace(/\D/g, ""))];
-            const adrPath = file ? `docs/adr/${file}` : "docs/adr";
+            const { path: adrPath, href } = flowAdrLink(node.adr);
             const line = make("p", "");
             line.append("Decision record: ");
-            if (repoUrl) {
-              const link = make("a", "", `${node.adr} (${adrPath})`);
-              link.href = `${repoUrl}/blob/HEAD/${adrPath}`;
-              link.target = "_blank";
-              link.rel = "noopener noreferrer";
-              line.append(link);
-            } else {
-              line.append(make("code", "", `${node.adr} (${adrPath})`));
-            }
+            const link = make("a", "", `${node.adr} (${adrPath})`);
+            link.href = href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            line.append(link);
             box.append(line);
           }
         };
