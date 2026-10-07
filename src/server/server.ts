@@ -12,6 +12,8 @@ import { createFromPlan, type PlanCreateOptions, type PlanCreateResult } from ".
 import { dispatchSpecific } from "../tasks/runner.js";
 import { log } from "../util/log.js";
 import { LANES, NODES, EDGES, FLOWS, STEP_NODES, STATE_NODES } from "../demo/flow-graph.js";
+import { layoutFlow } from "../demo/flow-layout.js";
+import type { FlowLayout } from "../demo/flow-layout.js";
 import type { Frame, Scenario } from "../demo/scenario-engine.js";
 
 export interface DemoCurrent {
@@ -72,6 +74,12 @@ const defaultDeps: ServerDeps = {
 };
 
 /** Socket-level half of the dashboard write guard. */
+let flowLayout: FlowLayout | undefined;
+/** The static model's layout, computed once per process. */
+function getFlowLayout(): FlowLayout {
+  return (flowLayout ??= layoutFlow({ lanes: LANES, nodes: NODES, edges: EDGES }));
+}
+
 export function isLoopback(addr: string | undefined): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
 }
@@ -385,7 +393,7 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
       // console resource error on every normal load).
       response.setHeader("X-Orch-Demo", deps.demo ? "1" : "0");
       sendJson(response, 200, { lanes: LANES, nodes: NODES, edges: EDGES, flows: FLOWS,
-        stepNodes: STEP_NODES, stateNodes: STATE_NODES });
+        stepNodes: STEP_NODES, stateNodes: STATE_NODES, layout: getFlowLayout() });
       return;
     }
 
