@@ -73,9 +73,9 @@ export function decide<I, O>(fn: string, impl: (input: I) => O, input: I): { dec
 
 type Check = (d: Decision, e: FlowEdge) => string | null;
 
-const toState = (kind: string, e: FlowEdge): string | null => {
+const toState = (kind: string, to: string): string | null => {
   const node = STATE_NODES[kind as keyof typeof STATE_NODES];
-  return e.to === node ? null : `derived '${kind}' (${node}) but the edge goes to ${e.to}`;
+  return to === node ? null : `derived '${kind}' (${node}) but the walk arrives at ${to}`;
 };
 
 /** The lifecycle transition each stage hand-off stands for; `decideTaskTransition` must agree exactly. */
@@ -104,9 +104,14 @@ const CHECKS: Record<string, Check> = {
     return e.from === "plan.resolve" && e.to === to ? null : `resolvePlan (${blocked ? "errors" : "valid"}) leads to ${to}, not ${e.to}`;
   },
   indexByMarker(d, e) {
-    const reused = Object.keys(d.output as Record<string, number[]>).length > 0;
-    const to = reused ? "route.assign" : "plan.create";
-    return e.from === "plan.reuse" && e.to === to ? null : `marker lookup (${reused ? "found" : "none"}) leads to ${to}, not ${e.to}`;
+    const found = d.output as Record<string, number[]>;
+    const markers = (d.input as { markers: string[] }).markers;
+    const missing = markers.filter((m) => !found[m]?.length).length;
+    // Only a complete match skips creation; any unmatched ticket still has to be created.
+    const to = missing === 0 ? "route.assign" : "plan.create";
+    return e.from === "plan.reuse" && e.to === to
+      ? null
+      : `marker lookup (${markers.length - missing}/${markers.length} tickets matched) leads to ${to}, not ${e.to}`;
   },
   evaluatePlan(d, e) {
     // Advisory: a violation warns but never blocks, so the plan always proceeds to apply.
@@ -140,7 +145,7 @@ const CHECKS: Record<string, Check> = {
       : `edge ${e.from} -> ${e.to} expects ${want.from} --${want.event}--> ${want.to}, got ${t.from} --${t.event}--> ${t.to}`;
   },
   deriveTaskState(d, e) {
-    return toState((d.output as TaskState).kind, e);
+    return toState((d.output as TaskState).kind, e.to);
   },
   pickReviewer(d, e) {
     const pick = d.output as ReviewerPick | null;
@@ -176,7 +181,13 @@ const CHECKS: Record<string, Check> = {
 /** Throws a {@link ScenarioDriftError} when a frame's decider output does not lead along its scripted edge. */
 export function checkFrame(frame: Frame): void {
   if (!nodeIds.has(frame.activeNode)) throw new ScenarioDriftError(frame.id, `unknown node '${frame.activeNode}'`);
-  if (!frame.edge) return;
+  if (!frame.edge) {
+    // A cut has no edge to follow, but a derived lifecycle state must still be the node it lands on.
+    const d = frame.decision;
+    const problem = d?.fn === "deriveTaskState" ? toState((d.output as TaskState).kind, frame.activeNode) : null;
+    if (problem) throw new ScenarioDriftError(frame.id, problem);
+    return;
+  }
   const edge = edgeById.get(frame.edge);
   if (!edge) throw new ScenarioDriftError(frame.id, `unknown edge '${frame.edge}'`);
   if (edge.to !== frame.activeNode) throw new ScenarioDriftError(frame.id, `edge ${edge.id} ends at ${edge.to}, not ${frame.activeNode}`);

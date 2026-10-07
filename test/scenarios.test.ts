@@ -80,6 +80,26 @@ describe("drift check", () => {
   });
 });
 
+describe("cut frames and partial marker reuse", () => {
+  const byId = (id: string) => SCENARIOS.find((s) => s.id === id)!;
+
+  it("checks a derived lifecycle state on the initial frame", () => {
+    const first = byId("happy-path").frames[0]!;
+    expect(first.edge).toBeUndefined();
+    expect(first.decision!.fn).toBe("deriveTaskState");
+    const drifted = { ...first, decision: { ...first.decision!, output: { kind: "claimed" } } };
+    expect(() => checkFrame(drifted)).toThrow(/derived 'claimed'/);
+  });
+
+  it("rejects route.assign when only one of two ticket markers resolved", () => {
+    const frame = byId("plan-rerun").frames.find((f) => f.decision?.fn === "indexByMarker")!;
+    const input = frame.decision!.input as { markers: string[] };
+    const [first] = input.markers;
+    const partial = { ...frame, decision: { ...frame.decision!, output: { [first!]: [40] } } };
+    expect(() => checkFrame(partial)).toThrow(/1\/2 tickets matched/);
+  });
+});
+
 describe("plan boards and decision records", () => {
   const byId = (id: string) => SCENARIOS.find((s) => s.id === id)!;
   const last = (id: string) => byId(id).frames.at(-1)!.board;
