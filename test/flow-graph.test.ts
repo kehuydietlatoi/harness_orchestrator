@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { deriveTaskState } from "../src/tasks/lifecycle.js";
+import { planRepairs } from "../src/tasks/reconcile.js";
 import { EDGES, FLOWS, NODES, STATE_NODES, STEP_NODES } from "../src/demo/flow-graph.js";
 
 const ids = new Set(NODES.map((n) => n.id));
@@ -95,11 +96,38 @@ describe("flow graph review-round regressions", () => {
     expect(EDGES.some((e) => e.from === "step.escalate" && e.to === "state.needs-attention")).toBe(false);
   });
 
-  it("only reaches done from a merge whose resources were released", () => {
+  it("reaches done only once resources are released: after a merge's cleanup, or a repair that finishes it", () => {
     expect(outOf("review.merge")).toEqual(["review.cleanup"]);
     expect(outOf("review.cleanup").sort()).toEqual(["state.done", "state.inconsistent"]);
-    expect(EDGES.filter((e) => e.to === "state.done").map((e) => e.from)).toEqual(["review.cleanup"]);
+    expect(EDGES.filter((e) => e.to === "state.done").map((e) => e.from).sort()).toEqual(["rec.derive", "review.cleanup"]);
     expect(outOf("state.inconsistent")).toContain("rec.repair");
+  });
+
+  it("lets a repair land in any lifecycle state, since it re-derives after its actions", () => {
+    expect(new Set(outOf("rec.derive"))).toEqual(new Set(Object.values(STATE_NODES)));
+  });
+
+  it("repairs a merged task with retained resources to done, not ready", () => {
+    const branch = "task/36-x";
+    const plan = planRepairs({
+      number: 36,
+      issue: { number: 36, title: "x", body: "", state: "OPEN", labels: ["status:in-review"], assignees: [] },
+      expectedBranch: branch,
+      lockOwner: "owner-token",
+      worktree: { kind: "usable", path: "/wt/issue-36", branch, removable: true },
+      branch: "ahead",
+      prs: [{ number: 136, title: "x", body: "Closes #36", headRefName: branch, state: "MERGED", htmlUrl: "", headSha: "a".repeat(40) }],
+      reviews: [],
+      telemetry: "submitted",
+    });
+    expect(plan.actions.map((a) => a.kind)).toEqual(expect.arrayContaining(["close-issue", "safe-remove-worktree", "release-lock"]));
+    expect(plan.projectedState.kind).toBe("done");
+    expect(EDGES.some((e) => e.from === "rec.derive" && e.to === STATE_NODES.done)).toBe(true);
+  });
+
+  it("models every claim-compensation outcome: released, rolled forward, or ownership retained", () => {
+    expect(outOf("run.compensate").sort()).toEqual(["rec.retained", "state.claimed", "state.ready"]);
+    expect(EDGES.find((e) => e.from === "run.compensate" && e.to === "state.claimed")?.label).toMatch(/proven/);
   });
 });
 
