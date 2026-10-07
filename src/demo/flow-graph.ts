@@ -156,6 +156,7 @@ export const NODES: readonly FlowNode[] = [
   node("rec.safe", "Safe to remove?", "decision", "recovery", 1, 1, "src/git/worktree.ts#worktreeRemovalSafety", "Only disposable ignored paths may be lost; anything else keeps the worktree."),
   node("rec.retained", "Retained + named", "terminal", "recovery", 2, 1, "src/git/worktree.ts#worktreeRemovalSafety", "Ownership is kept (the lock, and the worktree if any) with the reason reported, for a human or orch repair."),
   node("rec.discard", "--discard", "stage", "recovery", 1, 2, "src/commands/abandon.ts#abandonCommand", "The only force-removal path; human-explicit.", "ADR-0006"),
+  node("rec.todo", "Back to todo", "decision", "recovery", 2, 2, "src/commands/abandon.ts#abandonCommand", "Abandon writes status:todo and releases the lock and worktree, but neither supersedes failure telemetry nor deletes the task branch: the lifecycle is still derived from those facts.", "ADR-0006"),
 ];
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -267,10 +268,12 @@ export const EDGES: readonly FlowEdge[] = [
   edge("state.inconsistent", "rec.repair", "--apply one action, re-observe", "repair"),
   edge("state.needs-attention", "rec.abandon", "orch abandon <n>", "abandon"),
   edge("rec.abandon", "rec.safe", "plain abandon: safe removal", "abandon"),
-  edge("rec.safe", "state.ready", "clean: removed, lock released", "abandon"),
+  edge("rec.safe", "rec.todo", "clean: removed, lock released", "abandon"),
   edge("rec.safe", "rec.retained", "dirty or untracked: retained", "abandon"),
   edge("rec.abandon", "rec.discard", "--discard (human explicit)", "abandon"),
-  edge("rec.discard", "state.ready", "force removed", "abandon"),
+  edge("rec.discard", "rec.todo", "force removed, lock released", "abandon"),
+  edge("rec.todo", "state.ready", "no failure telemetry, no commits ahead", "abandon"),
+  edge("rec.todo", "state.needs-attention", "failure telemetry remains or commits ahead", "abandon"),
 ];
 
 export const FLOWS: readonly FlowDef[] = [

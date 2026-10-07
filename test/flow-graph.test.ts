@@ -73,6 +73,17 @@ describe("flow graph regressions", () => {
     for (const e of abandon) expect(e.flows).not.toContain("failure-recovery");
     expect(EDGES.some((e) => e.from === "run.fail" && e.to === "rec.safe")).toBe(false);
   });
+
+  it("never treats abandon cleanup as ready by itself: the lifecycle is re-derived from facts", () => {
+    expect(outOf("rec.safe")).not.toContain("state.ready");
+    expect(outOf("rec.discard")).not.toContain("state.ready");
+    expect(outOf("rec.todo").sort()).toEqual(["state.needs-attention", "state.ready"]);
+    const released = { issue: "open", lock: false, worktree: false, pr: "none" } as const;
+    // Abandon releases the resources but keeps failure telemetry and any task branch.
+    expect(deriveTaskState({ ...released, branch: "absent", telemetry: "failed" }).kind).toBe("needs-attention");
+    expect(deriveTaskState({ ...released, branch: "ahead", telemetry: "none" }).kind).toBe("needs-attention");
+    expect(deriveTaskState({ ...released, branch: "absent", telemetry: "none" }).kind).toBe("ready");
+  });
 });
 
 describe("flow graph review-round regressions", () => {
