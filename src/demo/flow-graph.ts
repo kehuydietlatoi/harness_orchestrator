@@ -54,21 +54,36 @@ export interface FlowDef {
   adr?: string;
 }
 
-export const LANES: readonly { id: Lane; label: string; y: number }[] = [
-  { id: "plan", label: "Plan", y: 60 },
-  { id: "route", label: "Route", y: 250 },
-  { id: "run", label: "Claim / run", y: 440 },
-  { id: "review", label: "Review", y: 630 },
-  { id: "autopilot", label: "Autopilot", y: 820 },
-  { id: "recovery", label: "Recovery", y: 1010 },
+export interface FlowLane {
+  id: Lane;
+  label: string;
+  /** Top of the lane band. */
+  y: number;
+  /** Band height, derived from the lane's deepest node row. */
+  height: number;
+}
+
+export const NODE_W = 150;
+export const NODE_H = 40;
+
+// Spacing leaves routing/label gutters: 150px between columns, 70px between rows.
+const COL = 300;
+const ROW = 110;
+const X0 = 85;
+const LANE_TOP = 20;
+const LANE_GAP = 20;
+const LANE_PAD = 50;
+
+const LANE_DEFS: readonly { id: Lane; label: string }[] = [
+  { id: "plan", label: "Plan" },
+  { id: "route", label: "Route" },
+  { id: "run", label: "Claim / run" },
+  { id: "review", label: "Review" },
+  { id: "autopilot", label: "Autopilot" },
+  { id: "recovery", label: "Recovery" },
 ];
 
-const COL = 180;
-const ROW = 60;
-const X0 = 80;
-const laneY = (lane: Lane): number => LANES.find((l) => l.id === lane)!.y;
-
-/** Hand-placed layout: `col`/`row` are grid cells inside the lane band. */
+/** Hand-placed layout: `col`/`row` are grid cells inside the lane band; `y` is lane-relative until placed. */
 function node(
   id: string,
   label: string,
@@ -80,12 +95,12 @@ function node(
   summary: string,
   adr?: string,
 ): FlowNode {
-  const n: FlowNode = { id, label, kind, lane, x: X0 + col * COL, y: laneY(lane) + row * ROW, codeRef, summary };
+  const n: FlowNode = { id, label, kind, lane, x: X0 + col * COL, y: row * ROW, codeRef, summary };
   if (adr) n.adr = adr;
   return n;
 }
 
-export const NODES: readonly FlowNode[] = [
+const RAW_NODES: readonly FlowNode[] = [
   // plan
   node("plan.goal", "Goal + interactive plan", "stage", "plan", 0, 0, "src/tasks/planner.ts#runInteractivePlanner", "The lead brainstorms with the human and writes tickets.json plus a plan brief.", "ADR-0010"),
   node("plan.gate", "Plan gate", "decision", "plan", 2, 0, "src/commands/plan-pipeline.ts#planGate", "The single human gate: ask on a TTY, run with --yes, otherwise print a hint.", "ADR-0010"),
@@ -158,6 +173,22 @@ export const NODES: readonly FlowNode[] = [
   node("rec.discard", "--discard", "stage", "recovery", 1, 2, "src/commands/abandon.ts#abandonCommand", "The only force-removal path; human-explicit.", "ADR-0006"),
   node("rec.todo", "Back to todo", "decision", "recovery", 2, 2, "src/commands/abandon.ts#abandonCommand", "Abandon writes status:todo and releases the lock and worktree, but neither supersedes failure telemetry nor deletes the task branch: the lifecycle is still derived from those facts.", "ADR-0006"),
 ];
+
+export const LANES: readonly FlowLane[] = (() => {
+  let y = LANE_TOP;
+  return LANE_DEFS.map((def) => {
+    const depth = Math.max(...RAW_NODES.filter((n) => n.lane === def.id).map((n) => n.y));
+    const height = LANE_PAD * 2 + NODE_H + depth;
+    const lane = { ...def, y, height };
+    y += height + LANE_GAP;
+    return lane;
+  });
+})();
+
+export const NODES: readonly FlowNode[] = RAW_NODES.map((n) => ({
+  ...n,
+  y: LANES.find((l) => l.id === n.lane)!.y + LANE_PAD + NODE_H / 2 + n.y,
+}));
 
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
