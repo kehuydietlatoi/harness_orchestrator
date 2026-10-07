@@ -167,6 +167,16 @@ describe("plan boards and decision records", () => {
     const board = last("plan-rerun");
     expect(board.map((t) => t.number)).toEqual([40, 41]);
     expect(board.find((t) => t.number === 41)!.deps).toEqual([40]);
+    expect(board.map((t) => t.title)).toEqual(["Add the data model", "Expose it over the API"]);
+  });
+
+  it("keeps a reused issue's existing routing even when it differs from the plan", () => {
+    // The plan routes the model ticket to claude; the reused issue #40 is labelled agent:codex on GitHub.
+    const board = last("plan-rerun");
+    expect(board.find((t) => t.number === 40)!.agent).toBe("codex");
+    expect(board.find((t) => t.number === 41)!.agent).toBeNull();
+    // Freshly created issues do take the plan's routing.
+    expect(last("plan-create").find((t) => t.number === 40)!.agent).toBe("claude");
   });
 
   it("records real arguments and JSON-safe outputs for every decision", () => {

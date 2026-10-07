@@ -1,7 +1,7 @@
 // Core scenarios: the plan-to-merge happy path and its branch points. Every decision is a call to the
 // real pure decider on faked facts; nothing here touches GitHub, git or an agent.
 import { acceptedReviewers, formatReview, reviewState } from "../../board/approval.js";
-import { byNumber, claimableBy, openDepsFromMap, orderByAfter } from "../../board/board.js";
+import { byNumber, claimableBy, issueAgent, openDepsFromMap, orderByAfter, parseAfter, parseDeps } from "../../board/board.js";
 import { buildGraph } from "../../board/graph.js";
 import { parseVerdict } from "../../board/review-run.js";
 import { evaluateGate } from "../../board/review.js";
@@ -58,6 +58,17 @@ function boardPlan(b: ScenarioBuilder, plan: ReturnType<typeof resolvePlan>, fir
       after: t.knownAfter.map((id) => numberOf.get(id)!),
     }),
   );
+}
+
+/**
+ * Put existing GitHub issues on the board exactly as they are: routing from their labels and links
+ * from their bodies (the real parsers). A reused issue is never relabelled or rewritten, so its board
+ * entry must come from the issue, never from the plan that matched it.
+ */
+function boardIssues(b: ScenarioBuilder, issues: readonly Issue[]): void {
+  for (const i of issues) {
+    b.patch(i.number, { title: i.title, agent: issueAgent(i), deps: parseDeps(i.body), after: parseAfter(i.body) });
+  }
 }
 
 /** Plan, validate, and stop at the gate: the opening shared by every plan scenario. */
@@ -204,16 +215,24 @@ const planRerun = ((): Scenario => {
   const gate = decide("planGate", planGate, { yes: true, interactive: false, tty: false });
   b.add({ node: "plan.reuse", edge: ["plan.gate", "plan.reuse", "--yes"], decision: gate.decision, narration: "--yes again, as after an interrupted run." });
   const markers = buildPlanMarkers(PLAN);
-  const existing = PLAN.map((t, i) =>
-    issue(40 + i, ["status:todo"], renderTicketBody(t, plan.tickets[i]!.knownDeps.map((id) => 40 + PLAN.findIndex((p) => p.id === id)), { plan: markers.plan, ticket: markers.tickets[i]! })),
-  );
+  // The earlier run created both issues; #40 was since routed to codex by hand, although the plan says claude.
+  const existing = PLAN.map((t, i) => ({
+    ...issue(
+      40 + i,
+      i === 0 ? ["status:todo", "agent:codex"] : ["status:todo"],
+      renderTicketBody(t, plan.tickets[i]!.knownDeps.map((id) => 40 + PLAN.findIndex((p) => p.id === id)), { plan: markers.plan, ticket: markers.tickets[i]! }),
+    ),
+    title: t.title,
+  }));
   const found = findMarkers(markers.tickets, existing);
-  boardPlan(b, plan, 40);
+  boardIssues(b, existing);
   b.add({
     node: "route.assign",
     edge: ["plan.reuse", "route.assign", "marker found"],
     decision: found.decision,
-    narration: `All ${Object.keys(found.output).length} ticket markers are already on issues #40 and #41: they are reused, not recreated, and routing continues.`,
+    narration:
+      `All ${Object.keys(found.output).length} ticket markers are already on issues #40 and #41: they are reused, not recreated, and routing continues. ` +
+      "A reused issue keeps its routing as it is on GitHub: #40 stays with codex although the plan routes it to claude.",
   });
   return b.build();
 })();
