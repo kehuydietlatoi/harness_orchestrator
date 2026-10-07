@@ -1812,15 +1812,41 @@
           void refresh();
         };
 
+        // BEGIN latest-wins (pure; exercised by test/dashboard-latest-wins.test.ts)
+        // Overlapping reads (poll + player step) can resolve out of order; only the newest request
+        // may apply its result, so the board never shows an older frame than the narration.
+        const makeLatestWins = () => {
+          let seq = 0;
+          return async (load, apply) => {
+            const mine = ++seq;
+            let value;
+            try {
+              value = await load();
+            } catch (error) {
+              if (mine === seq) throw error;
+              return false;
+            }
+            if (mine !== seq) return false;
+            apply(value);
+            return true;
+          };
+        };
+        // END latest-wins
+
+        const latestStatus = makeLatestWins();
+        const loadStatus = async () => {
+          const response = await fetch("/status", { cache: "no-store" });
+          const snapshot = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error((snapshot && snapshot.error) || `Status request failed (${response.status})`);
+          }
+          if (!snapshot || !Array.isArray(snapshot.tasks)) throw new Error("Invalid status response");
+          return snapshot;
+        };
+
         const refresh = async () => {
           try {
-            const response = await fetch("/status", { cache: "no-store" });
-            const snapshot = await response.json().catch(() => null);
-            if (!response.ok) {
-              throw new Error((snapshot && snapshot.error) || `Status request failed (${response.status})`);
-            }
-            if (!snapshot || !Array.isArray(snapshot.tasks)) throw new Error("Invalid status response");
-            render(snapshot);
+            await latestStatus(loadStatus, render);
           } catch (error) {
             refs.connection.classList.add("is-reconnecting");
             refs.connectionText.textContent = "Reconnecting…";
