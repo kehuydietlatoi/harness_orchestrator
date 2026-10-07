@@ -109,7 +109,8 @@ describe("executeTriage", () => {
     process.env.ORCH_HOME = home;
   });
   afterEach(() => {
-    process.env.ORCH_HOME = previousHome;
+    if (previousHome === undefined) delete process.env.ORCH_HOME;
+    else process.env.ORCH_HOME = previousHome;
     rmSync(home, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -144,7 +145,9 @@ describe("executeTriage", () => {
       comment: async (_pr, body) => { comments.push(body); },
       setHardEffort: async (issue, from) => { calls.push(`effort:${issue}:${from}`); },
       escalate: async (_obs, reason): Promise<StepResult> => { calls.push(`escalate:${reason}`); return { signal: "task.escalated", detail: reason }; },
-      now: () => new Date("2026-10-07T00:00:00Z"),
+      // The real clock: cooldowns are capped relative to `now` and read back against Date.now(), so a fixed
+      // fake time would make the "paused lead" test pass or fail depending on when it runs.
+      now: () => new Date(),
       ...over,
     };
     return { e, calls, comments };
