@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -48,6 +49,59 @@ describe("built CLI smoke", () => {
   it("exits non-zero on an unknown command", () => {
     const { code } = runCli(["definitely-not-a-real-command"]);
     expect(code).not.toBe(0);
+  });
+
+  it("serves the workflow graph and scenario registry in demo mode", async () => {
+    // Reserve an OS-selected port, then release it for the real CLI server.
+    const reservation = createServer();
+    await new Promise<void>((resolve, reject) => {
+      reservation.once("error", reject);
+      reservation.listen(0, "127.0.0.1", resolve);
+    });
+    const address = reservation.address();
+    if (!address || typeof address === "string") throw new Error("No TCP port allocated");
+    const port = address.port;
+    await new Promise<void>((resolve, reject) => reservation.close((error) => error ? reject(error) : resolve()));
+    const child = spawn(process.execPath, [cli, "serve", "--demo", "--port", String(port)], {
+      cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"],
+    });
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    let output = "";
+    let errors = "";
+    child.stderr.on("data", (chunk) => { errors += chunk.toString(); });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`Demo server did not start: ${errors}`)), 15_000);
+        const ready = () => { clearTimeout(timeout); resolve(); };
+        child.once("error", (error) => { clearTimeout(timeout); reject(error); });
+        child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`Demo server exited ${code}: ${errors}`)); });
+        child.stdout.on("data", (chunk) => {
+          output += chunk.toString();
+          if (output.includes(`Dashboard: http://127.0.0.1:${port}`)) ready();
+        });
+      });
+      const base = `http://127.0.0.1:${port}`;
+      const flowResponse = await fetch(`${base}/flow`);
+      expect(flowResponse.status).toBe(200);
+      const graph = await flowResponse.json();
+      expect(graph.nodes.length).toBeGreaterThan(0);
+      expect(graph.edges.length).toBeGreaterThan(0);
+      expect(graph.flows.length).toBeGreaterThan(0);
+      expect(graph.lanes.length).toBeGreaterThan(0);
+      expect(graph.stepNodes.review).toBe("step.review");
+      expect(graph.stateNodes.ready).toBe("state.ready");
+      const scenariosResponse = await fetch(`${base}/demo/scenarios`);
+      expect(scenariosResponse.status).toBe(200);
+      const player = await scenariosResponse.json();
+      expect(player.scenarios.length).toBeGreaterThan(0);
+      expect(player.scenarios[0]).toEqual(expect.objectContaining({
+        id: expect.any(String), title: expect.any(String), frameCount: expect.any(Number),
+      }));
+      expect(player.current).toEqual({ scenarioId: null, index: 0, total: 0, frame: null });
+    } finally {
+      child.kill();
+      await closed;
+    }
   });
 
   it("previews hard and advisory ticket references separately through the built CLI", () => {
