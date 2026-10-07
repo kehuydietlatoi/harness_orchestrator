@@ -2204,6 +2204,41 @@
           }
         };
 
+        // BEGIN flow-edge-geometry (pure; exercised by test/flow-edge-geometry.test.ts)
+        // Edges sharing a from/to pair (and opposite pairs) get distinct perpendicular offsets.
+        const flowEdgeSlots = (edges) => {
+          const groups = new Map();
+          for (const edge of edges) {
+            const key = `${edge.from}|${edge.to}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(edge);
+          }
+          const slots = new Map();
+          for (const [key, group] of groups) {
+            const [from, to] = key.split("|");
+            const hasReverse = from !== to && groups.has(`${to}|${from}`);
+            group.forEach((edge, index) => {
+              const offset = hasReverse ? 44 + 36 * index : 36 * (index - (group.length - 1) / 2);
+              slots.set(edge.id, { index, offset });
+            });
+          }
+          return slots;
+        };
+        const flowEdgePath = (start, end, offset) => {
+          const mx = (start.x + end.x) / 2;
+          const my = (start.y + end.y) / 2;
+          if (!offset) return { d: `M${start.x},${start.y} L${end.x},${end.y}`, lx: mx, ly: my - 3 };
+          const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+          const cx = mx - ((end.y - start.y) / len) * offset * 2;
+          const cy = my + ((end.x - start.x) / len) * offset * 2;
+          return {
+            d: `M${start.x},${start.y} Q${cx},${cy} ${end.x},${end.y}`,
+            lx: (start.x + 2 * cx + end.x) / 4,
+            ly: (start.y + 2 * cy + end.y) / 4 - 3,
+          };
+        };
+        // END flow-edge-geometry
+
         const drawFlow = (model) => {
           const width = Math.ceil(Math.max(...model.nodes.map((n) => n.x)) + NODE_W / 2 + 30);
           const lastLane = model.lanes[model.lanes.length - 1];
@@ -2225,7 +2260,7 @@
           }
 
           const byId = new Map(model.nodes.map((n) => [n.id, n]));
-          const pairs = new Set(model.edges.map((e) => `${e.from}|${e.to}`));
+          const slots = flowEdgeSlots(model.edges);
           const edgeLayer = svgEl("g", {}, svg);
           for (const edge of model.edges) {
             const a = byId.get(edge.from);
@@ -2238,27 +2273,14 @@
             let ly;
             if (a === b) {
               const x = a.x + NODE_W / 2;
-              d = `M${x},${a.y - 8} C${x + 40},${a.y - 30} ${x + 40},${a.y + 30} ${x},${a.y + 8}`;
-              lx = x + 34;
+              const spread = slots.get(edge.id).index * 24;
+              d = `M${x},${a.y - 8} C${x + 40 + spread},${a.y - 30} ${x + 40 + spread},${a.y + 30} ${x},${a.y + 8}`;
+              lx = x + 34 + spread;
               ly = a.y;
             } else {
               const start = boundary(a, b, 2);
               const end = boundary(b, a, 5);
-              const mx = (start.x + end.x) / 2;
-              const my = (start.y + end.y) / 2;
-              if (pairs.has(`${edge.to}|${edge.from}`)) {
-                // Opposite edges bow to either side so they don't overlap.
-                const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-                const cx = mx - ((end.y - start.y) / len) * 44;
-                const cy = my + ((end.x - start.x) / len) * 44;
-                d = `M${start.x},${start.y} Q${cx},${cy} ${end.x},${end.y}`;
-                lx = (start.x + 2 * cx + end.x) / 4;
-                ly = (start.y + 2 * cy + end.y) / 4 - 3;
-              } else {
-                d = `M${start.x},${start.y} L${end.x},${end.y}`;
-                lx = mx;
-                ly = my - 3;
-              }
+              ({ d, lx, ly } = flowEdgePath(start, end, slots.get(edge.id).offset));
             }
             svgEl("path", { d, "marker-end": "url(#flow-arrowhead)" }, group);
             svgEl("text", { x: lx, y: ly }, group).textContent = edge.label;
@@ -2347,15 +2369,12 @@
 
         const loadFlow = async () => {
           try {
-            const [flowResponse, demoResponse] = await Promise.all([
-              fetch("/flow", { cache: "no-store" }),
-              fetch("/demo/scenarios", { cache: "no-store" }).catch(() => null),
-            ]);
+            const flowResponse = await fetch("/flow", { cache: "no-store" });
             if (!flowResponse.ok) throw new Error(`Flow request failed (${flowResponse.status})`);
             const model = await flowResponse.json();
             if (!model || !Array.isArray(model.nodes) || !Array.isArray(model.edges)) throw new Error("Invalid flow response");
             flow.model = model;
-            flow.isDemo = Boolean(demoResponse && demoResponse.ok);
+            flow.isDemo = flowResponse.headers.get("X-Orch-Demo") === "1";
             for (const def of model.flows) {
               const option = make("option", "", def.title);
               option.value = def.id;
