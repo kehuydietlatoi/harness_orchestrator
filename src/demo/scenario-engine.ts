@@ -13,6 +13,7 @@ import type { ResolvedPlan } from "../tasks/plan.js";
 import type { Step } from "../tasks/steps.js";
 import type { TriageDecision, TriageFacts } from "../tasks/triage.js";
 import type { TaskEvent, TaskState, TaskStateKind, TransitionDecision } from "../tasks/lifecycle.js";
+import type { RepairPlan } from "../tasks/reconcile.js";
 
 /** What the board projection (`assemble`) derives per task, minus the fields derived from facts. */
 export type ScenarioTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "blockers" | "prUrl">;
@@ -84,6 +85,8 @@ const TRANSITION_EDGES: Record<string, { from: TaskStateKind; event: TaskEvent; 
   "run.claim>run.saga": { from: "ready", event: "claim", to: "claimed" },
   "state.claimed>state.in-progress": { from: "claimed", event: "start-work", to: "in-progress" },
   "review.merge>review.cleanup": { from: "in-review", event: "merge", to: "done" },
+  "run.outcome>run.fail": { from: "in-progress", event: "run-failed", to: "needs-attention" },
+  "run.outcome>run.nocommit": { from: "in-progress", event: "run-failed", to: "needs-attention" },
 };
 
 /**
@@ -92,6 +95,15 @@ const TRANSITION_EDGES: Record<string, { from: TaskStateKind; event: TaskEvent; 
  * scenario means adding its check here.
  */
 const CHECKS: Record<string, Check> = {
+  detectUsageLimit(d, e) {
+    return d.output !== null && e.from === "run.outcome" && e.to === "run.usage"
+      ? null : "only a usage limit in this run's log leads to run.usage";
+  },
+  planRepairs(d, e) {
+    const plan = d.output as RepairPlan;
+    return e.from === "rec.repair" && e.to === "rec.derive" && plan.blocked.length === 0
+      ? null : "repair preview must be unblocked before applying its actions";
+  },
   planGate(d, e) {
     const out = d.output as PlanGate;
     const answer = (d.input as { answer?: "y" | "n" }).answer;
@@ -211,6 +223,9 @@ export function checkFrame(frame: Frame): void {
     const d = frame.decision;
     const problem = d?.fn === "deriveTaskState" ? toState((d.output as TaskState).kind, frame.activeNode) : null;
     if (problem) throw new ScenarioDriftError(frame.id, problem);
+    if (d?.fn === "pickReviewer" && (frame.activeNode !== "review.pick" || d.output !== null)) {
+      throw new ScenarioDriftError(frame.id, "a refused reviewer pick must stop at review.pick with null output");
+    }
     return;
   }
   const edge = edgeById.get(frame.edge);
