@@ -10,6 +10,11 @@ export default defineConfig({
   test: {
     // Per-user state (telemetry, harness availability) must never touch the real ~/.orch.
     env: { ORCH_HOME: mkdtempSync(join(tmpdir(), "orch-home-")) },
+    // Several suites run real git and subprocesses. The 5s default is plenty locally but not on a loaded Windows
+    // runner (a `commandExists` check and a repair test each timed out there while passing on re-run), where a
+    // timeout is a flake, not a finding. A genuinely hung test still fails, just later.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
     exclude: [...configDefaults.exclude, "test/e2e/**"],
     coverage: {
       provider: "v8",
