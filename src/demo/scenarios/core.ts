@@ -10,7 +10,7 @@ import { planGate } from "../../commands/plan-pipeline.js";
 import type { Issue } from "../../github/github.js";
 import { evaluatePlan } from "../../routing/judge-eval.js";
 import { applyPlan, type PlanEntry } from "../../routing/assign.js";
-import { decideTaskTransition, deriveTaskState, type TaskFacts } from "../../tasks/lifecycle.js";
+import { decideTaskTransition, deriveTaskState, type TaskEvent, type TaskFacts, type TaskStateKind } from "../../tasks/lifecycle.js";
 import { buildPlanMarkers, indexByMarker, renderTicketBody } from "../../tasks/plan-create.js";
 import { resolvePlan, type Ticket } from "../../tasks/plan.js";
 import { decideStep, type StepFacts } from "../../tasks/steps.js";
@@ -33,6 +33,31 @@ const PLAN: Ticket[] = [
   { id: "model", title: "Add the data model", body: "Define the types.", files: ["src/model.ts"], agent: "claude", effort: "easy" },
   { id: "api", title: "Expose it over the API", dependsOn: ["model"], files: ["src/api.ts"] },
 ];
+
+const transition = (from: TaskStateKind, event: TaskEvent) =>
+  decide("decideTaskTransition", (i: { from: TaskStateKind; event: TaskEvent }) => decideTaskTransition(i.from, i.event), { from, event });
+
+/** Marker lookup with a JSON-safe result: marker -> issue numbers. */
+const findMarkers = (markers: string[], issues: Issue[]) =>
+  decide(
+    "indexByMarker",
+    (i: { markers: string[]; issues: Issue[] }) =>
+      Object.fromEntries([...indexByMarker(i.issues, i.markers)].map(([m, found]) => [m, found.map((x) => x.number)])),
+    { markers, issues },
+  );
+
+/** Put the plan's tickets on the board under their issue numbers (`first`, `first + 1`, ...). */
+function boardPlan(b: ScenarioBuilder, plan: ReturnType<typeof resolvePlan>, first: number): void {
+  const numberOf = new Map(plan.tickets.flatMap((t, i) => (t.id ? [[t.id, first + i] as const] : [])));
+  plan.tickets.forEach((t, i) =>
+    b.patch(first + i, {
+      title: t.title,
+      agent: t.agent ?? null,
+      deps: t.knownDeps.map((id) => numberOf.get(id)!),
+      after: t.knownAfter.map((id) => numberOf.get(id)!),
+    }),
+  );
+}
 
 /** Plan, validate, and stop at the gate: the opening shared by every plan scenario. */
 function toGate(b: ScenarioBuilder, tickets: Ticket[]): ReturnType<typeof resolvePlan> {
@@ -146,18 +171,18 @@ const planCreate = ((): Scenario => {
     flows: ["plan-pipeline"],
     summary: "Warnings (a dropped dependency, a shared file) are advisory; issues are created from the validated plan.",
   });
-  toGate(b, tickets);
+  const plan = toGate(b, tickets);
   const gate = decide("planGate", planGate, { yes: true, interactive: false, tty: false });
   b.add({ node: "plan.reuse", edge: ["plan.gate", "plan.reuse", "--yes"], decision: gate.decision, narration: "--yes: the pipeline runs. First, which tickets already have issues?" });
   const markers = buildPlanMarkers(tickets);
-  const found = decide("indexByMarker", (i: Issue[]) => indexByMarker(i, markers.tickets), [] as Issue[]);
+  const found = findMarkers(markers.tickets, []);
   b.add({
     node: "plan.create",
     edge: ["plan.reuse", "plan.create", "no marker"],
     decision: found.decision,
     narration: "No existing issue carries these deterministic ticket markers, so every ticket is created, carrying its marker for next time.",
   });
-  for (const [n, t] of tickets.entries()) b.patch(n + 1, { title: t.title, agent: t.agent ?? null, deps: [] });
+  boardPlan(b, plan, 40);
   b.add({
     node: "route.assign",
     edge: ["plan.create", "route.assign", "created"],
@@ -174,17 +199,20 @@ const planRerun = ((): Scenario => {
     flows: ["plan-pipeline"],
     summary: "Deterministic plan and ticket markers let a repeated or resumed run reuse the issues it already created.",
   });
-  toGate(b, PLAN);
+  const plan = toGate(b, PLAN);
   const gate = decide("planGate", planGate, { yes: true, interactive: false, tty: false });
   b.add({ node: "plan.reuse", edge: ["plan.gate", "plan.reuse", "--yes"], decision: gate.decision, narration: "--yes again, as after an interrupted run." });
   const markers = buildPlanMarkers(PLAN);
-  const existing = PLAN.map((t, i) => issue(40 + i, ["status:todo"], renderTicketBody(t, [], { plan: markers.plan, ticket: markers.tickets[i]! })));
-  const found = decide("indexByMarker", (i: Issue[]) => indexByMarker(i, markers.tickets), existing);
+  const existing = PLAN.map((t, i) =>
+    issue(40 + i, ["status:todo"], renderTicketBody(t, plan.tickets[i]!.knownDeps.map((id) => 40 + PLAN.findIndex((p) => p.id === id)), { plan: markers.plan, ticket: markers.tickets[i]! })),
+  );
+  const found = findMarkers(markers.tickets, existing);
+  boardPlan(b, plan, 40);
   b.add({
     node: "route.assign",
     edge: ["plan.reuse", "route.assign", "marker found"],
     decision: found.decision,
-    narration: `All ${found.output.size} ticket markers are already on issues #40 and #41: they are reused, not recreated, and routing continues.`,
+    narration: `All ${Object.keys(found.output).length} ticket markers are already on issues #40 and #41: they are reused, not recreated, and routing continues.`,
   });
   return b.build();
 })();
@@ -274,13 +302,13 @@ const happyPath = ((): Scenario => {
   b.add({ node: "route.after", edge: ["route.cycles", "route.after"], decision: graph.decision, narration: "The dependency graph is acyclic, so the eligible set is ordered by advisory After: preferences." });
   const ordered = decide("orderByAfter", orderByAfter, open);
   b.add({ node: "run.claim", edge: ["route.after", "run.claim"], decision: ordered.decision, narration: "The lowest-preference eligible task is #21." });
-  const claim = decide("decideTaskTransition", () => decideTaskTransition("ready", "claim"), null);
+  const claim = transition("ready", "claim");
   b.add({ node: "run.saga", edge: ["run.claim", "run.saga"], decision: claim.decision, narration: "The claim saga takes a Git lock ref, projects status:claimed and registers a worktree." });
   b.patch(N, { status: "status:claimed", locked: true, worktree: "../wt/issue-21" });
   const claimed = decide("deriveTaskState", deriveTaskState, facts({ lock: true, worktree: true, branch: "unchanged" }));
   b.add({ node: "state.claimed", edge: ["run.saga", "state.claimed"], decision: claimed.decision, narration: "Setup is verified from observed facts: the lock is held and the worktree is registered." });
   b.patch(N, { status: "status:in-progress" });
-  const start = decide("decideTaskTransition", () => decideTaskTransition("claimed", "start-work"), null);
+  const start = transition("claimed", "start-work");
   b.add({ node: "state.in-progress", edge: ["state.claimed", "state.in-progress"], decision: start.decision, narration: "The harness starts working in the worktree." });
   b.add({ node: "run.outcome", edge: ["state.in-progress", "run.outcome"], narration: "The harness exits; the run is classified from its exit code and commits." });
   b.add({ node: "run.submit", edge: ["run.outcome", "run.submit", "commits made"], narration: "It made commits, so orch pushes the branch and opens the PR." });
@@ -307,14 +335,18 @@ const happyPath = ((): Scenario => {
   b.patch(N, { reviewedBy: ["codex"] });
   const record = formatReview({ reviewer: "codex", pr: PR, head: HEAD, timestamp: TS, decision: "approve" }, "Approved.");
   const state = reviewState([{ id: 1, body: record, state: "COMMENTED", commit_id: HEAD }], PR, HEAD);
-  const accepted = decide("acceptedReviewers", () => acceptedReviewers(state, "claude", "cross-or-self"), null);
+  const accepted = decide(
+    "acceptedReviewers",
+    (i: { state: typeof state; author: string; policy: "cross-or-self" }) => acceptedReviewers(i.state, i.author, i.policy),
+    { state, author: "claude", policy: "cross-or-self" },
+  );
   b.add({ node: "review.gate", edge: ["review.approve", "review.gate"], decision: accepted.decision, narration: "codex's approval on the current head is the one accepted reviewer; labels never authorize a merge." });
   const gate = decide("evaluateGate", evaluateGate, {
     author: "claude", reviewers: accepted.output, selfReviewers: state.selfReviewers, reviewPolicy: "cross-or-self" as const,
     agents: AGENTS, requireCrossReview: true, checksPass: true, checksDetail: "all checks passed", requireHumanMerge: false, humanApproved: false,
   });
   b.add({ node: "review.merge", edge: ["review.gate", "review.merge"], decision: gate.decision, narration: "evaluateGate returns no blocking reasons: approved by the other harness, CI green." });
-  const merge = decide("decideTaskTransition", () => decideTaskTransition("in-review", "merge"), null);
+  const merge = transition("in-review", "merge");
   b.add({ node: "review.cleanup", edge: ["review.merge", "review.cleanup"], decision: merge.decision, narration: "The SHA-guarded merge lands; the claim lock is released and the worktree is pruned only if it is safe." });
   b.patch(N, null);
   const done = decide("deriveTaskState", deriveTaskState, facts({ issue: "closed", branch: "ahead", pr: "merged", telemetry: "submitted" }));

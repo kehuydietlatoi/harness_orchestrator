@@ -11,7 +11,7 @@ import type { DepGraph } from "../board/graph.js";
 import type { Issue } from "../github/github.js";
 import type { ResolvedPlan } from "../tasks/plan.js";
 import type { Step } from "../tasks/steps.js";
-import type { TaskState, TransitionDecision } from "../tasks/lifecycle.js";
+import type { TaskEvent, TaskState, TaskStateKind, TransitionDecision } from "../tasks/lifecycle.js";
 
 /** What the board projection (`assemble`) derives per task, minus the fields derived from facts. */
 export type ScenarioTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "blockers" | "prUrl">;
@@ -52,7 +52,6 @@ export class ScenarioDriftError extends Error {
 }
 
 const nodeIds = new Set(NODES.map((n) => n.id));
-const stateNodeIds = new Set(Object.values(STATE_NODES));
 const edgeById = new Map(EDGES.map((e) => [e.id, e]));
 
 /** `[from, to, labelPart?]`: the edge between two nodes, disambiguated by a label fragment when parallel edges exist. */
@@ -79,6 +78,13 @@ const toState = (kind: string, e: FlowEdge): string | null => {
   return e.to === node ? null : `derived '${kind}' (${node}) but the edge goes to ${e.to}`;
 };
 
+/** The lifecycle transition each stage hand-off stands for; `decideTaskTransition` must agree exactly. */
+const TRANSITION_EDGES: Record<string, { from: TaskStateKind; event: TaskEvent; to: TaskStateKind }> = {
+  "run.claim>run.saga": { from: "ready", event: "claim", to: "claimed" },
+  "state.claimed>state.in-progress": { from: "claimed", event: "start-work", to: "in-progress" },
+  "review.merge>review.cleanup": { from: "in-review", event: "merge", to: "done" },
+};
+
 /**
  * For each decider, does its recorded output lead along the scripted edge? A null return is agreement.
  * This is the single place where a decider's contract is tied to the graph; adding a decider to a
@@ -98,7 +104,7 @@ const CHECKS: Record<string, Check> = {
     return e.from === "plan.resolve" && e.to === to ? null : `resolvePlan (${blocked ? "errors" : "valid"}) leads to ${to}, not ${e.to}`;
   },
   indexByMarker(d, e) {
-    const reused = (d.output as Map<string, unknown>).size > 0;
+    const reused = Object.keys(d.output as Record<string, number[]>).length > 0;
     const to = reused ? "route.assign" : "plan.create";
     return e.from === "plan.reuse" && e.to === to ? null : `marker lookup (${reused ? "found" : "none"}) leads to ${to}, not ${e.to}`;
   },
@@ -127,8 +133,11 @@ const CHECKS: Record<string, Check> = {
   decideTaskTransition(d, e) {
     const t = d.output as TransitionDecision;
     if (!t.allowed) return `transition ${t.from} --${t.event}--> is illegal: ${t.reason}`;
-    // Only an edge into a lifecycle state is pinned to the transition's target; others are stage hand-offs.
-    return stateNodeIds.has(e.to) ? toState(t.to, e) : null;
+    const want = TRANSITION_EDGES[`${e.from}>${e.to}`];
+    if (!want) return `no transition is expected on edge ${e.from} -> ${e.to}`;
+    return t.from === want.from && t.event === want.event && t.to === want.to
+      ? null
+      : `edge ${e.from} -> ${e.to} expects ${want.from} --${want.event}--> ${want.to}, got ${t.from} --${t.event}--> ${t.to}`;
   },
   deriveTaskState(d, e) {
     return toState((d.output as TaskState).kind, e);

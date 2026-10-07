@@ -67,4 +67,45 @@ describe("drift check", () => {
     expect(() => resolveEdge(["plan.gate", "plan.hint"])).toThrow(/2 edges/);
     expect(() => resolveEdge(["plan.gate", "state.done"])).toThrow(/0 edges/);
   });
+
+  it("pins each stage hand-off to its exact lifecycle transition", () => {
+    const claim = happy.frames.find((f) => f.activeNode === "run.saga")!;
+    const done = { allowed: true, from: "in-review", event: "merge", to: "done" };
+    expect(() => checkFrame({ ...claim, decision: { ...claim.decision!, output: done } })).toThrow(/expects ready --claim--> claimed/);
+    const start = happy.frames.find((f) => f.activeNode === "state.in-progress")!;
+    const wrongEvent = { allowed: true, from: "claimed", event: "reset", to: "ready" };
+    expect(() => checkFrame({ ...start, decision: { ...start.decision!, output: wrongEvent } })).toThrow(ScenarioDriftError);
+    const illegal = { allowed: false, from: "ready", event: "merge", reason: "no" };
+    expect(() => checkFrame({ ...claim, decision: { ...claim.decision!, output: illegal } })).toThrow(/illegal/);
+  });
+});
+
+describe("plan boards and decision records", () => {
+  const byId = (id: string) => SCENARIOS.find((s) => s.id === id)!;
+  const last = (id: string) => byId(id).frames.at(-1)!.board;
+
+  it("carries resolved dependencies and created issues onto the plan-create board", () => {
+    const board = last("plan-create");
+    expect(board.map((t) => t.number)).toEqual([40, 41, 42]);
+    expect(board.find((t) => t.number === 41)!.deps).toEqual([40]);
+    expect(board.find((t) => t.number === 42)!.deps).toEqual([]);
+  });
+
+  it("shows the reused issues, with their dependencies, on the plan-rerun board", () => {
+    const board = last("plan-rerun");
+    expect(board.map((t) => t.number)).toEqual([40, 41]);
+    expect(board.find((t) => t.number === 41)!.deps).toEqual([40]);
+  });
+
+  it("records real arguments and JSON-safe outputs for every decision", () => {
+    for (const f of SCENARIOS.flatMap((s) => s.frames)) {
+      if (!f.decision) continue;
+      expect(f.decision.input, f.id).not.toBeNull();
+      expect(JSON.parse(JSON.stringify(f.decision)), f.id).toEqual(f.decision);
+    }
+    const lookup = byId("plan-rerun").frames.find((f) => f.decision?.fn === "indexByMarker")!.decision!;
+    expect(Object.values(lookup.output as Record<string, number[]>)).toEqual([[40], [41]]);
+    const accepted = byId("happy-path").frames.find((f) => f.decision?.fn === "acceptedReviewers")!.decision!;
+    expect(accepted.input).toMatchObject({ author: "claude", policy: "cross-or-self" });
+  });
 });
