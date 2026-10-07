@@ -41,7 +41,8 @@ describe("flow graph model", () => {
     for (const n of NODES) {
       const [file, fn] = n.codeRef.split("#");
       expect(existsSync(file!), `${n.id}: ${file}`).toBe(true);
-      expect(readFileSync(file!, "utf8").includes(fn!), `${n.id}: ${fn} in ${file}`).toBe(true);
+      const def = new RegExp(String.raw`(function\*?|const|let|class)\s+${fn}\b|^\s*(async\s+)?${fn}\s*\(`, "m");
+      expect(def.test(readFileSync(file!, "utf8")), `${n.id}: ${fn} is not defined in ${file}`).toBe(true);
     }
   });
 
@@ -84,7 +85,7 @@ describe("flow graph review-round regressions", () => {
       "no TTY, no --yes: hint",
       "declined (n): hint",
     ]);
-    expect(NODES.find((n) => n.id === "plan.goal")!.codeRef).toBe("src/commands/plan.ts#runInteractivePlanner");
+    expect(NODES.find((n) => n.id === "plan.goal")!.codeRef).toBe("src/tasks/planner.ts#runInteractivePlanner");
   });
 
   it("models the escalation handoff separately from the needs-attention state", () => {
@@ -114,5 +115,28 @@ describe("review.changes follows deriveTaskState", () => {
 
   it("does not describe in-review by its review:needed label", () => {
     expect(NODES.find((n) => n.id === "state.in-review")!.summary).not.toContain("review:needed");
+  });
+});
+
+describe("requeue guard and advisory routing", () => {
+  const from = (id: string) => EDGES.filter((e) => e.from === id);
+
+  it("models both outcomes of the requeue guard", () => {
+    const requeue = from("run.usage").find((e) => e.to === "run.requeue")!;
+    const fail = from("run.usage").find((e) => e.to === "run.fail")!;
+    expect(requeue.label).toMatch(/no commits.*no open PR.*worktree removed.*lock released/);
+    expect(fail.label).toMatch(/commits ahead/);
+    expect(fail.label).toMatch(/open PR/);
+    expect(fail.label).toMatch(/worktree retained/);
+    expect(fail.label).toMatch(/lock not released/);
+  });
+
+  it("treats plan evaluation as advisory and applies valid entries while skipping invalid ones", () => {
+    expect(NODES.find((n) => n.id === "route.eval")!.kind).toBe("stage");
+    expect(NODES.find((n) => n.id === "route.apply")!.kind).toBe("decision");
+    expect(from("route.eval").map((e) => e.to)).toEqual(["route.apply"]);
+    expect(from("route.eval")[0]!.label).toMatch(/never blocks/);
+    expect(from("route.apply").map((e) => e.to).sort()).toEqual(["route.skipped", "state.ready"]);
+    for (const e of from("route.apply")) expect(e.flows).toContain("routing");
   });
 });

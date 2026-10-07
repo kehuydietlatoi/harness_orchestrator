@@ -87,7 +87,7 @@ function node(
 
 export const NODES: readonly FlowNode[] = [
   // plan
-  node("plan.goal", "Goal + interactive plan", "stage", "plan", 0, 0, "src/commands/plan.ts#runInteractivePlanner", "The lead brainstorms with the human and writes tickets.json plus a plan brief.", "ADR-0010"),
+  node("plan.goal", "Goal + interactive plan", "stage", "plan", 0, 0, "src/tasks/planner.ts#runInteractivePlanner", "The lead brainstorms with the human and writes tickets.json plus a plan brief.", "ADR-0010"),
   node("plan.gate", "Plan gate", "decision", "plan", 2, 0, "src/commands/plan-pipeline.ts#planGate", "The single human gate: ask on a TTY, run with --yes, otherwise print a hint.", "ADR-0010"),
   node("plan.hint", "Print commands (hint)", "terminal", "plan", 2, 1, "src/commands/plan-pipeline.ts#planGate", "No TTY and no --yes, or the human declined: print the create/route/autopilot commands and stop."),
   node("plan.resolve", "Resolve plan", "decision", "plan", 1, 0, "src/tasks/plan.ts#resolvePlan", "Validates and previews the plan before approval: errors block creation, warnings are advisory."),
@@ -97,8 +97,9 @@ export const NODES: readonly FlowNode[] = [
   // route
   node("route.assign", "Routing brief", "stage", "route", 0, 0, "src/commands/assign.ts#autoRoute", "Whole-open-graph brief for issues missing agent: and effort: labels."),
   node("route.judge", "Lead judge", "stage", "route", 1, 0, "src/routing/judge.ts#runJudge", "The lead runs headless and returns a routing plan.", "ADR-0005"),
-  node("route.eval", "Plan contract-valid?", "decision", "route", 2, 0, "src/routing/judge-eval.ts#evaluatePlan", "Coverage, duplicates, agent/effort validity and rationale checks.", "ADR-0005"),
-  node("route.apply", "Apply (fill blanks)", "stage", "route", 3, 0, "src/routing/assign.ts#applyPlan", "Writes labels only where agent:/effort: are missing; never replaces existing ones."),
+  node("route.eval", "Evaluate plan (advisory)", "stage", "route", 2, 0, "src/routing/judge-eval.ts#evaluatePlan", "Checks coverage, duplicates, agent/effort validity and rationale; only warns on stderr and never blocks applying.", "ADR-0005"),
+  node("route.apply", "Apply (fill blanks)", "decision", "route", 3, 0, "src/routing/assign.ts#applyPlan", "Writes labels for valid entries only where agent:/effort: are missing; malformed entries are skipped, never replacing existing labels."),
+  node("route.skipped", "Left unrouted", "terminal", "route", 3, 1, "src/routing/assign.ts#applyPlan", "An invalid or missing plan entry is skipped; the issue keeps no routing label."),
   node("route.eligible", "Eligible issues", "decision", "route", 0, 1, "src/board/board.ts#eligibleIssues", "status:todo, no open Depends-on blockers, owned by the asking agent."),
   node("route.cycles", "Dependency graph", "decision", "route", 1, 1, "src/board/graph.ts#buildGraph", "Pure DAG over open issues; cycles are reported, never auto-broken."),
   node("route.after", "After: ordering", "stage", "route", 2, 1, "src/board/board.ts#orderByAfter", "Advisory preference among eligible candidates; falls back to issue number."),
@@ -115,8 +116,8 @@ export const NODES: readonly FlowNode[] = [
   node("run.fail", "Run failed", "stage", "run", 4, 1, "src/tasks/runner.ts#processNext", "Non-zero exit: safe cleanup, then needs-attention."),
   node("run.nocommit", "No commits", "stage", "run", 5, 1, "src/tasks/runner.ts#processNext", "The harness exited cleanly but produced nothing to submit."),
   node("run.cleanup", "Safe cleanup", "decision", "run", 6, 1, "src/git/worktree.ts#worktreeRemovalSafety", "Failed and no-commit runs try safe removal; the failure telemetry stays either way.", "ADR-0006"),
-  node("run.usage", "Usage limit?", "decision", "run", 3, 1, "src/adapters/usage-limit.ts#detectUsageLimit", "Only error-shaped events in this run's own log count, never assistant text.", "ADR-0008"),
-  node("run.requeue", "Requeue", "stage", "run", 2, 1, "src/tasks/runner.ts#requeueClaim", "Safe cleanup, release the lock, back to status:todo and pause the harness.", "ADR-0008"),
+  node("run.usage", "Usage limit?", "decision", "run", 3, 1, "src/adapters/usage-limit.ts#detectUsageLimit", "Only error-shaped events in this run's own log count, never assistant text; the requeue guard then decides requeue or failed.", "ADR-0008"),
+  node("run.requeue", "Requeue", "stage", "run", 2, 1, "src/tasks/runner.ts#requeueClaim", "Only with no commits ahead and no open PR: removes the worktree, releases the lock, returns to status:todo and pauses the harness.", "ADR-0008"),
   // review
   node("state.in-review", "in-review", "state", "review", 0, 0, "src/tasks/lifecycle.ts#deriveTaskState", "Open PR on the task branch with no changes requested on its current head; review labels are projections."),
   node("review.pick", "Pick reviewer", "decision", "review", 1, 0, "src/board/reviewer.ts#pickReviewer", "Prefer any available other harness; the author only when all others are paused.", "ADR-0008"),
@@ -178,8 +179,9 @@ export const EDGES: readonly FlowEdge[] = [
   // routing
   edge("route.assign", "route.judge", "brief to the lead", "routing"),
   edge("route.judge", "route.eval", "routing plan JSON", "routing"),
-  edge("route.eval", "route.apply", "valid (gaps warn on stderr)", "routing"),
-  edge("route.apply", "state.ready", "agent:/effort: filled", "routing"),
+  edge("route.eval", "route.apply", "advisory: gaps warn on stderr, never blocks", "routing"),
+  edge("route.apply", "state.ready", "valid entries: agent:/effort: filled", "routing"),
+  edge("route.apply", "route.skipped", "invalid or missing entry: skipped", "routing"),
   // eligibility, cycles, ordering
   edge("state.ready", "route.eligible", "next / run / autopilot", "claim-run"),
   edge("route.eligible", "route.cycles", "open dependencies", "dependency-cycle"),
@@ -203,8 +205,8 @@ export const EDGES: readonly FlowEdge[] = [
   edge("run.cleanup", "state.needs-attention", "worktree removed: failure telemetry", "failure-recovery"),
   edge("run.cleanup", "state.inconsistent", "work retained + failure telemetry", "failure-recovery"),
   edge("run.outcome", "run.usage", "own log shows a limit", "usage-limit"),
-  edge("run.usage", "run.requeue", "cleanup removed worktree", "usage-limit"),
-  edge("run.usage", "run.fail", "worktree retained: failed path", "usage-limit", "failure-recovery"),
+  edge("run.usage", "run.requeue", "no commits, no open PR, worktree removed, lock released", "usage-limit"),
+  edge("run.usage", "run.fail", "requeue guard failed: commits ahead, open PR, worktree retained or lock not released", "usage-limit", "failure-recovery"),
   edge("run.requeue", "state.ready", "status:todo, harness paused", "usage-limit"),
   edge("run.requeue", "step.wait", "autopilot: agent.unavailable", "usage-limit"),
   // review
