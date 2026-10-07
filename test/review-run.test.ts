@@ -50,6 +50,21 @@ function runner(results: Array<{ code?: number; text?: string; raw?: string; tim
   return { deps: { runner: fn, checkout, stageDiff, now: () => new Date() } satisfies ReviewRunDeps, calls, checkouts, staged };
 }
 
+describe("parseVerdict follow-ups", () => {
+  it("reads optional follow-ups, only when there are some", () => {
+    expect(parseVerdict('```json\n{"decision":"approve","notes":"ok","followups":[" more cases ","rename"]}\n```'))
+      .toEqual({ decision: "approve", notes: "ok", followups: ["more cases", "rename"] });
+    expect(parseVerdict('```json\n{"decision":"approve","notes":"ok","followups":[]}\n```')).toEqual({ decision: "approve", notes: "ok" });
+  });
+
+  it("ignores malformed follow-ups instead of failing the review, and never lets them justify a change request", () => {
+    expect(parseVerdict('```json\n{"decision":"approve","notes":"ok","followups":"later"}\n```')).toEqual({ decision: "approve", notes: "ok" });
+    expect(parseVerdict('```json\n{"decision":"request-changes","notes":"  ","followups":["only this"]}\n```')).toBeNull();
+    expect(parseVerdict('```json\n{"decision":"request-changes","notes":"fix X","followups":["and this later"]}\n```'))
+      .toEqual({ decision: "request-changes", notes: "fix X", followups: ["and this later"] });
+  });
+});
+
 describe("parseVerdict", () => {
   it("reads an approve or request-changes decision from the last fenced block", () => {
     expect(parseVerdict(approveText)).toEqual({ decision: "approve", notes: "meets criteria" });
@@ -161,6 +176,27 @@ describe("listChangedFiles", () => {
   });
 });
 
+describe("review scoped by a definition of done", () => {
+  const base = { issue, pr, diff: SMALL_DIFF, author: "claude", reviewer: "codex", mode: "cross" as const };
+  const withDone = { ...issue, body: "do the thing\n\n## Definition of done\n- [ ] `npm test` passes\n\n## Out of scope\n- polish" };
+
+  it("tells the reviewer to request changes only for the definition of done, and to route the rest to follow-ups", () => {
+    const prompt = formatReviewPrompt({ ...base, issue: withDone });
+    expect(prompt).toMatch(/Definition of done\. Judge the change against it/);
+    expect(prompt).toMatch(/Request changes ONLY for \(a\)[\s\S]*\(b\) a defect[\s\S]*\(c\) a missing test/);
+    expect(prompt).toContain('Put each in "followups"');
+    expect(prompt).toContain('"followups": ["..."]');
+    expect(prompt).toContain("Do not invent requirements");
+  });
+
+  it("leaves the prompt exactly as before for an issue with no definition of done", () => {
+    const prompt = formatReviewPrompt({ ...base, issue });
+    expect(prompt).not.toContain("Definition of done");
+    expect(prompt).not.toContain("followups");
+    expect(prompt).toContain('{"decision": "approve" | "request-changes", "notes": "..."}');
+  });
+});
+
 describe("runAutomatedReview", () => {
   let cwd = "";
   beforeEach(() => {
@@ -186,6 +222,18 @@ describe("runAutomatedReview", () => {
     const body = vi.mocked(gh.recordPrReview).mock.calls[0][2];
     expect(body).toContain('"reviewer":"codex"');
     expect(body).not.toContain('"mode"');
+  });
+
+  it("records follow-ups on the PR beside the verdict, without turning them into change requests", async () => {
+    const withFollowups = 'ok\n```json\n{"decision":"approve","notes":"meets criteria","followups":["cover unicode names","rename helper"]}\n```';
+    const { deps } = runner([{ text: withFollowups }]);
+    const out = await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+
+    expect(out).toMatchObject({ decision: "approve", followups: ["cover unicode names", "rename helper"] });
+    const body = vi.mocked(gh.recordPrReview).mock.calls[0][2];
+    expect(body).toContain("meets criteria");
+    expect(body).toContain("### Follow-ups (not required for this PR)\n- cover unicode names\n- rename helper");
+    expect(body).toContain('"decision":"approve"');
   });
 
   it("records one review run in telemetry per completed review, including failed ones", async () => {

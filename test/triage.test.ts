@@ -89,6 +89,16 @@ describe("triage and fix prompts", () => {
     }
   });
 
+  it("tells the lead to judge findings against the spec's definition of done and to name what to decline", () => {
+    const prompt = formatTriagePrompt({
+      issue: { number: 38, title: "t", body: "spec\n\n## Definition of done\n- [ ] x" },
+      pr: { number: 62, headSha: HEAD, headRefName: "task/38-x" }, author: "codex", effort: null,
+      reason: "stuck", checks: "pass", mergeable: "clean", reviews: [], files: [],
+    });
+    expect(prompt).toMatch(/Judge the remaining review findings against the spec's Definition of done/);
+    expect(prompt).toMatch(/name which findings the author\s+must fix and which to decline as out of scope/);
+  });
+
   it("puts the lead's guidance in the fix prompt only when there is some", () => {
     const base = {
       issue: { number: 38, title: "t", body: "spec" }, pr: { number: 62, headRefName: "task/38-x" }, worktree: "/wt",

@@ -651,9 +651,15 @@ describe("step executors", () => {
 
   describe("executeReview", () => {
     it("maps the verdict to a signal", async () => {
-      const outcome = { reviewer: "claude", mode: "cross" as const, head: HEAD, issue: 38, author: "codex", notes: "", };
+      const outcome = { reviewer: "claude", mode: "cross" as const, head: HEAD, issue: 38, author: "codex", notes: "", followups: [] };
       vi.mocked(runAutomatedReview).mockResolvedValueOnce({ ...outcome, decision: "approve" });
       expect(await executeReview(obs(), DEFAULT_CONFIG, cwd)).toEqual({ signal: "review.approved", detail: "claude (cross)" });
+      // Non-blocking follow-ups are surfaced in the loop's log line, never as a different signal.
+      vi.mocked(runAutomatedReview).mockResolvedValueOnce({ ...outcome, decision: "approve", followups: ["more cases", "rename"] });
+      expect(await executeReview(obs(), DEFAULT_CONFIG, cwd)).toEqual({
+        signal: "review.approved",
+        detail: "claude (cross); 2 follow-up(s) recorded",
+      });
       vi.mocked(runAutomatedReview).mockResolvedValueOnce({ ...outcome, decision: "request-changes" });
       expect((await executeReview(obs(), DEFAULT_CONFIG, cwd)).signal).toBe("review.changes_requested");
     });
