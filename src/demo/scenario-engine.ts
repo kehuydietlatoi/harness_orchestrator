@@ -11,6 +11,7 @@ import type { DepGraph } from "../board/graph.js";
 import type { Issue } from "../github/github.js";
 import type { ResolvedPlan } from "../tasks/plan.js";
 import type { Step } from "../tasks/steps.js";
+import type { TriageDecision, TriageFacts } from "../tasks/triage.js";
 import type { TaskEvent, TaskState, TaskStateKind, TransitionDecision } from "../tasks/lifecycle.js";
 
 /** What the board projection (`assemble`) derives per task, minus the fields derived from facts. */
@@ -180,11 +181,25 @@ const CHECKS: Record<string, Check> = {
   },
   decideStep(d, e) {
     const step = d.output as Step;
+    if (e.from === "auto.handoff" && e.to === "step.none") {
+      return step.kind === "none" && (d.input as { attention: boolean }).attention ? null : "a handoff must remain human-owned";
+    }
     const noPr = (d.input as { pr: unknown }).pr === null;
     if (e.from === "auto.decide" && e.to === "auto.report") {
       return step.kind === "none" && noPr ? null : `only a PR-less 'none' step reports (got '${step.kind}')`;
     }
+    if (step.kind === "fix" && !e.label.includes(step.reason === "ci" ? "CI failing" : "changes requested")) return "fix reason contradicts the edge";
     return e.from === "auto.decide" && e.to === STEP_NODES[step.kind] ? null : `decideStep -> '${step.kind}' leads to ${STEP_NODES[step.kind]}, not ${e.to}`;
+  },
+  parseTriageDecision(d, e) {
+    const out = d.output as TriageDecision | null;
+    const to = out?.decision === "retry" ? "auto.observe" : "step.escalate";
+    return e.from === "step.triage" && e.to === to ? null : `triage verdict leads to ${to}, not ${e.to}`;
+  },
+  triageFacts(d, e) {
+    const out = d.output as TriageFacts;
+    return e.from === "auto.observe" && e.to === "auto.decide" && out.triages > 0 && out.extraRounds === 1 && !!out.guidance
+      ? null : "retry observation must recover the granted round and guidance";
   },
 };
 
