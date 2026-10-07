@@ -5,6 +5,8 @@ import { createServer, isLoopback, startServer, type ServerDeps } from "../src/s
 import type { OrchConfig } from "../src/config.js";
 import type { Issue } from "../src/github/github.js";
 import type { Ticket } from "../src/tasks/plan.js";
+import { LANES, NODES, EDGES, FLOWS, STEP_NODES, STATE_NODES } from "../src/demo/flow-graph.js";
+import type { DemoPlayer } from "../src/server/server.js";
 
 vi.mock("../src/board/snapshot.js", () => ({
   buildSnapshot: vi.fn(async () => ({
@@ -463,5 +465,49 @@ describe("write surface", () => {
     const port = await start(deps);
     const res = await post(port, "/actions/nope", {});
     expect(res.status).toBe(404);
+  });
+
+  it("serves the pure flow model in normal mode and leaves status bytes unchanged", async () => {
+    const { deps } = fakeDeps();
+    const port = await start(deps);
+    const response = await request(port, "/flow");
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual({ lanes: LANES, nodes: NODES, edges: EDGES,
+      flows: FLOWS, stepNodes: STEP_NODES, stateNodes: STATE_NODES });
+    expect((await request(port, "/status")).body).toBe(JSON.stringify(await deps.snapshot(process.cwd())));
+    expect((await request(port, "/demo/scenarios")).status).toBe(404);
+    expect((await post(port, "/actions/demo", { action: "reset" })).status).toBe(404);
+  });
+
+  it("exposes the opt-in player and authorizes demo actions before touching it", async () => {
+    const current = { scenarioId: "example", index: 0, total: 1,
+      frame: { id: "example:01", narration: "A frame", activeNode: "state.ready", board: [],
+        edge: "an-edge", decision: { fn: "decider", input: {}, output: true } } };
+    const demo: DemoPlayer = {
+      list: vi.fn(() => []), current: vi.fn(() => current), load: vi.fn(() => current),
+      step: vi.fn(() => current), reset: vi.fn(() => ({ scenarioId: null, index: 0, total: 0, frame: null })),
+    };
+    const port = await start(fakeDeps({ demo }).deps);
+    expect(JSON.parse((await request(port, "/demo/scenarios")).body)).toEqual({ scenarios: [], current });
+    for (const options of [
+      { omitHeaders: ["Origin"] }, { headers: { Host: `evil.example:${port}` } },
+      { omitHeaders: ["X-Orch-Request"] }, { headers: { "Content-Type": "text/plain" } },
+    ]) {
+      expect((await post(port, "/actions/demo", { action: "load", id: "example" }, options)).status)
+        .toBe(options.headers?.["Content-Type"] ? 415 : 403);
+    }
+    expect(demo.load).not.toHaveBeenCalled();
+    for (const action of ["load", "next", "prev", "current", "reset"]) {
+      const response = await post(port, "/actions/demo", { action, id: "example" });
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toEqual(action === "reset"
+        ? { scenarioId: null, index: 0, total: 0, frame: null } : current);
+    }
+    expect(demo.load).toHaveBeenCalledWith("example");
+    expect(demo.step).toHaveBeenCalledWith("next");
+    expect(demo.step).toHaveBeenCalledWith("prev");
+    for (const body of [null, [], { action: "load" }, { action: "unknown" }]) {
+      expect((await post(port, "/actions/demo", body)).status).toBe(400);
+    }
   });
 });
