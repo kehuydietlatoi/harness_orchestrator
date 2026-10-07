@@ -7,6 +7,8 @@
 ## Conventions
 _(add project-specific facts, gotchas, and architectural decisions below)_
 
+- **Flow label visibility (#110)**: `public/index.html` keeps state-driven edge-label visibility in the extractable pure `flow-label-visibility` block; hover/focus visibility stays in CSS. Hit paths share the rendered edge geometry and must keep their transparent 10px stroke even on highlighted/active edges.
+
 - **Workflow graph and docs (#98)**: `src/demo/flow-graph.ts` is the single source for the graph and generated `docs/FLOWS.md`. New autopilot steps or lifecycle states must add nodes and a registered scenario; cover every new edge, then run `npm run docs:flows`. `test/flows-coverage.test.ts` enforces full edge/flow coverage and documentation drift.
 
 - **Scenario HTTP contract (#95)**: `GET /flow` serves `{lanes,nodes,edges,flows,stepNodes,stateNodes}` in both modes. Optional `ServerDeps.demo` enables `GET /demo/scenarios` (`{scenarios,current}`; metadata includes `frameCount`) and authorized `POST /actions/demo` (`{action,id?}`; actions `load|next|prev|reset|current`). Player responses are `{scenarioId,index,total,frame}` with a zero-based, endpoint-clamped index; unloaded state is `{scenarioId:null,index:0,total:0,frame:null}`. Frames carry narration/activeNode/edge/decision through demo routes only. Demo snapshots project the current frame board through `assemble`, including head-bound synthetic approval records, then preserve its scripted status: frame boards are sparse projections, not full lifecycle observations (e.g. an author bounce lacks request-changes review records). Reset restores a fresh seed board and clears creation markers. Normal `/status` retains its existing schema and serialization.
