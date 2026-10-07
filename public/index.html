@@ -2272,17 +2272,6 @@
           return el;
         };
 
-        // Where the line from `from` toward `to` leaves a node's rectangle (plus a small gap).
-        const boundary = (from, to, gap) => {
-          const dx = to.x - from.x;
-          const dy = to.y - from.y;
-          if (dx === 0 && dy === 0) return { x: from.x, y: from.y };
-          const sx = dx === 0 ? Infinity : (NODE_W / 2 + gap) / Math.abs(dx);
-          const sy = dy === 0 ? Infinity : (NODE_H / 2 + gap) / Math.abs(dy);
-          const t = Math.min(sx, sy);
-          return { x: from.x + dx * t, y: from.y + dy * t };
-        };
-
         const nodeShape = (kind, parent) => {
           const hw = NODE_W / 2;
           const hh = NODE_H / 2;
@@ -2397,45 +2386,13 @@
           }
         };
 
-        // BEGIN flow-edge-geometry (pure; exercised by test/flow-edge-geometry.test.ts)
-        // Edges sharing a from/to pair (and opposite pairs) get distinct perpendicular offsets.
-        const flowEdgeSlots = (edges) => {
-          const groups = new Map();
-          for (const edge of edges) {
-            const key = `${edge.from}|${edge.to}`;
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(edge);
-          }
-          const slots = new Map();
-          for (const [key, group] of groups) {
-            const [from, to] = key.split("|");
-            const hasReverse = from !== to && groups.has(`${to}|${from}`);
-            group.forEach((edge, index) => {
-              const offset = hasReverse ? 44 + 36 * index : 36 * (index - (group.length - 1) / 2);
-              slots.set(edge.id, { index, offset });
-            });
-          }
-          return slots;
-        };
-        const flowEdgePath = (start, end, offset) => {
-          const mx = (start.x + end.x) / 2;
-          const my = (start.y + end.y) / 2;
-          if (!offset) return { d: `M${start.x},${start.y} L${end.x},${end.y}`, lx: mx, ly: my - 3 };
-          const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-          const cx = mx - ((end.y - start.y) / len) * offset * 2;
-          const cy = my + ((end.x - start.x) / len) * offset * 2;
-          return {
-            d: `M${start.x},${start.y} Q${cx},${cy} ${end.x},${end.y}`,
-            lx: (start.x + 2 * cx + end.x) / 4,
-            ly: (start.y + 2 * cy + end.y) / 4 - 3,
-          };
-        };
-        // END flow-edge-geometry
+        // BEGIN flow-route-path (pure; exercised by test/flow-route-path.test.ts)
+        const flowRoutePath = (points) => points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+        // END flow-route-path
 
         const drawFlow = (model) => {
-          const width = Math.ceil(Math.max(...model.nodes.map((n) => n.x)) + NODE_W / 2 + 30);
-          const lastLane = model.lanes[model.lanes.length - 1];
-          const height = Math.ceil(Math.max(Math.max(...model.nodes.map((n) => n.y)) + NODE_H / 2 + 30, lastLane.y + 160));
+          const { layout } = model;
+          const { width, height } = layout;
           const svg = svgEl("svg", {
             class: "flow-svg", width, height, viewBox: `0 0 ${width} ${height}`,
             role: "group", "aria-label": "orch workflow graph",
@@ -2447,40 +2404,30 @@
           }, defs);
           svgEl("path", { class: "flow-arrow", d: "M0,0 L10,5 L0,10 z" }, marker);
 
-          for (const lane of model.lanes) {
-            svgEl("rect", { class: "flow-lane", x: 2, y: lane.y - 30, width: width - 4, height: 180, rx: 10 }, svg);
-            svgEl("text", { class: "flow-lane-label", x: 14, y: lane.y - 14 }, svg).textContent = lane.label;
+          const laneLabels = new Map(model.lanes.map((lane) => [lane.id, lane.label]));
+          for (const lane of layout.lanes) {
+            svgEl("rect", { class: "flow-lane", x: 2, y: lane.y, width: width - 4, height: lane.height, rx: 10 }, svg);
+            svgEl("text", { class: "flow-lane-label", x: 14, y: lane.y + 16 }, svg).textContent = laneLabels.get(lane.id) || lane.id;
           }
 
           const byId = new Map(model.nodes.map((n) => [n.id, n]));
-          const slots = flowEdgeSlots(model.edges);
           const edgeLayer = svgEl("g", {}, svg);
           for (const edge of model.edges) {
-            const a = byId.get(edge.from);
-            const b = byId.get(edge.to);
-            if (!a || !b) continue;
+            const route = layout.routes[edge.id];
+            if (!route) continue;
             const group = svgEl("g", {
               class: "flow-edge", "data-edge": edge.id, tabindex: 0, role: "img",
               "aria-label": `${edge.label} (${edge.flows.join(", ")})`,
             }, edgeLayer);
             svgEl("title", {}, group).textContent = `${edge.label} (${edge.flows.join(", ")})`;
-            let d;
-            let lx;
-            let ly;
-            if (a === b) {
-              const x = a.x + NODE_W / 2;
-              const spread = slots.get(edge.id).index * 24;
-              d = `M${x},${a.y - 8} C${x + 40 + spread},${a.y - 30} ${x + 40 + spread},${a.y + 30} ${x},${a.y + 8}`;
-              lx = x + 34 + spread;
-              ly = a.y;
-            } else {
-              const start = boundary(a, b, 2);
-              const end = boundary(b, a, 5);
-              ({ d, lx, ly } = flowEdgePath(start, end, slots.get(edge.id).offset));
-            }
+            const d = flowRoutePath(route.points);
             svgEl("path", { d, "marker-end": "url(#flow-arrowhead)" }, group);
             svgEl("path", { d, class: "flow-edge-hit", "aria-hidden": "true" }, group);
-            svgEl("text", { x: lx, y: ly }, group).textContent = edge.label;
+            const { label } = route;
+            const text = svgEl("text", { x: label.x, y: label.y - ((label.lines.length - 1) * 12) / 2, "dominant-baseline": "central" }, group);
+            label.lines.forEach((line, i) => {
+              svgEl("tspan", { x: label.x, dy: i === 0 ? 0 : 12 }, text).textContent = line;
+            });
             flow.edgeEls.set(edge.id, group);
           }
 

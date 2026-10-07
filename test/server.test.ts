@@ -475,8 +475,10 @@ describe("write surface", () => {
     const response = await request(port, "/flow");
     expect(response.status).toBe(200);
     expect(response.demoHeader).toBe("0");
-    expect(JSON.parse(response.body)).toEqual({ lanes: LANES, nodes: NODES, edges: EDGES,
+    const { layout, ...model } = JSON.parse(response.body);
+    expect(model).toEqual({ lanes: LANES, nodes: NODES, edges: EDGES,
       flows: FLOWS, stepNodes: STEP_NODES, stateNodes: STATE_NODES });
+    expect(Object.keys(layout.routes).sort()).toEqual(EDGES.map((e) => e.id).sort());
     expect((await request(port, "/status")).body).toBe(JSON.stringify(await deps.snapshot(process.cwd())));
     expect((await request(port, "/demo/scenarios")).status).toBe(404);
     expect((await post(port, "/actions/demo", { action: "reset" })).status).toBe(404);
@@ -491,7 +493,11 @@ describe("write surface", () => {
       step: vi.fn(() => current), reset: vi.fn(() => ({ scenarioId: null, index: 0, total: 0, frame: null })),
     };
     const port = await start(fakeDeps({ demo }).deps);
-    expect((await request(port, "/flow")).demoHeader).toBe("1");
+    const demoFlow = await request(port, "/flow");
+    expect(demoFlow.demoHeader).toBe("1");
+    const demoBody = JSON.parse(demoFlow.body);
+    expect(Object.keys(demoBody).sort()).toEqual(["edges", "flows", "lanes", "layout", "nodes", "stateNodes", "stepNodes"]);
+    expect(Object.keys(demoBody.layout.routes).sort()).toEqual(EDGES.map((e) => e.id).sort());
     expect(JSON.parse((await request(port, "/demo/scenarios")).body)).toEqual({ scenarios: [], current });
     for (const options of [
       { omitHeaders: ["Origin"] }, { headers: { Host: `evil.example:${port}` } },
