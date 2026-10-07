@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { checkFrame, checkScenario, resolveEdge, ScenarioDriftError, type Frame } from "../src/demo/scenario-engine.js";
 import { EDGES, FLOWS, NODES } from "../src/demo/flow-graph.js";
+import { planOutcome, scopeRemaining } from "../src/tasks/coordinator.js";
 import { SCENARIOS } from "../src/demo/scenarios/index.js";
 
 const nodeIds = new Set(NODES.map((n) => n.id));
@@ -97,6 +98,38 @@ describe("cut frames and partial marker reuse", () => {
     const [first] = input.markers;
     const partial = { ...frame, decision: { ...frame.decision!, output: { [first!]: [40] } } };
     expect(() => checkFrame(partial)).toThrow(/1\/2 tickets matched/);
+  });
+});
+
+describe("cuts and plan completion", () => {
+  const byId = (id: string) => SCENARIOS.find((s) => s.id === id)!;
+
+  it("rejects an edge-less frame after the first", () => {
+    const happy = byId("happy-path");
+    const frames = [...happy.frames];
+    frames.splice(5, 0, { ...frames[5]!, id: "happy-path:cut", edge: undefined, decision: undefined });
+    expect(() => checkScenario({ ...happy, frames })).toThrow(/only a scenario's first frame may be a cut/);
+  });
+
+  it("allows a cut only as the first frame of each scenario", () => {
+    for (const s of SCENARIOS) s.frames.forEach((f, i) => expect(f.edge === undefined, f.id).toBe(i === 0));
+  });
+
+  it("scopes remaining work and never completes on unfinished or unknown scope", () => {
+    const issue = (number: number, labels: string[] = []) => ({ number, title: "", body: "", state: "OPEN", labels, assignees: [] });
+    expect(scopeRemaining([issue(30), issue(31, ["needs-attention"])], new Set([21, 31]))).toEqual([]);
+    expect(scopeRemaining([issue(9), issue(3), issue(8, ["needs-attention"])], new Set([3, 8, 9]))).toEqual([3, 9]);
+    expect(planOutcome([])).toBe("plan-complete");
+    expect(planOutcome([3])).toBe("drained");
+    expect(planOutcome(null)).toBe("drained");
+  });
+
+  it("throws when remaining open work is swapped into the plan-complete frame", () => {
+    const frame = byId("plan-complete").frames.at(-1)!;
+    expect(frame.decision!.output).toBe("plan-complete");
+    const drained = { ...frame.decision!, input: [21], output: planOutcome([21]) };
+    expect(drained.output).toBe("drained");
+    expect(() => checkFrame({ ...frame, decision: drained })).toThrow(ScenarioDriftError);
   });
 });
 

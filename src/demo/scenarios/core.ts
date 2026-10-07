@@ -14,6 +14,7 @@ import { decideTaskTransition, deriveTaskState, type TaskEvent, type TaskFacts, 
 import { buildPlanMarkers, indexByMarker, renderTicketBody } from "../../tasks/plan-create.js";
 import { resolvePlan, type Ticket } from "../../tasks/plan.js";
 import { decideStep, type StepFacts } from "../../tasks/steps.js";
+import { planOutcome, scopeRemaining } from "../../tasks/coordinator.js";
 import { baseTask, decide, ScenarioBuilder, type Scenario } from "../scenario-engine.js";
 
 const AGENTS = ["claude", "codex"];
@@ -279,7 +280,7 @@ const happyPath = ((): Scenario => {
   const todo = issue(N, ["status:todo", "agent:claude"], "Implement the feature.");
   const open = [todo];
   const b = new ScenarioBuilder(
-    { id: "happy-path", title: "Claim, run, review, merge, plan complete", flows: ["claim-run", "cross-review", "advisory-order", "report"], summary: "One routed task flows from todo to merged under the real deciders; the scoped autopilot then reports the plan complete." },
+    { id: "happy-path", title: "Claim, run, review, merge", flows: ["claim-run", "cross-review", "advisory-order"], summary: "One routed task flows from todo to done under the real deciders." },
     [{ ...baseTask(N), title: todo.title, agent: "claude" }],
   );
   const facts = (over: Partial<TaskFacts>): TaskFacts => ({ issue: "open", lock: false, worktree: false, branch: "absent", pr: "none", telemetry: "none", ...over });
@@ -352,9 +353,28 @@ const happyPath = ((): Scenario => {
   const done = decide("deriveTaskState", deriveTaskState, facts({ issue: "closed", branch: "ahead", pr: "merged", telemetry: "submitted" }));
   b.add({ node: "state.done", edge: ["review.cleanup", "state.done", "removed"], decision: done.decision, narration: "Merged, closed, no retained lock or worktree: done, and off the board." });
 
-  const next = decide("decideStep", decideStep, stepFacts({ pr: null }));
-  b.add({ node: "auto.decide", decision: next.decision, narration: "The next autopilot pass re-derives everything: #21 has no open PR and nothing else in the plan is open." });
-  b.add({ node: "auto.report", edge: ["auto.decide", "auto.report"], decision: next.decision, narration: "No scoped issue remains open without needs-attention: the run stops 'plan-complete' and prints its report." });
+  return b.build();
+})();
+
+/** The autopilot's closing pass over a scoped plan: nothing left in scope means plan-complete. */
+const planComplete = ((): Scenario => {
+  // #21 merged and closed, so it is absent from the open list; #30 is out of scope, #31 awaits a human.
+  const open = [issue(30, ["status:todo"]), issue(31, ["status:in-review", "needs-attention"])];
+  const scope = [21, 31];
+  const b = new ScenarioBuilder({
+    id: "plan-complete",
+    title: "Autopilot concludes the plan is complete",
+    flows: ["report"],
+    summary: "With no scoped issue open outside needs-attention, the scoped autopilot stops plan-complete and reports.",
+  });
+  const left = decide(
+    "scopeRemaining",
+    (i: { open: Issue[]; scope: number[] }) => scopeRemaining(i.open, new Set(i.scope)),
+    { open, scope },
+  );
+  b.add({ node: "auto.decide", decision: left.decision, narration: "A later autopilot pass finds no PR to drive and nothing to claim. One batched open-issue read: #21 is closed, #30 is outside the plan, #31 is needs-attention." });
+  const outcome = decide("planOutcome", planOutcome, left.output);
+  b.add({ node: "auto.report", edge: ["auto.decide", "auto.report"], decision: outcome.decision, narration: "No scoped issue remains open without needs-attention: the run stops 'plan-complete' and prints its report." });
   return b.build();
 })();
 
@@ -370,4 +390,5 @@ export const CORE_SCENARIOS: readonly Scenario[] = [
   routingJudge,
   routingSkip,
   happyPath,
+  planComplete,
 ];

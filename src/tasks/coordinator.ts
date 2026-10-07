@@ -1,5 +1,5 @@
 import { eligibleIssues, issueAgent } from "../board/board.js";
-import { listIssues } from "../github/github.js";
+import { listIssues, type Issue } from "../github/github.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
 import type { OrchConfig } from "../config.js";
 import { unavailableUntil } from "../board/availability.js";
@@ -96,6 +96,19 @@ export const MAX_ESCALATION_FAILURES = 3;
 const FAILURE_BACKOFF_MS = 30_000;
 const UNAVAILABLE_BACKOFF_MS = 60_000;
 
+/** Scoped issues still open without `needs-attention`, ascending; an issue absent from `open` is finished. Pure. */
+export function scopeRemaining(open: readonly Issue[], scope?: ReadonlySet<number>): number[] {
+  return open
+    .filter((i) => (!scope || scope.has(i.number)) && !i.labels.includes(NEEDS_ATTENTION))
+    .map((i) => i.number)
+    .sort((a, b) => a - b);
+}
+
+/** A scoped run ran out of work: complete only when nothing remains; an unchecked (null) scope is never complete. Pure. */
+export function planOutcome(remaining: number[] | null): "plan-complete" | "drained" {
+  return remaining !== null && remaining.length === 0 ? "plan-complete" : "drained";
+}
+
 export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<number>): CoordinatorDeps {
   const inScope = (n: number): boolean => !scope || scope.has(n);
   return {
@@ -122,10 +135,7 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
     // One batched open-issue read: a scoped issue absent from it is closed (or gone), i.e. finished.
     remaining: async () => {
       const open = await listIssues({ cwd, state: "open" });
-      return open
-        .filter((i) => inScope(i.number) && !i.labels.includes(NEEDS_ATTENTION))
-        .map((i) => i.number)
-        .sort((a, b) => a - b);
+      return scopeRemaining(open, scope);
     },
     now: () => Date.now(),
     sleep: (ms, opts) =>
@@ -143,7 +153,7 @@ async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): 
   try {
     const left = (await deps.remaining?.()) ?? [];
     summary.remaining = left;
-    if (left.length === 0) summary.stopped = "plan-complete";
+    if (planOutcome(left) === "plan-complete") summary.stopped = "plan-complete";
     else deps.say(`  out of work with ${left.map((n) => `#${n}`).join(", ")} still open (blocked, unrouted, or awaiting a merge)`);
   } catch (error) {
     summary.remaining = null; // unknown: report "drained", never a completion we could not check

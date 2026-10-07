@@ -112,10 +112,15 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
       "happy-path:21 review.merge <- review.gate>review.merge:gate-passes",
       "happy-path:22 review.cleanup <- review.merge>review.cleanup:merged-lock-released",
       "happy-path:23 state.done <- review.cleanup>state.done:worktree-removed-resources-released",
-      "happy-path:24 auto.decide <- cut",
-      "happy-path:25 auto.report <- auto.decide>auto.report:drained-or-plan-complete",
     ],
     "id": "happy-path",
+  },
+  {
+    "frames": [
+      "plan-complete:01 auto.decide <- cut",
+      "plan-complete:02 auto.report <- auto.decide>auto.report:drained-or-plan-complete",
+    ],
+    "id": "plan-complete",
   },
 ]
 `;

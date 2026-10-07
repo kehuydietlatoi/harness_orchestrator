@@ -172,6 +172,12 @@ const CHECKS: Record<string, Check> = {
     const to = reasons.length === 0 ? "review.merge" : "state.in-review";
     return e.from === "review.gate" && e.to === to ? null : `evaluateGate (${reasons.length} blocking reasons) leads to ${to}, not ${e.to}`;
   },
+  planOutcome(d, e) {
+    // The edge reports both outcomes; a frame that scripts plan-complete needs the decider to agree.
+    return e.from === "auto.decide" && e.to === "auto.report" && d.output === "plan-complete"
+      ? null
+      : `planOutcome returned '${String(d.output)}' on a frame that scripts plan-complete`;
+  },
   decideStep(d, e) {
     const step = d.output as Step;
     const noPr = (d.input as { pr: unknown }).pr === null;
@@ -208,6 +214,8 @@ export function checkScenario(scenario: Scenario): void {
   let previous: Frame | undefined;
   for (const frame of scenario.frames) {
     checkFrame(frame);
+    // A cut is only legal as the opening frame; every later frame must follow a declared edge.
+    if (previous && !frame.edge) throw new ScenarioDriftError(frame.id, "has no edge: only a scenario's first frame may be a cut");
     if (frame.edge && previous) {
       const edge = edgeById.get(frame.edge)!;
       if (edge.from !== previous.activeNode) {
