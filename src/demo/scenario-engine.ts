@@ -94,9 +94,13 @@ const CHECKS: Record<string, Check> = {
   planGate(d, e) {
     const out = d.output as PlanGate;
     const answer = (d.input as { answer?: "y" | "n" }).answer;
-    const to = out === "hint" || (out === "ask" && answer === "n") ? "plan.hint" : "plan.reuse";
     if (out === "ask" && answer === undefined) return "an 'ask' gate needs the human's answer in its input";
-    return e.from === "plan.gate" && e.to === to ? null : `planGate -> '${out}' leads to ${to}, not ${e.to}`;
+    if (e.from !== "plan.gate") return `planGate decides at plan.gate, not ${e.from}`;
+    // Both hint edges end at plan.hint, so the edge itself (not its target) says which outcome is scripted.
+    const declined = e.label.startsWith("declined");
+    const noTty = e.label.startsWith("no TTY");
+    const ok = declined ? out === "ask" && answer === "n" : noTty ? out === "hint" : e.to === "plan.reuse" && (out === "run" || (out === "ask" && answer === "y"));
+    return ok ? null : `planGate -> '${out}'${answer ? ` (answer ${answer})` : ""} contradicts edge "${e.label}"`;
   },
   resolvePlan(d, e) {
     const blocked = (d.output as ResolvedPlan).errors.length > 0;

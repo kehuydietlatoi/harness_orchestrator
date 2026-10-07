@@ -100,6 +100,25 @@ describe("cut frames and partial marker reuse", () => {
   });
 });
 
+describe("planGate edges", () => {
+  const gateFrame = (id: string) => SCENARIOS.find((s) => s.id === id)!.frames.find((f) => f.decision?.fn === "planGate")!;
+  const withOutput = (f: Frame, output: string, answer?: "y" | "n"): Frame => ({
+    ...f,
+    decision: { ...f.decision!, output, input: { ...(f.decision!.input as object), ...(answer ? { answer } : {}) } },
+  });
+
+  it("rejects a hint on the declined edge and an ask on the no-TTY edge", () => {
+    expect(() => checkFrame(withOutput(gateFrame("plan-gate-declined"), "hint"))).toThrow(ScenarioDriftError);
+    expect(() => checkFrame(withOutput(gateFrame("plan-gate-hint"), "ask", "n"))).toThrow(ScenarioDriftError);
+  });
+
+  it("rejects an ask answered y on the declined edge, and run outcomes on hint edges", () => {
+    expect(() => checkFrame(withOutput(gateFrame("plan-gate-declined"), "ask", "y"))).toThrow(/contradicts/);
+    expect(() => checkFrame(withOutput(gateFrame("plan-gate-hint"), "run"))).toThrow(ScenarioDriftError);
+    expect(() => checkFrame(withOutput(gateFrame("plan-gate-ask"), "hint"))).toThrow(ScenarioDriftError);
+  });
+});
+
 describe("plan boards and decision records", () => {
   const byId = (id: string) => SCENARIOS.find((s) => s.id === id)!;
   const last = (id: string) => byId(id).frames.at(-1)!.board;
