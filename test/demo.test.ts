@@ -1,10 +1,69 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeDemoDeps } from "../src/server/demo.js";
 import { applyPlan, selectUnassigned } from "../src/routing/assign.js";
+import { SCENARIOS } from "../src/demo/scenarios/index.js";
+
+vi.mock("../src/demo/scenarios/index.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/demo/scenarios/index.js")>();
+  const { baseTask } = await import("../src/demo/scenario-engine.js");
+  return { ...original, SCENARIOS: [...original.SCENARIOS, {
+    id: "sparse-frame-board", title: "Sparse frame board", flows: [], summary: "Scripted board projections",
+    frames: [
+      { id: "sparse:01", activeNode: "state.in-progress", narration: "Author receives changes on an open PR",
+        board: [{ ...baseTask(93), agent: "codex", status: "status:in-progress", prNumber: 193,
+          prChecks: "pass", locked: true, worktree: "../wt/issue-93" }] },
+      { id: "sparse:02", activeNode: "state.needs-attention", narration: "Escalation retains work",
+        board: [{ ...baseTask(93), agent: "codex", status: "needs-attention", locked: true,
+          worktree: "../wt/issue-93" }] },
+      { id: "sparse:03", activeNode: "auto.observe", narration: "Ambiguous PRs cannot be driven",
+        board: [{ ...baseTask(93), agent: "codex", status: "status:in-review" }] },
+    ],
+  }] };
+});
 
 const CWD = process.cwd();
 
 describe("demo backend", () => {
+  it("plays frame boards forward and backward, then resets to a fresh seeded board", async () => {
+    const deps = makeDemoDeps();
+    const demo = deps.demo!;
+    const seeded = await deps.snapshot(CWD);
+    expect(demo.current()).toEqual({ scenarioId: null, index: 0, total: 0, frame: null });
+    expect(demo.list().map((s) => s.id)).toEqual(SCENARIOS.map((s) => s.id));
+    expect(() => demo.step("next")).toThrow(/no scenario/);
+    for (const scenario of SCENARIOS) {
+      expect(demo.load(scenario.id).frame).toEqual(scenario.frames[0]);
+      expect(demo.step("prev").index).toBe(0);
+      for (let i = 0; i < scenario.frames.length; i++) {
+        const current = demo.current();
+        expect(current).toMatchObject({ scenarioId: scenario.id, index: i, total: scenario.frames.length,
+          frame: scenario.frames[i] });
+        const snapshot = await deps.snapshot(CWD);
+        expect(Object.keys(snapshot).sort()).toEqual(Object.keys(seeded).sort());
+        expect(snapshot.tasks.map((t) => t.number)).toEqual(scenario.frames[i].board.map((t) => t.number));
+        for (const task of scenario.frames[i].board) {
+          expect(snapshot.tasks.find((t) => t.number === task.number)).toMatchObject({
+            title: task.title, agent: task.agent, status: task.status, deps: task.deps,
+            after: task.after, prNumber: task.prNumber, locked: task.locked, worktree: task.worktree,
+            reviewedBy: task.reviewedBy, prChecks: task.prChecks, latestRun: task.latestRun,
+          });
+        }
+        demo.step("next");
+      }
+      expect(demo.current().index).toBe(scenario.frames.length - 1);
+      if (scenario.frames.length > 1) {
+        expect(demo.step("prev").frame).toEqual(scenario.frames[scenario.frames.length - 2]);
+      }
+    }
+    const before = demo.current();
+    expect(() => demo.load("missing")).toThrow(/unknown scenario/);
+    expect(demo.current()).toEqual(before);
+    await deps.editIssue(107, ["agent:codex"], CWD);
+    expect(demo.reset().frame).toBeNull();
+    expect((await deps.snapshot(CWD)).tasks.map(({ latestRun: _latestRun, ...task }) => task))
+      .toEqual(seeded.tasks.map(({ latestRun: _latestRun, ...task }) => task));
+  });
+
   it("preserves advisory plan references on retry and dispatches while the predecessor is claimed", async () => {
     vi.useFakeTimers();
     try {

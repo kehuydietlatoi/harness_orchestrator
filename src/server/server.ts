@@ -11,6 +11,23 @@ import { parseTickets, resolvePlan, type Ticket } from "../tasks/plan.js";
 import { createFromPlan, type PlanCreateOptions, type PlanCreateResult } from "../tasks/plan-create.js";
 import { dispatchSpecific } from "../tasks/runner.js";
 import { log } from "../util/log.js";
+import { LANES, NODES, EDGES, FLOWS, STEP_NODES, STATE_NODES } from "../demo/flow-graph.js";
+import type { Frame, Scenario } from "../demo/scenario-engine.js";
+
+export interface DemoCurrent {
+  scenarioId: string | null;
+  index: number;
+  total: number;
+  frame: Frame | null;
+}
+
+export interface DemoPlayer {
+  list(): Array<Omit<Scenario, "frames"> & { frameCount: number }>;
+  load(id: string): DemoCurrent;
+  step(dir: "next" | "prev"): DemoCurrent;
+  reset(): DemoCurrent;
+  current(): DemoCurrent;
+}
 
 // Repo-root public/ asset. This file sits at src/server/ (dev) or dist/server/
 // (build); "../../public" resolves to <repo>/public in both, since src and dist
@@ -25,6 +42,8 @@ const ORCH_REQUEST_VALUE = "dashboard";
  * pass fakes so the HTTP path is exercised without spawning `claude` or `gh`.
  */
 export interface ServerDeps {
+  /** Opt-in scenario player; absent in normal mode. */
+  demo?: DemoPlayer;
   loadConfig: (cwd: string) => OrchConfig;
   listOpenIssues: (cwd: string) => Promise<Issue[]>;
   readRuns: (cwd: string) => ReturnType<typeof readRuns>;
@@ -290,6 +309,42 @@ async function handleDispatch(
   });
 }
 
+async function handleDemo(
+  demo: DemoPlayer,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  try {
+    const value: unknown = JSON.parse((await readBody(request)) || "null");
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("body must be an object");
+    }
+    const { action, id } = value as Record<string, unknown>;
+    let current: DemoCurrent;
+    switch (action) {
+      case "load":
+        if (typeof id !== "string" || !id) throw new Error("body.id must be a scenario id");
+        current = demo.load(id);
+        break;
+      case "next":
+      case "prev":
+        current = demo.step(action);
+        break;
+      case "reset":
+        current = demo.reset();
+        break;
+      case "current":
+        current = demo.current();
+        break;
+      default:
+        throw new Error("unknown demo action");
+    }
+    sendJson(response, 200, current);
+  } catch (error) {
+    sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.Server {
   return http.createServer((request, response) => {
     const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
@@ -312,7 +367,9 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
                 ? handlePlanCreate(cwd, deps, request, response)
                 : pathname === "/actions/dispatch"
                   ? handleDispatch(cwd, deps, request, response)
-                  : null;
+                  : pathname === "/actions/demo" && deps.demo
+                    ? handleDemo(deps.demo, request, response)
+                    : null;
       if (!handler) {
         sendJson(response, 404, { error: "unknown action" });
         return;
@@ -320,6 +377,17 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
       void handler.catch((error: unknown) => {
         sendJson(response, 500, { error: error instanceof Error ? error.message : String(error) });
       });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/flow") {
+      sendJson(response, 200, { lanes: LANES, nodes: NODES, edges: EDGES, flows: FLOWS,
+        stepNodes: STEP_NODES, stateNodes: STATE_NODES });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/demo/scenarios" && deps.demo) {
+      sendJson(response, 200, { scenarios: deps.demo.list(), current: deps.demo.current() });
       return;
     }
 

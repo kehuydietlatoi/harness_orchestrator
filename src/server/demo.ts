@@ -3,11 +3,14 @@ import type { Ticket } from "../tasks/plan.js";
 import { buildPlanMarkers, type PlanCreateResult } from "../tasks/plan-create.js";
 import { DEFAULT_CONFIG, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
-import type { ServerDeps } from "./server.js";
+import type { ServerDeps, DemoPlayer } from "./server.js";
+import { SCENARIOS } from "../demo/scenarios/index.js";
+import type { Scenario } from "../demo/scenario-engine.js";
 import type { Snapshot, TaskView } from "../board/snapshot.js";
 import { assemble } from "../board/snapshot.js";
 import { byNumber } from "../board/board.js";
 import { resolveDispatchAgent } from "../tasks/runner.js";
+import { formatReview } from "../board/approval.js";
 type DemoTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "blockers">;
 
 /**
@@ -23,6 +26,7 @@ type DemoTask = Omit<TaskView, "health" | "recoveryCommand" | "issueState" | "bl
 
 const AGENTS = ["claude", "codex"];
 const DEMO_REPO_URL = "https://github.com/acme/orch";
+const DEMO_HEAD = "d".repeat(40);
 const demoPrUrl = (prNumber: number | null): string | null =>
   prNumber === null ? null : `${DEMO_REPO_URL}/pull/${prNumber}`;
 
@@ -167,13 +171,41 @@ function toIssue(task: DemoTask): Issue {
 
 /** Build a `ServerDeps` backed by a fresh in-memory board. */
 export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDeps {
-  const tasks = seedTasks();
+  let tasks = seedTasks();
+  let scenario: Scenario | undefined;
+  let index = 0;
   const createdByMarker = new Map<string, number>();
   const config: OrchConfig = { ...DEFAULT_CONFIG, agents: [...AGENTS] };
   // Longer than the dashboard's 2s poll so each simulated state is visible.
   const lifecycleStepMs = opts.lifecycleStepMs ?? 2_500;
 
+  const demo: DemoPlayer = {
+    list: () => SCENARIOS.map(({ frames, ...meta }) => ({ ...structuredClone(meta), frameCount: frames.length })),
+    current: () => ({ scenarioId: scenario?.id ?? null, index, total: scenario?.frames.length ?? 0,
+      frame: scenario ? structuredClone(scenario.frames[index]!) : null }),
+    load: (id) => {
+      const selected = SCENARIOS.find((candidate) => candidate.id === id);
+      if (!selected) throw new Error(`unknown scenario: ${id}`);
+      scenario = selected;
+      index = 0;
+      return demo.current();
+    },
+    step: (dir) => {
+      if (!scenario) throw new Error("no scenario loaded");
+      index = Math.max(0, Math.min(scenario.frames.length - 1, index + (dir === "next" ? 1 : -1)));
+      return demo.current();
+    },
+    reset: () => {
+      scenario = undefined;
+      index = 0;
+      tasks = seedTasks();
+      createdByMarker.clear();
+      return demo.current();
+    },
+  };
+
   return {
+    demo,
     loadConfig: () => config,
     listOpenIssues: async () => tasks.map(toIssue),
     readRuns: () => [],
@@ -227,19 +259,37 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
       }
       return result;
     },
-    snapshot: async (): Promise<Snapshot> => assemble(
-      tasks.map(toIssue),
-      tasks.filter((t) => t.prNumber !== null).map((t) => ({ number: t.prNumber!, title: t.title,
-        body: `Closes #${t.number}`, state: "OPEN", headRefName: `task/${t.number}-demo`,
-        headSha: `demo-${t.number}`, htmlUrl: t.prUrl ?? "" })),
-      tasks.filter((t) => t.locked).map((t) => t.number),
-      tasks.filter((t) => t.worktree).map((t) => ({ path: t.worktree!, branch: `task/${t.number}-demo` })),
-      tasks.filter((t) => t.latestRun).map((t) => ({ issue: t.number, ...t.latestRun! })),
-      new Date().toISOString(), DEMO_REPO_URL,
-      new Map(tasks.filter((t) => t.prChecks && t.prNumber).map((t) => [t.prNumber!, t.prChecks!])),
-      new Map(tasks.filter((t) => t.worktree).map((t) => [t.number,
-        { state: t.status === "status:claimed" ? "unchanged" : "ahead" }])),
-    ),
+    snapshot: async (): Promise<Snapshot> => {
+      const board: DemoTask[] = scenario
+        ? scenario.frames[index]!.board.map((task) => ({ ...task, prUrl: demoPrUrl(task.prNumber) }))
+        : tasks;
+      const snapshot = assemble(
+        board.map(toIssue),
+        board.filter((t) => t.prNumber !== null).map((t) => ({ number: t.prNumber!, title: t.title,
+          body: `Closes #${t.number}`, state: "OPEN", headRefName: `task/${t.number}-demo`,
+          headSha: DEMO_HEAD, htmlUrl: t.prUrl ?? "" })),
+        board.filter((t) => t.locked).map((t) => t.number),
+        board.filter((t) => t.worktree).map((t) => ({ path: t.worktree!, branch: `task/${t.number}-demo` })),
+        board.filter((t) => t.latestRun).map((t) => ({ issue: t.number, ...t.latestRun! })),
+        new Date().toISOString(), DEMO_REPO_URL,
+        new Map(board.filter((t) => t.prChecks && t.prNumber).map((t) => [t.prNumber!, t.prChecks!])),
+        new Map(board.filter((t) => t.worktree).map((t) => [t.number,
+          { state: t.status === "status:claimed" ? "unchanged" : "ahead" }])),
+        new Map(board.filter((t) => t.prNumber !== null).map((t) => [t.prNumber!,
+          t.reviewedBy.map((reviewer, i) => ({ id: i + 1, state: "COMMENTED", commit_id: DEMO_HEAD,
+            body: formatReview({ reviewer, pr: t.prNumber!, head: DEMO_HEAD,
+              timestamp: "2026-01-01T00:00:00.000Z", decision: "approve",
+              ...(reviewer === t.agent ? { mode: "self" as const } : {}) }, "Demo approval") }))])),
+        config.reviewPolicy,
+      );
+      if (scenario) {
+        // Frame boards are scripted projections, not complete lifecycle observations
+        // (for example, an author bounce omits the request-changes review record).
+        const frameTasks = new Map(board.map((task) => [task.number, task]));
+        snapshot.tasks = snapshot.tasks.map((task) => ({ ...task, status: frameTasks.get(task.number)!.status }));
+      }
+      return snapshot;
+    },
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);
       if (!task) throw new Error(`#${number} is not an open issue.`);
