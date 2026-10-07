@@ -48,3 +48,26 @@ describe("flow graph model", () => {
     expect(new Set(NODES.map((n) => `${n.x},${n.y}`)).size).toBe(NODES.length);
   });
 });
+
+describe("flow graph regressions", () => {
+  const outOf = (from: string) => EDGES.filter((e) => e.from === from).map((e) => e.to);
+
+  it("sends a triage retry back to observation, never straight to a push", () => {
+    expect(outOf("step.triage")).toContain("auto.observe");
+    expect(outOf("step.triage")).not.toContain("auto.push");
+  });
+
+  it("routes failed and no-commit runs through cleanup to their derived states", () => {
+    expect(outOf("run.fail")).toEqual(["run.cleanup"]);
+    expect(outOf("run.nocommit")).toEqual(["run.cleanup"]);
+    expect(outOf("run.cleanup").sort()).toEqual(["state.inconsistent", "state.needs-attention"]);
+    expect(outOf("state.needs-attention")).toContain("rec.repair");
+    expect(outOf("state.inconsistent")).toContain("rec.repair");
+  });
+
+  it("keeps abandon outcomes separate from failed-run cleanup", () => {
+    const abandon = EDGES.filter((e) => e.from === "rec.safe" || e.from === "rec.abandon");
+    for (const e of abandon) expect(e.flows).not.toContain("failure-recovery");
+    expect(EDGES.some((e) => e.from === "run.fail" && e.to === "rec.safe")).toBe(false);
+  });
+});
