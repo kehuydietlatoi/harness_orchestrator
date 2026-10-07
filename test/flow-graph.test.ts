@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { deriveTaskState } from "../src/tasks/lifecycle.js";
 import { EDGES, FLOWS, NODES, STATE_NODES, STEP_NODES } from "../src/demo/flow-graph.js";
 
 const ids = new Set(NODES.map((n) => n.id));
@@ -98,5 +99,20 @@ describe("flow graph review-round regressions", () => {
     expect(outOf("review.cleanup").sort()).toEqual(["state.done", "state.inconsistent"]);
     expect(EDGES.filter((e) => e.to === "state.done").map((e) => e.from)).toEqual(["review.cleanup"]);
     expect(outOf("state.inconsistent")).toContain("rec.repair");
+  });
+});
+
+describe("review.changes follows deriveTaskState", () => {
+  const open = { issue: "open", lock: true, worktree: true, branch: "ahead", pr: "open", telemetry: "submitted" } as const;
+
+  it("derives in-progress for an open PR with changes requested, in-review otherwise", () => {
+    expect(deriveTaskState({ ...open, changesRequested: true }).kind).toBe("in-progress");
+    expect(deriveTaskState(open).kind).toBe("in-review");
+    const e = EDGES.find((edge) => edge.from === "review.changes")!;
+    expect(e.to).toBe("state.in-progress");
+  });
+
+  it("does not describe in-review by its review:needed label", () => {
+    expect(NODES.find((n) => n.id === "state.in-review")!.summary).not.toContain("review:needed");
   });
 });

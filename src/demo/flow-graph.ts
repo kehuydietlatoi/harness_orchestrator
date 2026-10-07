@@ -118,7 +118,7 @@ export const NODES: readonly FlowNode[] = [
   node("run.usage", "Usage limit?", "decision", "run", 3, 1, "src/adapters/usage-limit.ts#detectUsageLimit", "Only error-shaped events in this run's own log count, never assistant text.", "ADR-0008"),
   node("run.requeue", "Requeue", "stage", "run", 2, 1, "src/tasks/runner.ts#requeueClaim", "Safe cleanup, release the lock, back to status:todo and pause the harness.", "ADR-0008"),
   // review
-  node("state.in-review", "in-review", "state", "review", 0, 0, "src/tasks/lifecycle.ts#deriveTaskState", "Open PR carrying review:needed."),
+  node("state.in-review", "in-review", "state", "review", 0, 0, "src/tasks/lifecycle.ts#deriveTaskState", "Open PR on the task branch with no changes requested on its current head; review labels are projections."),
   node("review.pick", "Pick reviewer", "decision", "review", 1, 0, "src/board/reviewer.ts#pickReviewer", "Prefer any available other harness; the author only when all others are paused.", "ADR-0008"),
   node("review.cross", "Cross-review", "stage", "review", 2, 0, "src/board/review-run.ts#runAutomatedReview", "The other harness reviews in a read-only checkout of exactly the PR head.", "ADR-0003"),
   node("review.self", "Self-review", "stage", "review", 2, 1, "src/board/review-run.ts#runAutomatedReview", "A fresh author session, recorded as a marked mode:self approval.", "ADR-0008"),
