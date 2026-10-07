@@ -3,6 +3,24 @@ import { makeDemoDeps } from "../src/server/demo.js";
 import { applyPlan, selectUnassigned } from "../src/routing/assign.js";
 import { SCENARIOS } from "../src/demo/scenarios/index.js";
 
+vi.mock("../src/demo/scenarios/index.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/demo/scenarios/index.js")>();
+  const { baseTask } = await import("../src/demo/scenario-engine.js");
+  return { ...original, SCENARIOS: [...original.SCENARIOS, {
+    id: "sparse-frame-board", title: "Sparse frame board", flows: [], summary: "Scripted board projections",
+    frames: [
+      { id: "sparse:01", activeNode: "state.in-progress", narration: "Author receives changes on an open PR",
+        board: [{ ...baseTask(93), agent: "codex", status: "status:in-progress", prNumber: 193,
+          prChecks: "pass", locked: true, worktree: "../wt/issue-93" }] },
+      { id: "sparse:02", activeNode: "state.needs-attention", narration: "Escalation retains work",
+        board: [{ ...baseTask(93), agent: "codex", status: "needs-attention", locked: true,
+          worktree: "../wt/issue-93" }] },
+      { id: "sparse:03", activeNode: "auto.observe", narration: "Ambiguous PRs cannot be driven",
+        board: [{ ...baseTask(93), agent: "codex", status: "status:in-review" }] },
+    ],
+  }] };
+});
+
 const CWD = process.cwd();
 
 describe("demo backend", () => {

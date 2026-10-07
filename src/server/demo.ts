@@ -263,7 +263,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
       const board: DemoTask[] = scenario
         ? scenario.frames[index]!.board.map((task) => ({ ...task, prUrl: demoPrUrl(task.prNumber) }))
         : tasks;
-      return assemble(
+      const snapshot = assemble(
         board.map(toIssue),
         board.filter((t) => t.prNumber !== null).map((t) => ({ number: t.prNumber!, title: t.title,
           body: `Closes #${t.number}`, state: "OPEN", headRefName: `task/${t.number}-demo`,
@@ -282,6 +282,13 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
               ...(reviewer === t.agent ? { mode: "self" as const } : {}) }, "Demo approval") }))])),
         config.reviewPolicy,
       );
+      if (scenario) {
+        // Frame boards are scripted projections, not complete lifecycle observations
+        // (for example, an author bounce omits the request-changes review record).
+        const frameTasks = new Map(board.map((task) => [task.number, task]));
+        snapshot.tasks = snapshot.tasks.map((task) => ({ ...task, status: frameTasks.get(task.number)!.status }));
+      }
+      return snapshot;
     },
     dispatchIssue: async (number): Promise<void> => {
       const task = tasks.find((candidate) => candidate.number === number);
