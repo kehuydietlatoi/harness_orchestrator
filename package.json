@@ -24,6 +24,7 @@
     "dev": "tsx src/cli.ts",
     "orch": "tsx src/cli.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "docs:flows": "tsx scripts/gen-flows.ts",
     "lint": "eslint .",
     "test": "vitest run --passWithNoTests",
     "test:coverage": "vitest run --coverage",

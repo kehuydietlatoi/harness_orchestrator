@@ -297,6 +297,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Convergent design note](docs/convergent-design.md) — how `orch`'s delegate → parallelize → review → assemble workflow (first committed Aug 2026) maps to Anthropic's "Projects, redesigned" announcement (Sep 2026), and where it deliberately differs
 - [Architecture](docs/ARCHITECTURE.md) — modules and core mechanisms
 - [Workflow](docs/WORKFLOW.md) — labels and issue lifecycle
+- [Workflow graph](docs/FLOWS.md) — generated Mermaid flows, code references, and demonstrating scenarios
 - [Routing judge](docs/judge.md) — prompt contract, parsing, and evaluation
 - [Build vs. adopt](docs/adr/0001-build-vs-adopt.md) — original design rationale
 - [Atomic claims](docs/adr/0002-atomic-claim-via-git-ref.md) — local Git-ref mutex

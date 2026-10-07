@@ -21,6 +21,37 @@ node dist/cli.js serve --demo      # then open http://127.0.0.1:4000
 
 ---
 
+## Scenario player and workflow graph
+
+The workflow model in [`src/demo/flow-graph.ts`](src/demo/flow-graph.ts) describes
+planning, routing, claiming, running, review, autopilot, recovery, and scheduling.
+[`docs/FLOWS.md`](docs/FLOWS.md) renders the entire graph and each flow as Mermaid,
+with summaries, ADR links, code references, and the scenarios that demonstrate it.
+Regenerate it after changing the model or registry with `npm run docs:flows`.
+`npm test` checks that scenarios visit every model edge and cover every flow,
+and that the generated document matches the checked-in file.
+
+Start the demo with the command above. `GET /flow` returns the graph in both normal
+and demo mode. In demo mode, `GET /demo/scenarios` lists scenarios and the current
+player frame. Load a scenario, move forward or backward, or reset the player through
+`POST /actions/demo` with `{ "action": "load", "id": "<scenario-id>" }`,
+`{ "action": "next" }`, `{ "action": "prev" }`, or `{ "action": "reset" }`.
+For example, from the browser console at `http://127.0.0.1:4000`:
+
+```js
+const { scenarios } = await fetch('/demo/scenarios').then(r => r.json());
+await fetch('/actions/demo', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'X-Orch-Request': 'dashboard' },
+  body: JSON.stringify({ action: 'load', id: scenarios[0].id }),
+}).then(r => r.json());
+```
+
+Each frame carries narration, its active graph node and incoming edge, the board,
+and any real pure decider input/output. `/status` projects the loaded frame's board.
+Scenario frames fake I/O and have no timers; their decisions call the production
+pure functions. Reset returns the player and board to the fresh demo seed.
+
 ## 1. The live board
 
 Open tasks projected from GitHub Issues + PRs + git worktrees + run telemetry, refreshed

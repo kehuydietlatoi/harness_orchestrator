@@ -468,5 +468,117 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
     ],
     "id": "after-unavailable",
   },
+  {
+    "frames": [
+      "plan-create-response-lost:01 plan.create <- cut",
+      "plan-create-response-lost:02 plan.reuse <- plan.create>plan.reuse:create-error-re-list",
+      "plan-create-response-lost:03 route.assign <- plan.reuse>route.assign:marker-found-reuse-issue",
+    ],
+    "id": "plan-create-response-lost",
+  },
+  {
+    "frames": [
+      "claim-roll-forward:01 run.compensate <- cut",
+      "claim-roll-forward:02 state.claimed <- run.compensate>state.claimed:worktree-usable-and-projection-proven-roll-forward",
+    ],
+    "id": "claim-roll-forward",
+  },
+  {
+    "frames": [
+      "claim-retain:01 run.compensate <- cut",
+      "claim-retain:02 rec.retained <- run.compensate>rec.retained:unverifiable-ownership-retained",
+    ],
+    "id": "claim-retain",
+  },
+  {
+    "frames": [
+      "review-unreadable-verdict:01 state.in-review <- cut",
+      "review-unreadable-verdict:02 review.pick <- state.in-review>review.pick:review-needed",
+      "review-unreadable-verdict:03 review.cross <- review.pick>review.cross:other-harness-available",
+      "review-unreadable-verdict:04 review.run <- review.cross>review.run:read-only-checkout-of-the-head",
+      "review-unreadable-verdict:05 review.verdict <- review.run>review.verdict:reply-parsed",
+      "review-unreadable-verdict:06 review.failclosed <- review.verdict>review.failclosed:unreadable-or-no-diff",
+      "review-unreadable-verdict:07 state.in-review <- review.failclosed>state.in-review:nothing-recorded",
+    ],
+    "id": "review-unreadable-verdict",
+  },
+  {
+    "frames": [
+      "merge-worktree-retained:01 review.merge <- cut",
+      "merge-worktree-retained:02 review.cleanup <- review.merge>review.cleanup:merged-lock-released",
+      "merge-worktree-retained:03 state.inconsistent <- review.cleanup>state.inconsistent:worktree-retained-lock-released",
+    ],
+    "id": "merge-worktree-retained",
+  },
+  {
+    "frames": [
+      "usage-limit-wait:01 run.outcome <- cut",
+      "usage-limit-wait:02 run.usage <- run.outcome>run.usage:own-log-shows-a-limit",
+      "usage-limit-wait:03 run.requeue <- run.usage>run.requeue:no-commits-no-open-pr-worktree-removed-lock-released",
+      "usage-limit-wait:04 step.wait <- run.requeue>step.wait:autopilot-agent-unavailable",
+    ],
+    "id": "usage-limit-wait",
+  },
+  {
+    "frames": [
+      "usage-limit-retained:01 run.outcome <- cut",
+      "usage-limit-retained:02 run.usage <- run.outcome>run.usage:own-log-shows-a-limit",
+      "usage-limit-retained:03 run.fail <- run.usage>run.fail:requeue-guard-failed-commits-ahead-open-pr-worktree-retained-or-lock-not-released",
+      "usage-limit-retained:04 run.cleanup <- run.fail>run.cleanup:safe-cleanup",
+      "usage-limit-retained:05 state.inconsistent <- run.cleanup>state.inconsistent:work-retained-failure-telemetry",
+    ],
+    "id": "usage-limit-retained",
+  },
+  {
+    "frames": [
+      "repair-project-in-review:01 state.needs-attention <- cut",
+      "repair-project-in-review:02 rec.repair <- state.needs-attention>rec.repair:human-runs-orch-repair",
+      "repair-project-in-review:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-project-in-review:04 state.in-review <- rec.derive>state.in-review:open-pr-review-projections-restored",
+    ],
+    "id": "repair-project-in-review",
+  },
+  {
+    "frames": [
+      "repair-project-inconsistent:01 state.needs-attention <- cut",
+      "repair-project-inconsistent:02 rec.repair <- state.needs-attention>rec.repair:human-runs-orch-repair",
+      "repair-project-inconsistent:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-project-inconsistent:04 state.inconsistent <- rec.derive>state.inconsistent:invariant-violated-or-work-preserved",
+    ],
+    "id": "repair-project-inconsistent",
+  },
+  {
+    "frames": [
+      "repair-project-needs-attention:01 state.needs-attention <- cut",
+      "repair-project-needs-attention:02 rec.repair <- state.needs-attention>rec.repair:human-runs-orch-repair",
+      "repair-project-needs-attention:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-project-needs-attention:04 state.needs-attention <- rec.derive>state.needs-attention:closed-pr-or-unresolved-run-still-a-human-s",
+    ],
+    "id": "repair-project-needs-attention",
+  },
+  {
+    "frames": [
+      "abandon-ready:01 rec.abandon <- cut",
+      "abandon-ready:02 rec.safe <- rec.abandon>rec.safe:plain-abandon-safe-removal",
+      "abandon-ready:03 rec.todo <- rec.safe>rec.todo:clean-removed-lock-released",
+      "abandon-ready:04 state.ready <- rec.todo>state.ready:no-failure-telemetry-no-commits-ahead",
+    ],
+    "id": "abandon-ready",
+  },
+  {
+    "frames": [
+      "autopilot-human-owned:01 auto.decide <- cut",
+      "autopilot-human-owned:02 step.none <- auto.decide>step.none:needs-attention-or-no-pr",
+    ],
+    "id": "autopilot-human-owned",
+  },
+  {
+    "frames": [
+      "human-runs-merge:01 step.await-human <- cut",
+      "human-runs-merge:02 review.gate <- step.await-human>review.gate:human-runs-orch-merge",
+      "human-runs-merge:03 review.merge <- review.gate>review.merge:gate-passes",
+    ],
+    "id": "human-runs-merge",
+  },
 ]
 `;
