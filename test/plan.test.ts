@@ -79,6 +79,9 @@ describe("parseTickets", () => {
   });
 });
 
+/** Warnings about links and routing, ignoring the finish-line advisories (covered in "definition of done" below). */
+const structural = (warnings: readonly string[]): string[] => warnings.filter((w) => !/definition of done|open-ended/.test(w));
+
 describe("resolvePlan", () => {
   it("resolves earlier advisory IDs and warns on self, later, or unknown IDs", () => {
     const plan = resolvePlan([
@@ -88,7 +91,7 @@ describe("resolvePlan", () => {
     ]);
     expect(plan.errors).toEqual([]);
     expect(plan.tickets[1]).toMatchObject({ after: ["a", "b", "c", "missing"], knownAfter: ["a"], knownDeps: [] });
-    expect(plan.warnings).toEqual([
+    expect(structural(plan.warnings)).toEqual([
       'ticket 2 ("b") is after itself; dropped',
       'ticket 2 is after unknown/later id "c"; dropped',
       'ticket 2 is after unknown/later id "missing"; dropped',
@@ -96,8 +99,8 @@ describe("resolvePlan", () => {
   });
   it("resolves earlier deps and reports nothing for a clean plan", () => {
     const r = resolvePlan([
-      { title: "A", id: "a", files: ["src/a.ts"] },
-      { title: "B", id: "b", dependsOn: ["a"], files: ["src/b.ts"] },
+      { title: "A", id: "a", files: ["src/a.ts"], acceptance: ["`npm test` passes"] },
+      { title: "B", id: "b", dependsOn: ["a"], files: ["src/b.ts"], acceptance: ["a test covers B"] },
     ]);
     expect(r.errors).toEqual([]);
     expect(r.warnings).toEqual([]);
@@ -164,7 +167,7 @@ describe("plan routing and brief", () => {
       [undefined, undefined],
     ]);
     expect(plan.errors).toEqual([]);
-    expect(plan.warnings).toEqual([
+    expect(structural(plan.warnings)).toEqual([
       expect.stringMatching(/ticket 3 is routed to unknown agent "gemini"/),
       expect.stringMatching(/ticket 3 has an effort but no agent/),
       expect.stringMatching(/ticket 4 has unknown effort "medium"/),
@@ -181,5 +184,41 @@ describe("plan routing and brief", () => {
     expect(resolvePlan([{ title: "x" }], { brief: "a".repeat(MAX_BRIEF_CHARS + 1) }).errors).toEqual([
       expect.stringMatching(/plan brief is 4001 characters \(limit 4000\)/),
     ]);
+  });
+});
+
+describe("definition of done", () => {
+  it("parses acceptance and outOfScope as string arrays and rejects anything else", () => {
+    const [t] = parseTickets('[{"title":"x","acceptance":["a test passes"],"outOfScope":["polish"]}]');
+    expect(t).toMatchObject({ acceptance: ["a test passes"], outOfScope: ["polish"] });
+    expect(() => parseTickets('[{"title":"x","acceptance":"a test passes","outOfScope":[1]}]')).toThrow(
+      /ticket 1: acceptance must be an array of strings; ticket 1: outOfScope must be an array of strings/,
+    );
+  });
+
+  it("carries trimmed items and drops empty ones", () => {
+    const r = resolvePlan([{ title: "x", acceptance: [" a test passes ", "  "], outOfScope: ["", " polish "] }]);
+    expect(r.tickets[0]).toMatchObject({ acceptance: ["a test passes"], outOfScope: ["polish"] });
+  });
+
+  it("warns, never blocks, on a ticket with no definition of done", () => {
+    const r = resolvePlan([{ title: "Add a flag" }]);
+    expect(r.errors).toEqual([]);
+    expect(r.warnings).toEqual([expect.stringMatching(/ticket 1 has no definition of done/)]);
+  });
+
+  it("warns on open-ended wording unless an acceptance item names a check", () => {
+    const vague = resolvePlan([{ title: "Model every flow", acceptance: ["covers the main flows well"] }]);
+    expect(vague.warnings).toEqual([expect.stringMatching(/ticket 1 reads as open-ended \("every"\)/)]);
+
+    const closed = resolvePlan([{ title: "Model every flow", acceptance: ["a test fails when a step kind has no node"] }]);
+    expect(closed.warnings).toEqual([]);
+
+    // Open-ended wording with no acceptance at all earns both warnings.
+    expect(resolvePlan([{ title: "A complete model" }]).warnings).toHaveLength(2);
+  });
+
+  it("does not flag ordinary wording", () => {
+    expect(resolvePlan([{ title: "Add a flag", body: "Parse --yes.", acceptance: ["`--yes` skips the prompt (test)"] }]).warnings).toEqual([]);
   });
 });

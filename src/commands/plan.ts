@@ -55,6 +55,7 @@ function printPreview(plan: ResolvedPlan, brief?: string, note = "(dry run — n
       t.agent && `route:${t.agent}${t.effort ? `/${t.effort}` : ""}`,
       t.knownDeps.length && `deps:${t.knownDeps.join(",")}`,
       t.knownAfter.length && `after (advisory):${t.knownAfter.join(",")}`,
+      t.acceptance.length && `acceptance:${t.acceptance.length}`,
       t.files.length && `files:${t.files.join(", ")}`,
     ]
       .filter(Boolean)

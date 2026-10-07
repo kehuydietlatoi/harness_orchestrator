@@ -73,7 +73,7 @@ once: *Create N issues, route them, and start the autopilot?* On yes it creates 
 (the brief embedded in each), has the judge route any ticket the plan left unrouted, and
 runs `orch autopilot --issues <the plan's issues>` until every one is merged or handed to
 you. `orch plan tickets.json --brief plan-brief.md --yes` does the same non-interactively;
-`--no-run` stops after routing. If the run is interrupted, it prints the
+`--no-run` stops after routing. Every ticket should carry a **definition of done** (`acceptance`: checks a test or command can verify, plus `outOfScope`); `orch plan` warns when one is missing or reads as open-ended, because a ticket with no finish line is the main reason a review loop never converges. If the run is interrupted, it prints the
 `orch autopilot --issues …` command that resumes it. See
 [ADR-0010](docs/adr/0010-lead-at-decision-points.md).
 

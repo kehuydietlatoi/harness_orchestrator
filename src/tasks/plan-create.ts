@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
 import { STATUS, agentLabel, effortLabel, labelDefs } from "../github/labels.js";
+import { renderDefinitionOfDone } from "./definition-of-done.js";
 import { parseTickets, resolvePlan, type ResolvedTicket, type Ticket } from "./plan.js";
 
 const MARKER_VERSION = "v1";
@@ -116,6 +117,9 @@ export function renderTicketBody(
 ): string {
   const parts: string[] = [];
   if (ticket.body) parts.push(ticket.body.trim());
+  // Right after the body, so the reviewer reads the finish line next to the spec it closes.
+  const doneness = renderDefinitionOfDone(ticket.acceptance, ticket.outOfScope, neutralizeReferences);
+  if (doneness) parts.push(doneness);
   if (ticket.files?.length) {
     parts.push(`**Files (ownership hint):** ${ticket.files.map((f) => `\`${f}\``).join(", ")}`);
   }
