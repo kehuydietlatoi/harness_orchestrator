@@ -894,6 +894,7 @@
       }
 
       .flow-edge text {
+        visibility: hidden;
         fill: var(--fg-muted);
         font-size: 10px;
         text-anchor: middle;
@@ -901,6 +902,12 @@
         stroke: var(--fg-bg);
         stroke-width: 4px;
         stroke-linejoin: round;
+      }
+
+      .flow-edge.is-label-visible text,
+      .flow-edge:hover text,
+      .flow-edge:focus text {
+        visibility: visible;
       }
 
       .flow-arrow {
@@ -921,9 +928,21 @@
         stroke-width: 3.2;
       }
 
+      .flow-edge path.flow-edge-hit {
+        stroke: transparent;
+        stroke-width: 10px;
+        pointer-events: stroke;
+      }
+
       .flow-edge.is-dim,
       .flow-node.is-dim {
         opacity: 0.18;
+      }
+
+      .flow-edge.is-label-visible,
+      .flow-edge:hover,
+      .flow-edge:focus {
+        opacity: 1;
       }
 
       .flow-node {
@@ -2291,6 +2310,14 @@
           return lines.slice(0, 2);
         };
 
+        // BEGIN flow-label-visibility (pure; exercised by test/flow-label-visibility.test.ts)
+        const flowLabelVisible = ({ edge, filter, activeEdge, selected }) => Boolean(
+          (filter && edge.flows.includes(filter)) ||
+          edge.id === activeEdge ||
+          (selected && (edge.from === selected || edge.to === selected))
+        );
+        // END flow-label-visibility
+
         const applyFlowClasses = () => {
           const model = flow.model;
           if (!model) return;
@@ -2306,6 +2333,8 @@
             el.classList.toggle("is-hl", hit);
             el.classList.toggle("is-dim", Boolean(flow.filter) && !hit);
             el.classList.toggle("is-active", edge.id === flow.activeEdge);
+            el.classList.toggle("is-incident", Boolean(flow.selected) && (edge.from === flow.selected || edge.to === flow.selected));
+            el.classList.toggle("is-label-visible", flowLabelVisible({ edge, filter: flow.filter, activeEdge: flow.activeEdge, selected: flow.selected }));
           }
           for (const node of model.nodes) {
             const el = flow.nodeEls.get(node.id);
@@ -2430,7 +2459,10 @@
             const a = byId.get(edge.from);
             const b = byId.get(edge.to);
             if (!a || !b) continue;
-            const group = svgEl("g", { class: "flow-edge", "data-edge": edge.id }, edgeLayer);
+            const group = svgEl("g", {
+              class: "flow-edge", "data-edge": edge.id, tabindex: 0, role: "img",
+              "aria-label": `${edge.label} (${edge.flows.join(", ")})`,
+            }, edgeLayer);
             svgEl("title", {}, group).textContent = `${edge.label} (${edge.flows.join(", ")})`;
             let d;
             let lx;
@@ -2447,6 +2479,7 @@
               ({ d, lx, ly } = flowEdgePath(start, end, slots.get(edge.id).offset));
             }
             svgEl("path", { d, "marker-end": "url(#flow-arrowhead)" }, group);
+            svgEl("path", { d, class: "flow-edge-hit", "aria-hidden": "true" }, group);
             svgEl("text", { x: lx, y: ly }, group).textContent = edge.label;
             flow.edgeEls.set(edge.id, group);
           }
