@@ -139,7 +139,7 @@ function failure(ticket: Ticket, error: unknown): Failed {
   };
 }
 
-function indexByMarker(issues: readonly Issue[], markers: readonly string[]): Map<string, Issue[]> {
+export function indexByMarker(issues: readonly Issue[], markers: readonly string[]): Map<string, Issue[]> {
   const indexed = new Map<string, Issue[]>();
   for (const marker of markers) {
     const matches = issues.filter((issue) => issue.body.includes(marker)).sort((a, b) => a.number - b.number);

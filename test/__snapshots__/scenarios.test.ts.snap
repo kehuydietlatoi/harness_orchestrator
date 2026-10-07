@@ -1,0 +1,121 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
+[
+  {
+    "frames": [
+      "plan-gate-ask:01 plan.goal <- cut",
+      "plan-gate-ask:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-gate-ask:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-gate-ask:04 plan.reuse <- plan.gate>plan.reuse:ask-y-or-yes-run",
+    ],
+    "id": "plan-gate-ask",
+  },
+  {
+    "frames": [
+      "plan-gate-run:01 plan.goal <- cut",
+      "plan-gate-run:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-gate-run:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-gate-run:04 plan.reuse <- plan.gate>plan.reuse:ask-y-or-yes-run",
+    ],
+    "id": "plan-gate-run",
+  },
+  {
+    "frames": [
+      "plan-gate-hint:01 plan.goal <- cut",
+      "plan-gate-hint:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-gate-hint:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-gate-hint:04 plan.hint <- plan.gate>plan.hint:no-tty-no-yes-hint",
+    ],
+    "id": "plan-gate-hint",
+  },
+  {
+    "frames": [
+      "plan-gate-declined:01 plan.goal <- cut",
+      "plan-gate-declined:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-gate-declined:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-gate-declined:04 plan.hint <- plan.gate>plan.hint:declined-n-hint",
+    ],
+    "id": "plan-gate-declined",
+  },
+  {
+    "frames": [
+      "plan-blocked:01 plan.goal <- cut",
+      "plan-blocked:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-blocked:03 plan.blocked <- plan.resolve>plan.blocked:errors-block",
+    ],
+    "id": "plan-blocked",
+  },
+  {
+    "frames": [
+      "plan-create:01 plan.goal <- cut",
+      "plan-create:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-create:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-create:04 plan.reuse <- plan.gate>plan.reuse:ask-y-or-yes-run",
+      "plan-create:05 plan.create <- plan.reuse>plan.create:no-marker-create",
+      "plan-create:06 route.assign <- plan.create>route.assign:created-route-them",
+    ],
+    "id": "plan-create",
+  },
+  {
+    "frames": [
+      "plan-rerun:01 plan.goal <- cut",
+      "plan-rerun:02 plan.resolve <- plan.goal>plan.resolve:tickets-json-written",
+      "plan-rerun:03 plan.gate <- plan.resolve>plan.gate:valid-warnings-advisory-previewed",
+      "plan-rerun:04 plan.reuse <- plan.gate>plan.reuse:ask-y-or-yes-run",
+      "plan-rerun:05 route.assign <- plan.reuse>route.assign:marker-found-reuse-issue",
+    ],
+    "id": "plan-rerun",
+  },
+  {
+    "frames": [
+      "routing-judge:01 route.assign <- cut",
+      "routing-judge:02 route.judge <- route.assign>route.judge:brief-to-the-lead",
+      "routing-judge:03 route.eval <- route.judge>route.eval:routing-plan-json",
+      "routing-judge:04 route.apply <- route.eval>route.apply:advisory-gaps-warn-on-stderr-never-blocks",
+      "routing-judge:05 state.ready <- route.apply>state.ready:valid-entries-agent-effort-filled",
+    ],
+    "id": "routing-judge",
+  },
+  {
+    "frames": [
+      "routing-skip:01 route.assign <- cut",
+      "routing-skip:02 route.judge <- route.assign>route.judge:brief-to-the-lead",
+      "routing-skip:03 route.eval <- route.judge>route.eval:routing-plan-json",
+      "routing-skip:04 route.apply <- route.eval>route.apply:advisory-gaps-warn-on-stderr-never-blocks",
+      "routing-skip:05 route.skipped <- route.apply>route.skipped:invalid-or-missing-entry-skipped",
+    ],
+    "id": "routing-skip",
+  },
+  {
+    "frames": [
+      "happy-path:01 state.ready <- cut",
+      "happy-path:02 route.eligible <- state.ready>route.eligible:next-run-autopilot",
+      "happy-path:03 route.cycles <- route.eligible>route.cycles:open-dependencies",
+      "happy-path:04 route.after <- route.cycles>route.after:eligible-set",
+      "happy-path:05 run.claim <- route.after>run.claim:lowest-preference-first",
+      "happy-path:06 run.saga <- run.claim>run.saga:lock-projection-worktree",
+      "happy-path:07 state.claimed <- run.saga>state.claimed:setup-verified",
+      "happy-path:08 state.in-progress <- state.claimed>state.in-progress:start-work",
+      "happy-path:09 run.outcome <- state.in-progress>run.outcome:harness-exits",
+      "happy-path:10 run.submit <- run.outcome>run.submit:commits-made",
+      "happy-path:11 state.in-review <- run.submit>state.in-review:pr-opened",
+      "happy-path:12 auto.observe <- state.in-review>auto.observe:autopilot-polls-open-prs",
+      "happy-path:13 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "happy-path:14 step.review <- auto.decide>step.review:no-accepted-approval",
+      "happy-path:15 review.pick <- step.review>review.pick:runs-the-reviewer",
+      "happy-path:16 review.cross <- review.pick>review.cross:other-harness-available",
+      "happy-path:17 review.run <- review.cross>review.run:read-only-checkout-of-the-head",
+      "happy-path:18 review.verdict <- review.run>review.verdict:reply-parsed",
+      "happy-path:19 review.approve <- review.verdict>review.approve:approve",
+      "happy-path:20 review.gate <- review.approve>review.gate:approval-on-current-head",
+      "happy-path:21 review.merge <- review.gate>review.merge:gate-passes",
+      "happy-path:22 review.cleanup <- review.merge>review.cleanup:merged-lock-released",
+      "happy-path:23 state.done <- review.cleanup>state.done:worktree-removed-resources-released",
+      "happy-path:24 auto.decide <- cut",
+      "happy-path:25 auto.report <- auto.decide>auto.report:drained-or-plan-complete",
+    ],
+    "id": "happy-path",
+  },
+]
+`;
