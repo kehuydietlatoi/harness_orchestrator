@@ -7,11 +7,12 @@ import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { getIssue, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
+import { hasDefinitionOfDone } from "../tasks/definition-of-done.js";
 import { recordRun, resolveTaskModel } from "../tasks/runner.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize } from "../util/log-file.js";
-import type { ReviewMode } from "./approval.js";
+import { normalizeFollowups, withFollowups, type ReviewMode } from "./approval.js";
 import { markUnavailable, unavailableAgents } from "./availability.js";
 import { issueAgent } from "./board.js";
 import { approve, prIssueNumber, requestChanges } from "./review.js";
@@ -110,6 +111,8 @@ export class NoReviewerError extends Error {
 export interface Verdict {
   decision: "approve" | "request-changes";
   notes: string;
+  /** Non-blocking observations beyond the issue's definition of done; absent when there are none. */
+  followups?: string[];
 }
 
 /**
@@ -120,10 +123,13 @@ export interface Verdict {
 export function parseVerdict(text: string): Verdict | null {
   const candidate = lastFencedBlock(text) ?? text.trim();
   try {
-    const v = JSON.parse(candidate) as { decision?: unknown; notes?: unknown };
+    const v = JSON.parse(candidate) as { decision?: unknown; notes?: unknown; followups?: unknown };
     const notes = typeof v.notes === "string" ? v.notes.trim() : "";
-    if (v.decision === "approve") return { decision: "approve", notes };
-    if (v.decision === "request-changes" && notes.length > 0) return { decision: "request-changes", notes };
+    const followups = normalizeFollowups(v.followups); // malformed follow-ups are ignored, never a failed review
+    const extra = followups.length > 0 ? { followups } : {};
+    if (v.decision === "approve") return { decision: "approve", notes, ...extra };
+    // Follow-ups alone never justify a change request: that needs notes naming what must change.
+    if (v.decision === "request-changes" && notes.length > 0) return { decision: "request-changes", notes, ...extra };
   } catch {
     // not JSON - no verdict
   }
@@ -151,6 +157,7 @@ export function formatReviewPrompt(params: {
     throw new Error(`the ${diff.length}-character diff of PR #${pr.number} must be staged as a file; refusing to truncate it`);
   }
   const files = listChangedFiles(diff);
+  const scoped = hasDefinitionOfDone(issue.body);
   const diffSection = oversized && artifact
     ? [
         `<changed-files count="${files.length}">`,
@@ -177,6 +184,15 @@ export function formatReviewPrompt(params: {
     "",
     "Review for: acceptance criteria met; correctness and edge cases; adequate tests; no unrelated or out-of-scope changes.",
     "Approve only if you would be comfortable merging this exactly as it is.",
+    ...(scoped
+      ? [
+          "",
+          "This issue has a Definition of done. Judge the change against it, and against the code as it really behaves:",
+          '- Request changes ONLY for (a) a Definition-of-done item that is not met, (b) a defect: the change contradicts what the code actually does or breaks existing behaviour, or (c) a missing test for a Definition-of-done item.',
+          '- Everything else is NOT a reason to request changes: further cases, finer-grained variants, nice-to-haves, refactors, and anything listed under "Out of scope". Put each in "followups" (one short line each); follow-ups never block the merge.',
+          "- If every item is met and nothing is defective, approve, even if you can think of more that could be added. Do not invent requirements the issue does not state.",
+        ]
+      : []),
     "",
     `<issue number="${issue.number}" title=${JSON.stringify(issue.title)}>`,
     issue.body,
@@ -186,9 +202,12 @@ export function formatReviewPrompt(params: {
     "",
     "Finish with ONE fenced json block and nothing after it:",
     "```json",
-    '{"decision": "approve" | "request-changes", "notes": "..."}',
+    scoped
+      ? '{"decision": "approve" | "request-changes", "notes": "...", "followups": ["..."]}'
+      : '{"decision": "approve" | "request-changes", "notes": "..."}',
     "```",
-    'For "request-changes", notes must list specific, actionable fixes. For "approve", notes is a short rationale.',
+    'For "request-changes", notes must list specific, actionable fixes. For "approve", notes is a short rationale.' +
+      (scoped ? ' "followups" is optional.' : ""),
   ].join("\n");
 }
 
@@ -265,6 +284,8 @@ export interface ReviewOutcome {
   issue: number;
   author: string | null;
   notes: string;
+  /** Non-blocking observations the reviewer recorded on the PR (beyond the issue's definition of done). */
+  followups: string[];
 }
 
 function defaultDeps(cfg: OrchConfig, cwd: string): ReviewRunDeps {
@@ -384,12 +405,13 @@ export async function runAutomatedReview(
 
     const recordOpts = { mode: pick.mode, cfg, head };
     if (verdict.decision === "approve") {
-      await approve(prNum, pick.reviewer, cwd, verdict.notes, head, recordOpts);
+      await approve(prNum, pick.reviewer, cwd, withFollowups(verdict.notes, verdict.followups), head, recordOpts);
     } else {
-      await requestChanges(prNum, pick.reviewer, cwd, verdict.notes, recordOpts);
+      await requestChanges(prNum, pick.reviewer, cwd, withFollowups(verdict.notes, verdict.followups), recordOpts);
     }
     return {
       decision: verdict.decision, reviewer: pick.reviewer, mode: pick.mode, head, issue: n, author, notes: verdict.notes,
+      followups: verdict.followups ?? [],
     };
   }
 }

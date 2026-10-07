@@ -90,7 +90,7 @@ export async function executeReview(obs: TaskObservation, cfg: OrchConfig, cwd: 
     const out = await runAutomatedReview(obs.pr.number, cfg, cwd);
     return {
       signal: out.decision === "approve" ? "review.approved" : "review.changes_requested",
-      detail: `${out.reviewer} (${out.mode})`,
+      detail: `${out.reviewer} (${out.mode})${out.followups.length ? `; ${out.followups.length} follow-up(s) recorded` : ""}`,
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);

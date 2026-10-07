@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { currentReviewers, formatReview, parseReview, reviewState, type ReviewRecord } from "../src/board/approval.js";
+import {
+  FOLLOWUPS_HEADING, currentReviewers, formatReview, latestChangeRequestNotes, normalizeFollowups, parseReview, reviewNotes,
+  reviewState, splitFollowups, withFollowups, type ReviewRecord,
+} from "../src/board/approval.js";
 const head = "a".repeat(40);
 function review(id = 1, changes: Partial<ReviewRecord> = {}) {
   const record: ReviewRecord = { reviewer: "claude", pr: 62, head,
@@ -37,5 +40,34 @@ describe("commit-bound review decisions", () => {
       { ...review(), commit_id: "b".repeat(40) },
       review(1, { timestamp: "bad" }), review(1, { head: "" }),
     ]) expect(parseReview(candidate)).toBeNull();
+  });
+});
+
+describe("review follow-ups", () => {
+  it("normalizes a reviewer's follow-ups: strings only, one line, capped, never throwing", () => {
+    expect(normalizeFollowups(["  more\n cases ", "", 3, null, "rename it"])).toEqual(["more cases", "rename it"]);
+    expect(normalizeFollowups("not a list")).toEqual([]);
+    expect(normalizeFollowups(undefined)).toEqual([]);
+    expect(normalizeFollowups(Array.from({ length: 25 }, (_, i) => `item ${i}`))).toHaveLength(10);
+    expect(normalizeFollowups(["x".repeat(900)])[0]).toHaveLength(500);
+  });
+
+  it("appends a fixed trailing section and splits it back off", () => {
+    const note = withFollowups("Meets the criteria.", ["more cases", "rename it"]);
+    expect(note).toBe(`Meets the criteria.\n\n${FOLLOWUPS_HEADING}\n- more cases\n- rename it`);
+    expect(splitFollowups(note)).toEqual({ notes: "Meets the criteria.", followups: ["more cases", "rename it"] });
+    expect(withFollowups("Plain note.")).toBe("Plain note.");
+    expect(withFollowups("", ["only a follow-up"])).toBe(`${FOLLOWUPS_HEADING}\n- only a follow-up`);
+    expect(splitFollowups("Plain note.")).toEqual({ notes: "Plain note.", followups: [] });
+  });
+
+  it("keeps follow-ups on the PR but out of the author's feedback", () => {
+    const body = withFollowups("Add a test for the empty case.", ["handle unicode names too"]);
+    const reviews = [review(7, { decision: "request-changes" })].map((r) => ({
+      ...r,
+      body: formatReview({ reviewer: "codex", pr: 62, head, timestamp: "2026-09-09T12:00:00Z", decision: "request-changes" }, body),
+    }));
+    expect(latestChangeRequestNotes(reviews, 62, head)).toBe("Add a test for the empty case.");
+    expect(reviewNotes(reviews[0])).toContain("handle unicode names too"); // still on the record for triage and humans
   });
 });

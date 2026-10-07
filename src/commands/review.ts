@@ -75,6 +75,10 @@ export async function reviewRunCommand(prArg: string, opts: { agent?: string }):
     console.log(pc.dim(`Issue #${out.issue} bounced back to '${out.author}' (status:in-progress).
 ${out.notes}`));
   }
+  if (out.followups.length) {
+    console.log(pc.dim(`Recorded ${out.followups.length} non-blocking follow-up(s) on the PR:`));
+    out.followups.forEach((item) => console.log(pc.dim(`  - ${item}`)));
+  }
 }
 
 export async function reviewApproveCommand(prArg: string, opts: { agent?: string; notes?: string; head?: string; self?: boolean }): Promise<void> {

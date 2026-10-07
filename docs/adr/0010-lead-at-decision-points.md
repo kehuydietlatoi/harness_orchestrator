@@ -86,6 +86,15 @@ drafts working, and the one human gate (the plan preview) is where it is seen. T
 instructed to write them, and the `orch-plan` skill teaches closing an open-ended ticket into a checklist or a
 machine-checked invariant. Neither field is part of the plan identity.
 
+The definition of done is also the reviewer's contract. When an issue has one, the reviewer is told to request
+changes only for an unmet item, a defect (the change contradicts what the code does or breaks existing
+behaviour), or a missing test, and to put every other observation in an optional `followups` list. Follow-ups are
+recorded on the PR as a trailing section of the review note, are stripped from the feedback the author receives, and
+never block a merge: a verdict that only has follow-ups must be an approval. An issue with no definition of done is
+reviewed exactly as before. Triage judges the remaining findings against the same section and names which the
+author must fix and which to decline as out of scope. Triage still cannot override a reviewer or merge: the
+approval that the gate requires always comes from a review of the current head.
+
 ## Consequences
 
 - The operator's work is: brainstorm, approve once, and handle escalations, which now arrive with

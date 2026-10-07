@@ -79,13 +79,48 @@ export function answeredChangeRequestRounds(reviews: readonly PrReview[], pr: nu
   return heads.size;
 }
 
+/** Heading of the non-blocking list a reviewer attaches to a verdict (ADR-0010 amendment). */
+export const FOLLOWUPS_HEADING = "### Follow-ups (not required for this PR)";
+
+const MAX_FOLLOWUPS = 10;
+const MAX_FOLLOWUP_CHARS = 500;
+
+/** A reviewer's `followups` value as a clean list: strings only, one line each, capped. Anything else is ignored. Pure. */
+export function normalizeFollowups(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.replace(/\s+/g, " ").trim().slice(0, MAX_FOLLOWUP_CHARS))
+    .filter((item) => item.length > 0)
+    .slice(0, MAX_FOLLOWUPS);
+}
+
+/** The review note with its follow-ups appended as a fixed trailing section. Pure. */
+export function withFollowups(notes: string, followups: readonly string[] = []): string {
+  const list = normalizeFollowups([...followups]);
+  const section = list.length ? [FOLLOWUPS_HEADING, ...list.map((item) => `- ${item}`)].join("\n") : "";
+  return [notes.trim(), section].filter(Boolean).join("\n\n");
+}
+
+/** Split a recorded note into the part that asks for work and the follow-ups that do not. Pure. */
+export function splitFollowups(notes: string): { notes: string; followups: string[] } {
+  const at = notes.indexOf(FOLLOWUPS_HEADING);
+  if (at < 0) return { notes: notes.trim(), followups: [] };
+  const followups = notes
+    .slice(at + FOLLOWUPS_HEADING.length)
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*-\s+/, "").trim())
+    .filter(Boolean);
+  return { notes: notes.slice(0, at).trim(), followups };
+}
+
 /** A recorded review's human-readable notes: its body without the trailing record marker. Pure. */
 export function reviewNotes(review: PrReview): string {
   return review.body.replace(/\n*<!-- orch-review:v1 .* -->\s*$/, "").trim();
 }
 
 /**
- * The reviewer's notes from the newest request-changes record bound to `head`, or null when
+ * The reviewer's notes (without any follow-ups) from the newest request-changes record bound to `head`, or null when
  * the latest decision on that head is not a request for changes. Pure.
  */
 export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: number, head: string): string | null {
@@ -93,7 +128,8 @@ export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: numbe
   for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
     const r = parseReview(review);
     if (!r || r.pr !== pr) continue;
-    latest = { decision: r.decision, head: r.head, notes: reviewNotes(review) };
+    // Follow-ups are recorded on the PR but are not feedback: they must never reach the author's fix prompt.
+    latest = { decision: r.decision, head: r.head, notes: splitFollowups(reviewNotes(review)).notes };
   }
   return latest && latest.decision === "request-changes" && latest.head === head ? latest.notes : null;
 }
