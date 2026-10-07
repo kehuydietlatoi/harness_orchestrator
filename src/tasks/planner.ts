@@ -30,8 +30,12 @@ const OUTPUT_REMINDER = [
   "of ticket objects. Each ticket:",
   '  { "id": "short-slug", "title": "…", "body": "…",',
   '    "dependsOn": ["earlier-id", …], "after": ["earlier-id", …], "files": ["path/hint", …],',
-  '    "agent": "claude|codex", "effort": "easy|hard" }',
+  '    "agent": "claude|codex", "effort": "easy|hard",',
+  '    "acceptance": ["a check a test or command can verify", …], "outOfScope": ["tempting adjacent work", …] }',
   "- `title` is required; the others are optional.",
+  "- `acceptance` is the definition of done: every ticket needs checks a test or command can verify. A ticket worded",
+  "  as unbounded (every, all, complete, canonical) must be reduced to a closed checklist or a machine-checked invariant.",
+  "- `outOfScope` names the tempting adjacent work and, where it exists, the later ticket that owns it.",
   "- `agent`/`effort` route the ticket; omit both when unsure and the routing judge decides.",
   "- `dependsOn` and `after` may only reference the `id` of an EARLIER ticket in the array.",
   "- `dependsOn` is a hard prerequisite; use `after` for advisory ordering that never blocks dispatch.",
@@ -131,10 +135,11 @@ export function formatInteractiveSeed(outputPath: string, briefPath?: string, ag
     : "Route a ticket with agent and effort (easy or hard) when you are confident; omit both to let the routing judge decide.";
   return [
     "You are in an interactive orch plan session: help the user break a goal into a tickets.json for the orch orchestrator.",
-    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files, agent, effort) and the plan brief.",
+    "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files, agent, effort, acceptance, outOfScope) and the plan brief.",
     "Explore the repository with Read/Grep/Glob to ground file-ownership hints in the real structure.",
     "Refine the plan conversationally with the user.",
     route,
+    "Give every ticket acceptance items that a test or command can verify, and outOfScope for tempting adjacent work; reduce any open-ended ticket (every, all, complete, canonical) to a closed checklist or a machine-checked invariant.",
     `When the user is satisfied, use the Write tool to save the final tickets as a JSON array to the absolute path ${outputPath}`,
     briefPath
       ? `and save the plan brief (goal, key decisions, constraints, rejected alternatives, acceptance; under 4000 characters) as markdown to the absolute path ${briefPath}, then tell the user both are saved.`

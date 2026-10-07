@@ -2,6 +2,7 @@ import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
 import type { EffortTier, OrchConfig } from "../config.js";
+import { definitionOfDoneWarnings } from "./definition-of-done.js";
 
 export interface Ticket {
   id?: string; // local id other tickets reference in dependsOn or after
@@ -12,6 +13,8 @@ export interface Ticket {
   files?: string[]; // file-ownership hints (to minimise overlap)
   agent?: string; // routing chosen while planning: becomes the `agent:` label
   effort?: string; // routing tier (`easy` | `hard`): becomes the `effort:` label
+  acceptance?: string[]; // the definition of done: checks a test or command can verify
+  outOfScope?: string[]; // tempting adjacent work this ticket does not do
 }
 
 /** Longest plan brief embedded in every issue; longer is a blocking error, never truncated. */
@@ -21,7 +24,7 @@ const EFFORT_TIERS: readonly string[] = ["easy", "hard"];
 
 /** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
  * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
- * `body`/`agent`/`effort` must be a string and any present `dependsOn`/`after`/`files` must be an array of
+ * `body`/`agent`/`effort` must be a string and any present `dependsOn`/`after`/`files`/`acceptance`/`outOfScope` must be an array of
  * strings. Malformed field values are reported (ticket-indexed, all at once) rather
  * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
  * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
@@ -47,6 +50,8 @@ export function parseTickets(raw: string): Ticket[] {
     if (o.id !== undefined && typeof o.id !== "string") errors.push(`ticket ${index}: id must be a string`);
     if (o.title !== undefined && typeof o.title !== "string") errors.push(`ticket ${index}: title must be a string`);
     if (o.body !== undefined && typeof o.body !== "string") errors.push(`ticket ${index}: body must be a string`);
+    const acceptance = stringArray(o.acceptance, "acceptance");
+    const outOfScope = stringArray(o.outOfScope, "outOfScope");
     if (o.agent !== undefined && typeof o.agent !== "string") errors.push(`ticket ${index}: agent must be a string`);
     if (o.effort !== undefined && typeof o.effort !== "string") errors.push(`ticket ${index}: effort must be a string`);
 
@@ -57,6 +62,8 @@ export function parseTickets(raw: string): Ticket[] {
       dependsOn: stringArray(o.dependsOn, "dependsOn"),
       after: stringArray(o.after, "after"),
       files: stringArray(o.files, "files"),
+      ...(acceptance ? { acceptance } : {}),
+      ...(outOfScope ? { outOfScope } : {}),
       ...(typeof o.agent === "string" ? { agent: o.agent } : {}),
       ...(typeof o.effort === "string" ? { effort: o.effort } : {}),
     };
@@ -73,6 +80,9 @@ export interface ResolvedTicket {
   /** The human description (no rendered dep line). */
   body: string;
   files: string[];
+  /** The definition of done and out-of-scope list, trimmed with empties dropped. */
+  acceptance: string[];
+  outOfScope: string[];
   /** Dependency ids as written. */
   dependsOn: string[];
   /** The subset of `dependsOn` that resolves to an earlier ticket (will become #refs). */
@@ -140,6 +150,10 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
       else knownAfter.push(predecessor);
     }
 
+    const acceptance = (t.acceptance ?? []).map((item) => item.trim()).filter(Boolean);
+    const outOfScope = (t.outOfScope ?? []).map((item) => item.trim()).filter(Boolean);
+    warnings.push(...definitionOfDoneWarnings(index, { title: t.title, body: t.body, acceptance }));
+
     const files = t.files ?? [];
     for (const f of files) fileOwners.set(f, [...(fileOwners.get(f) ?? []), index]);
 
@@ -160,7 +174,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
 
     if (t.id) seen.add(t.id);
     resolved.push({
-      index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, dependsOn, knownDeps, after, knownAfter,
+      index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, acceptance, outOfScope, dependsOn, knownDeps, after, knownAfter,
       ...(agent ? { agent } : {}),
       ...(effort ? { effort: effort as EffortTier } : {}),
     });

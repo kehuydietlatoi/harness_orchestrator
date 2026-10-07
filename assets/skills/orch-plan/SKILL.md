@@ -22,6 +22,8 @@ Each ticket is a JSON object:
 | `files` | no | file/dir ownership hints that minimise overlap between parallel agents |
 | `agent` | no | which harness implements it (a configured agent, e.g. `claude` or `codex`) — becomes the `agent:` label |
 | `effort` | no | `easy` or `hard` model tier — becomes the `effort:` label; only used together with `agent` |
+| `acceptance` | **strongly recommended** | the **definition of done**: checks a test or command can verify — rendered as a checklist in the issue |
+| `outOfScope` | recommended | tempting adjacent work this ticket does *not* do, naming the later ticket that owns it |
 
 ## How to decompose
 
@@ -33,6 +35,26 @@ Each ticket is a JSON object:
 - Write each `body` so an agent with no extra context can act: scope, constraints, and a one-line acceptance check.
 - Base scope and `files` on the **actual repository structure** you are given, not on assumptions.
 - **Route** a ticket (`agent` + `effort`) when you are confident who should build it: `hard` for design-heavy, cross-cutting, or risky work, `easy` for mechanical changes. Omit both when unsure — orch's routing judge fills in unrouted tickets. An `effort` without an `agent` is dropped.
+
+## Definition of done
+
+A ticket without a finish line cannot be reviewed to a conclusion: every round a reviewer finds one more real gap,
+and the task escalates to a human. So every ticket gets `acceptance` and, where there is tempting adjacent work,
+`outOfScope`. orch renders them as the issue's **Definition of done** and **Out of scope** sections, the reviewer
+judges against them, and anything beyond them is recorded as a non-blocking follow-up instead of a change request.
+
+- Each `acceptance` item must be **checkable**: name a test, a command and its expected result, an observable output,
+  or a specific behaviour — "`npm test` passes and `test/x.test.ts` fails if the edge is removed", not "handles errors well".
+- **Close open-ended tickets.** If the title or body says *every*, *all*, *complete*, *comprehensive* or *canonical*, reduce it
+  to a closed checklist, or to a machine-checked invariant (a test that fails when something is missing). Worked example:
+  "model every orch flow" becomes "a node for every `Step` kind and every lifecycle state (a type-level exhaustive test),
+  every edge endpoint exists, every code reference resolves" — and deeper behavioural fidelity is `outOfScope`, owned by
+  the later ticket whose scenarios check the model against the real code.
+- Prefer 3–6 items. More usually means the ticket should be split.
+- `outOfScope` should name the neighbour: "per-scenario narration — #97", not just "polish".
+
+`orch plan` warns (it never blocks) on a ticket with no `acceptance`, or one that reads as open-ended without an item that
+names a check. Fix the warning rather than ignoring it.
 
 ## The plan brief (interactive sessions)
 
@@ -52,7 +74,7 @@ Reply with **exactly one** fenced code block tagged `json` and nothing after it 
 
 ```json
 [
-  { "id": "auth-config", "title": "Add OAuth provider config", "body": "Load client id/secret + issuer from env; fail fast on invalid config.", "files": ["src/auth/config.ts"] },
+  { "id": "auth-config", "title": "Add OAuth provider config", "body": "Load client id/secret + issuer from env; fail fast on invalid config.", "files": ["src/auth/config.ts"], "acceptance": ["`loadAuthConfig()` throws a clear error when the issuer is missing (test)", "`npm test` passes"], "outOfScope": ["token refresh, owned by the session ticket"] },
   { "id": "session-mw", "title": "Add session middleware", "body": "Verify the session cookie and attach the user; 401 on protected routes.", "dependsOn": ["auth-config"], "files": ["src/mw/session.ts"], "agent": "claude", "effort": "hard" }
 ]
 ```

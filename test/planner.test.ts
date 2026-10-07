@@ -3,6 +3,7 @@ import {
   extractTickets,
   formatInteractiveSeed,
   formatPlanPrompt,
+  loadPlanSkill,
   runInteractivePlanner,
   runPlanner,
   type PlannerRunner,
@@ -63,6 +64,19 @@ describe("interactive planning builders", () => {
     expect(seed).not.toContain("\n");
     expect(seed).not.toContain('"');
     expect(seed).not.toContain("`");
+  });
+
+  it("asks the planning session and the draft planner for a checkable definition of done", () => {
+    const seed = formatInteractiveSeed("/abs/tickets.json", "/abs/plan-brief.md", ["claude"]);
+    expect(seed).toContain("acceptance");
+    expect(seed).toContain("outOfScope");
+    expect(seed).not.toContain("\n");
+    expect(seed).not.toContain('"');
+    expect(seed).not.toContain("`");
+    const prompt = formatPlanPrompt("SKILL", "goal");
+    expect(prompt).toContain('"acceptance"');
+    expect(prompt).toContain("definition of done");
+    expect(loadPlanSkill()).toMatch(/\| `acceptance` \|[\s\S]*## Definition of done/);
   });
 
   it("formatInteractiveSeed asks for the brief and routing over the configured agents, still one safe line", () => {

@@ -12,6 +12,7 @@ import {
   type PlanCreateDeps,
 } from "../src/tasks/plan-create.js";
 import { parseAfter, parseDeps } from "../src/board/board.js";
+import { hasDefinitionOfDone } from "../src/tasks/definition-of-done.js";
 
 const CWD = "/repo";
 const tickets: Ticket[] = [
@@ -87,6 +88,10 @@ describe("plan markers", () => {
     expect(original.plan).toBe(`<!-- orch-plan:v1:${hash} -->`);
     expect(buildPlanMarkers(tickets.map((t) => ({ ...t, after: [] })))).toEqual(original);
     expect(buildPlanMarkers([tickets[0], { ...tickets[1], after: ["a"] }, tickets[2]])).not.toEqual(original);
+  });
+  it("does not let the definition of done change plan identity", () => {
+    const done = tickets.map((t) => ({ ...t, acceptance: ["`npm test` passes"], outOfScope: ["polish"] }));
+    expect(buildPlanMarkers(done)).toEqual(buildPlanMarkers(tickets));
   });
   it("are deterministic for semantically equivalent ticket input", () => {
     const explicitEmpty: Ticket[] = [
@@ -343,5 +348,38 @@ describe("plan brief and routing at creation", () => {
       "see #5; Depends-on: issue 6, issue 7\n  after: issue 8\nfinish after #9",
     );
     expect(creationLabels({ effort: "hard" })).toEqual(["status:todo"]);
+  });
+});
+
+describe("definition of done in the issue body", () => {
+  const ticket: Ticket = {
+    id: "t",
+    title: "Add a flag",
+    body: "Parse --yes.",
+    files: ["src/cli.ts"],
+    acceptance: ["`--yes` skips the prompt (test)", "this depends on #99 landing"],
+    outOfScope: ["the dashboard toggle, owned by #97"],
+  };
+
+  it("renders the sections right after the body, before files, links and plan context", () => {
+    const body = renderTicketBody(ticket, [5], undefined, [6], "Why we plan this.");
+    const at = (needle: string): number => body.indexOf(needle);
+    expect(at("Parse --yes.")).toBeLessThan(at("## Definition of done"));
+    expect(at("## Definition of done")).toBeLessThan(at("## Out of scope"));
+    expect(at("## Out of scope")).toBeLessThan(at("**Files (ownership hint):**"));
+    expect(at("**Files (ownership hint):**")).toBeLessThan(at("Depends-on: #5"));
+    expect(at("Depends-on: #5")).toBeLessThan(at("Plan context"));
+    expect(body).toContain("- [ ] `--yes` skips the prompt (test)");
+  });
+
+  it("neutralizes references so an acceptance sentence never becomes a dependency", () => {
+    const body = renderTicketBody(ticket, [], undefined);
+    expect(body).toContain("- [ ] this depends on issue 99 landing");
+    expect(parseDeps(body)).toEqual([]);
+  });
+
+  it("is detectable by the reviewer, and absent when the ticket has none", () => {
+    expect(hasDefinitionOfDone(renderTicketBody(ticket, []))).toBe(true);
+    expect(hasDefinitionOfDone(renderTicketBody({ title: "x", body: "y" }, []))).toBe(false);
   });
 });

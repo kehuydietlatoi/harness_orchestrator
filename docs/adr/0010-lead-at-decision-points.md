@@ -70,6 +70,22 @@ exist. Triage is fail-closed: a paused lead, a failed or timed-out run, or a rep
 decision escalates exactly as before. Triage changes nothing else: approval, CI and the merge gate are
 untouched, and the extra round is still re-reviewed.
 
+## Amendment: a ticket needs a closed definition of done
+
+The first real dogfood (#91-#98) showed where the autonomous loop still needed a human: two of eight tickets
+escalated after three fix rounds and a triage round, and in both a reviewer found a *different, real* gap each
+round. The loop was not failing; the tickets had no finish line ("model every flow" can always be made more
+complete), so a review could never conclude. A person had to define done by hand, and after they did the
+remaining tickets converged.
+
+So the planning contract now carries it. A ticket has `acceptance` (checks a test or command can verify) and
+`outOfScope` (tempting adjacent work, naming the ticket that owns it), rendered into the issue as a **Definition
+of done** and **Out of scope** section. `orch plan` warns, and never blocks, on a ticket with no acceptance items or
+one that reads as open-ended without an item naming a check: a warning keeps existing plans and hand-written
+drafts working, and the one human gate (the plan preview) is where it is seen. The planning session is
+instructed to write them, and the `orch-plan` skill teaches closing an open-ended ticket into a checklist or a
+machine-checked invariant. Neither field is part of the plan identity.
+
 ## Consequences
 
 - The operator's work is: brainstorm, approve once, and handle escalations, which now arrive with

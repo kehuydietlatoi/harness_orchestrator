@@ -1,5 +1,5 @@
 [
-  { "id": "api", "title": "Add required API" },
-  { "id": "docs", "title": "Draft operator guidance" },
-  { "title": "Build consumer", "dependsOn": ["api"], "after": ["docs"] }
+  { "id": "api", "title": "Add required API", "acceptance": ["`GET /api` returns 200 (test)"] },
+  { "id": "docs", "title": "Draft operator guidance", "acceptance": ["the guide lists every command and a test checks its links"] },
+  { "title": "Build consumer", "dependsOn": ["api"], "after": ["docs"], "acceptance": ["the consumer calls the API and a test asserts the result"] }
 ]
