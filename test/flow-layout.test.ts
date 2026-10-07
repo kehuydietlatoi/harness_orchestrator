@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { EDGES, LANES, NODES } from "../src/demo/flow-graph.js";
 import type { FlowEdge, FlowNode } from "../src/demo/flow-graph.js";
-import { NODE_H, NODE_W, layoutFlow, layoutViolations, wrapLabel } from "../src/demo/flow-layout.js";
+import { LABEL_CHAR_W, LABEL_MAX_W, LABEL_PAD, NODE_H, NODE_W, layoutFlow, layoutViolations, wrapLabel } from "../src/demo/flow-layout.js";
 import type { FlowLayout, FlowModel, ViolationKind } from "../src/demo/flow-layout.js";
 
 const real: FlowModel = { lanes: LANES, nodes: NODES, edges: EDGES };
@@ -130,5 +130,28 @@ describe("wrapLabel", () => {
   it("wraps long text and keeps short text on one line", () => {
     expect(wrapLabel("short")).toEqual(["short"]);
     expect(wrapLabel("a ".repeat(60)).length).toBeGreaterThan(1);
+  });
+});
+
+describe("layoutFlow with off-lattice coordinates", () => {
+  it("routes orthogonally for nodes that are not on the 10px lattice", () => {
+    const model: FlowModel = {
+      lanes: [{ id: "plan", label: "Plan", y: 0, height: 400 }],
+      nodes: [n("a", 100, 100), n("b", 400, 200)],
+      edges: [e("ab", "a", "b", "plan-pipeline")],
+    };
+    const layout = layoutFlow(model);
+    const pts = layout.routes.ab!.points;
+    expect(pts.length).toBeGreaterThanOrEqual(2);
+    for (let i = 1; i < pts.length; i++) expect(pts[i]!.x === pts[i - 1]!.x || pts[i]!.y === pts[i - 1]!.y).toBe(true);
+    expect(layoutViolations(model, layout).filter((v) => v.kind === "route-endpoint" || v.kind === "route-through-node")).toEqual([]);
+  });
+});
+
+describe("wrapLabel limits", () => {
+  it("splits oversized words so every line fits LABEL_MAX_W", () => {
+    const lines = wrapLabel(`x ${"w".repeat(80)} short`);
+    expect(lines.length).toBeGreaterThan(2);
+    for (const l of lines) expect(l.length * LABEL_CHAR_W + 2 * LABEL_PAD).toBeLessThanOrEqual(LABEL_MAX_W);
   });
 });

@@ -126,18 +126,23 @@ function pointOnBoundary(p: Point, r: Rect): boolean {
   );
 }
 
-/** Greedy word wrap; a word longer than the limit keeps its own line. */
+/** Greedy word wrap; a word longer than a line is split so no line exceeds LABEL_MAX_W. */
 export function wrapLabel(text: string): string[] {
   const maxChars = Math.max(1, Math.floor((LABEL_MAX_W - 2 * LABEL_PAD) / LABEL_CHAR_W));
   const lines: string[] = [];
   let cur = "";
   for (const word of text.split(/\s+/).filter(Boolean)) {
-    if (cur && cur.length + 1 + word.length > maxChars) {
-      lines.push(cur);
-      cur = word;
-    } else {
-      cur = cur ? `${cur} ${word}` : word;
+    if (cur && cur.length + 1 + word.length <= maxChars) {
+      cur = `${cur} ${word}`;
+      continue;
     }
+    if (cur) lines.push(cur);
+    let rest = word;
+    while (rest.length > maxChars) {
+      lines.push(rest.slice(0, maxChars));
+      rest = rest.slice(maxChars);
+    }
+    cur = rest;
   }
   if (cur) lines.push(cur);
   return lines.length ? lines : [""];
@@ -165,7 +170,8 @@ const DY = [0, 1, 0, -1];
 interface Port {
   key: string;
   edge: Point; // on the node boundary
-  out: Point; // one cell outside, where the search begins/ends
+  lead: Point; // straight out from `edge`, on the lattice along the outward axis
+  out: Point; // lattice cell where the search begins/ends (`lead`, snapped on the other axis)
   dir: number; // outward direction
 }
 
@@ -173,7 +179,14 @@ function portsOf(n: FlowNode): Port[] {
   const r = nodeRect(n);
   const ports: Port[] = [];
   const add = (side: string, k: number, edge: Point, dir: number): void => {
-    ports.push({ key: `${n.id}:${side}:${k}`, edge, out: { x: edge.x + DX[dir] * GRID, y: edge.y + DY[dir] * GRID }, dir });
+    // Nodes may sit anywhere: step out to the next lattice line, then snap across to a lattice cell.
+    const lead =
+      dir === 0 ? { x: Math.ceil((edge.x + GRID) / GRID) * GRID, y: edge.y }
+      : dir === 2 ? { x: Math.floor((edge.x - GRID) / GRID) * GRID, y: edge.y }
+      : dir === 1 ? { x: edge.x, y: Math.ceil((edge.y + GRID) / GRID) * GRID }
+      : { x: edge.x, y: Math.floor((edge.y - GRID) / GRID) * GRID };
+    const out = dir === 0 || dir === 2 ? { x: lead.x, y: Math.round(edge.y / GRID) * GRID } : { x: Math.round(edge.x / GRID) * GRID, y: lead.y };
+    ports.push({ key: `${n.id}:${side}:${k}`, edge, lead, out, dir });
   };
   for (const k of [0, -1, 1]) {
     add("e", k, { x: r.right, y: n.y + k * GRID }, 0);
@@ -276,7 +289,7 @@ class Router {
     this.useH = new Uint8Array(this.cols * this.rows);
     this.useV = new Uint8Array(this.cols * this.rows);
     for (const n of nodes) {
-      const r = nodeRect(n);
+      const r = inflate(nodeRect(n), ROUTE_CLEARANCE);
       for (let gy = Math.ceil(r.top / GRID); gy <= Math.floor(r.bottom / GRID); gy++) {
         for (let gx = Math.ceil(r.left / GRID); gx <= Math.floor(r.right / GRID); gx++) {
           if (gx >= 0 && gx < this.cols && gy >= 0 && gy < this.rows) this.blocked[gy * this.cols + gx] = 1;
@@ -373,11 +386,7 @@ class Router {
       }
     }
 
-    if (!found) {
-      const a = starts[0]!;
-      const b = goals[0]!;
-      return simplify([a.edge, b.edge]);
-    }
+    if (!found) throw new Error(`flow-layout: no route from ${from.id} to ${to.id}`);
 
     const cells: Point[] = [];
     let s = found.state;
@@ -400,7 +409,7 @@ class Router {
       if (a.y === b.y) this.useH[k] = Math.min(255, this.useH[k]! + 1);
       else this.useV[k] = Math.min(255, this.useV[k]! + 1);
     }
-    return simplify([sp.edge, ...cells, found.port.edge]);
+    return simplify([sp.edge, sp.lead, ...cells, found.port.lead, found.port.edge]);
   }
 }
 
