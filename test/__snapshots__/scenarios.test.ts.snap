@@ -122,5 +122,166 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
     ],
     "id": "plan-complete",
   },
+  {
+    "frames": [
+      "run-failed:01 state.in-progress <- cut",
+      "run-failed:02 run.outcome <- state.in-progress>run.outcome:harness-exits",
+      "run-failed:03 run.fail <- run.outcome>run.fail:non-zero-exit",
+      "run-failed:04 run.cleanup <- run.fail>run.cleanup:safe-cleanup",
+      "run-failed:05 state.needs-attention <- run.cleanup>state.needs-attention:worktree-removed-failure-telemetry",
+    ],
+    "id": "run-failed",
+  },
+  {
+    "frames": [
+      "run-timeout:01 state.in-progress <- cut",
+      "run-timeout:02 run.outcome <- state.in-progress>run.outcome:harness-exits",
+      "run-timeout:03 run.fail <- run.outcome>run.fail:non-zero-exit",
+      "run-timeout:04 run.cleanup <- run.fail>run.cleanup:safe-cleanup",
+      "run-timeout:05 state.needs-attention <- run.cleanup>state.needs-attention:worktree-removed-failure-telemetry",
+    ],
+    "id": "run-timeout",
+  },
+  {
+    "frames": [
+      "run-no-commits:01 state.in-progress <- cut",
+      "run-no-commits:02 run.outcome <- state.in-progress>run.outcome:harness-exits",
+      "run-no-commits:03 run.nocommit <- run.outcome>run.nocommit:no-commits",
+      "run-no-commits:04 run.cleanup <- run.nocommit>run.cleanup:safe-cleanup",
+      "run-no-commits:05 state.needs-attention <- run.cleanup>state.needs-attention:worktree-removed-failure-telemetry",
+    ],
+    "id": "run-no-commits",
+  },
+  {
+    "frames": [
+      "run-failed-retained:01 state.in-progress <- cut",
+      "run-failed-retained:02 run.outcome <- state.in-progress>run.outcome:harness-exits",
+      "run-failed-retained:03 run.fail <- run.outcome>run.fail:non-zero-exit",
+      "run-failed-retained:04 run.cleanup <- run.fail>run.cleanup:safe-cleanup",
+      "run-failed-retained:05 state.inconsistent <- run.cleanup>state.inconsistent:work-retained-failure-telemetry",
+    ],
+    "id": "run-failed-retained",
+  },
+  {
+    "frames": [
+      "abandon-clean:01 state.needs-attention <- cut",
+      "abandon-clean:02 rec.abandon <- state.needs-attention>rec.abandon:orch-abandon-n",
+      "abandon-clean:03 rec.safe <- rec.abandon>rec.safe:plain-abandon-safe-removal",
+      "abandon-clean:04 rec.todo <- rec.safe>rec.todo:clean-removed-lock-released",
+      "abandon-clean:05 state.needs-attention <- rec.todo>state.needs-attention:failure-telemetry-remains-or-commits-ahead",
+    ],
+    "id": "abandon-clean",
+  },
+  {
+    "frames": [
+      "abandon-retained:01 state.needs-attention <- cut",
+      "abandon-retained:02 rec.abandon <- state.needs-attention>rec.abandon:orch-abandon-n",
+      "abandon-retained:03 rec.safe <- rec.abandon>rec.safe:plain-abandon-safe-removal",
+      "abandon-retained:04 rec.retained <- rec.safe>rec.retained:dirty-or-untracked-retained",
+    ],
+    "id": "abandon-retained",
+  },
+  {
+    "frames": [
+      "abandon-discard:01 state.needs-attention <- cut",
+      "abandon-discard:02 rec.abandon <- state.needs-attention>rec.abandon:orch-abandon-n",
+      "abandon-discard:03 rec.discard <- rec.abandon>rec.discard:discard-human-explicit",
+      "abandon-discard:04 rec.todo <- rec.discard>rec.todo:force-removed-lock-released",
+      "abandon-discard:05 state.needs-attention <- rec.todo>state.needs-attention:failure-telemetry-remains-or-commits-ahead",
+    ],
+    "id": "abandon-discard",
+  },
+  {
+    "frames": [
+      "usage-limit-requeue:01 run.outcome <- cut",
+      "usage-limit-requeue:02 run.usage <- run.outcome>run.usage:own-log-shows-a-limit",
+      "usage-limit-requeue:03 run.requeue <- run.usage>run.requeue:no-commits-no-open-pr-worktree-removed-lock-released",
+      "usage-limit-requeue:04 state.ready <- run.requeue>state.ready:status-todo-harness-paused",
+    ],
+    "id": "usage-limit-requeue",
+  },
+  {
+    "frames": [
+      "self-review-cross-or-self:01 review.pick <- cut",
+      "self-review-cross-or-self:02 review.self <- review.pick>review.self:all-others-paused-cross-or-self",
+      "self-review-cross-or-self:03 review.run <- review.self>review.run:fresh-session-mode-self",
+      "self-review-cross-or-self:04 review.verdict <- review.run>review.verdict:reply-parsed",
+      "self-review-cross-or-self:05 review.approve <- review.verdict>review.approve:approve",
+      "self-review-cross-or-self:06 review.gate <- review.approve>review.gate:approval-on-current-head",
+    ],
+    "id": "self-review-cross-or-self",
+  },
+  {
+    "frames": [
+      "self-review-cross:01 review.pick <- cut",
+    ],
+    "id": "self-review-cross",
+  },
+  {
+    "frames": [
+      "claim-compensation:01 run.claim <- cut",
+      "claim-compensation:02 run.saga <- run.claim>run.saga:lock-projection-worktree",
+      "claim-compensation:03 run.compensate <- run.saga>run.compensate:step-failed",
+      "claim-compensation:04 state.ready <- run.compensate>state.ready:verified-delta-restored-own-lock-deleted",
+    ],
+    "id": "claim-compensation",
+  },
+  {
+    "frames": [
+      "repair-ready:01 state.inconsistent <- cut",
+      "repair-ready:02 rec.repair <- state.inconsistent>rec.repair:apply-one-action-re-observe",
+      "repair-ready:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-ready:04 state.ready <- rec.derive>state.ready:converged-reset-for-retry",
+    ],
+    "id": "repair-ready",
+  },
+  {
+    "frames": [
+      "repair-claimed:01 state.inconsistent <- cut",
+      "repair-claimed:02 rec.repair <- state.inconsistent>rec.repair:apply-one-action-re-observe",
+      "repair-claimed:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-claimed:04 state.claimed <- rec.derive>state.claimed:lock-and-worktree-restored-no-work-yet",
+    ],
+    "id": "repair-claimed",
+  },
+  {
+    "frames": [
+      "repair-in-progress:01 state.inconsistent <- cut",
+      "repair-in-progress:02 rec.repair <- state.inconsistent>rec.repair:apply-one-action-re-observe",
+      "repair-in-progress:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-in-progress:04 state.in-progress <- rec.derive>state.in-progress:work-ahead-under-the-lock-or-changes-requested-on-the-open-pr",
+    ],
+    "id": "repair-in-progress",
+  },
+  {
+    "frames": [
+      "repair-done:01 state.inconsistent <- cut",
+      "repair-done:02 rec.repair <- state.inconsistent>rec.repair:apply-one-action-re-observe",
+      "repair-done:03 rec.derive <- rec.repair>rec.derive:observe-facts",
+      "repair-done:04 state.done <- rec.derive>state.done:merged-issue-closed-retained-resources-safely-removed",
+    ],
+    "id": "repair-done",
+  },
+  {
+    "frames": [
+      "dependency-deadlock:01 route.cycles <- cut",
+      "dependency-deadlock:02 route.cycle-deadlock <- route.cycles>route.cycle-deadlock:cycle-and-none-eligible",
+    ],
+    "id": "dependency-deadlock",
+  },
+  {
+    "frames": [
+      "after-eligible:01 route.after <- cut",
+      "after-eligible:02 run.claim <- route.after>run.claim:lowest-preference-first",
+    ],
+    "id": "after-eligible",
+  },
+  {
+    "frames": [
+      "after-unavailable:01 route.after <- cut",
+      "after-unavailable:02 run.claim <- route.after>run.claim:lowest-preference-first",
+    ],
+    "id": "after-unavailable",
+  },
 ]
 `;
