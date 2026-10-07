@@ -172,8 +172,9 @@ interface Port {
 function portsOf(n: FlowNode): Port[] {
   const r = nodeRect(n);
   const ports: Port[] = [];
-  const add = (side: string, k: number, edge: Point, dir: number): void =>
+  const add = (side: string, k: number, edge: Point, dir: number): void => {
     ports.push({ key: `${n.id}:${side}:${k}`, edge, out: { x: edge.x + DX[dir] * GRID, y: edge.y + DY[dir] * GRID }, dir });
+  };
   for (const k of [0, -1, 1]) {
     add("e", k, { x: r.right, y: n.y + k * GRID }, 0);
     add("w", k, { x: r.left, y: n.y + k * GRID }, 2);
