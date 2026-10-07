@@ -700,6 +700,116 @@
         cursor: pointer;
       }
 
+      /* Scenario player (demo mode only). */
+      .player-controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding: 12px 18px;
+      }
+
+      .player-controls select {
+        max-width: 100%;
+        min-height: 34px;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        color: var(--text);
+        background: transparent;
+        font: inherit;
+      }
+
+      .player-progress {
+        margin-left: auto;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.78rem;
+      }
+
+      .player-bar {
+        height: 3px;
+        background: var(--line);
+      }
+
+      .player-bar > span {
+        display: block;
+        height: 100%;
+        width: 0;
+        background: var(--blue);
+        transition: width 0.2s;
+      }
+
+      .player-body {
+        padding: 12px 18px 16px;
+      }
+
+      .player-summary,
+      .player-narration {
+        margin: 0 0 10px;
+        line-height: 1.5;
+      }
+
+      .player-summary {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+
+      .player-fn {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .player-fn code {
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+
+      .player-body details {
+        margin-bottom: 6px;
+      }
+
+      .player-body summary {
+        cursor: pointer;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
+      .player-body pre {
+        overflow: auto;
+        max-height: 260px;
+        margin: 6px 0 0;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font-size: 0.74rem;
+      }
+
+      .player-chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-top: 12px;
+      }
+
+      .player-chip {
+        padding: 2px 9px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 0.72rem;
+      }
+
+      .player-chip.is-covered {
+        border-color: var(--blue);
+        color: var(--text);
+      }
+
+      .player-chip.is-current {
+        background: rgba(132, 184, 255, 0.18);
+      }
+
       /* "How orch works" flow graph. Own palette so the panel reads in light and dark. */
       .flow-panel {
         --fg-bg: #0d131b;
@@ -1139,6 +1249,30 @@
         </div>
         <div class="review-list" id="reviews-list">
           <p class="empty">Waiting for the first snapshot…</p>
+        </div>
+      </section>
+
+      <section class="panel" id="player" aria-labelledby="player-heading" hidden>
+        <div class="panel-header">
+          <h2 id="player-heading">Scenario player</h2>
+          <span class="count" id="player-count">0</span>
+        </div>
+        <div class="player-controls">
+          <select id="player-pick" aria-label="Scenario"></select>
+          <button type="button" class="btn btn-ghost" id="player-prev" aria-label="Step back">&#9664; Back</button>
+          <button type="button" class="btn btn-accent" id="player-play">&#9654; Play</button>
+          <button type="button" class="btn btn-ghost" id="player-next" aria-label="Step forward">Next &#9654;</button>
+          <button type="button" class="btn btn-ghost" id="player-reset">Reset</button>
+          <span class="player-progress" id="player-progress">no scenario loaded</span>
+        </div>
+        <div class="player-bar" aria-hidden="true"><span id="player-bar"></span></div>
+        <div class="player-body" aria-live="polite">
+          <p class="player-summary" id="player-summary">Pick a scenario and press Play.</p>
+          <p class="player-narration" id="player-narration"></p>
+          <p class="player-fn" id="player-fn" hidden></p>
+          <details id="player-input-box" hidden><summary>Input facts</summary><pre id="player-input"></pre></details>
+          <details id="player-output-box" hidden><summary>Output</summary><pre id="player-output"></pre></details>
+          <div class="player-chips" id="player-chips" aria-label="Flows covered"></div>
         </div>
       </section>
 
@@ -2393,6 +2527,184 @@
           }
         };
         void loadFlow();
+
+        // ---- Scenario player (visible only when GET /demo/scenarios succeeds) -------------
+        const playerUI = {
+          panel: document.querySelector("#player"),
+          count: document.querySelector("#player-count"),
+          pick: document.querySelector("#player-pick"),
+          prev: document.querySelector("#player-prev"),
+          play: document.querySelector("#player-play"),
+          next: document.querySelector("#player-next"),
+          reset: document.querySelector("#player-reset"),
+          progress: document.querySelector("#player-progress"),
+          bar: document.querySelector("#player-bar"),
+          summary: document.querySelector("#player-summary"),
+          narration: document.querySelector("#player-narration"),
+          fn: document.querySelector("#player-fn"),
+          inputBox: document.querySelector("#player-input-box"),
+          input: document.querySelector("#player-input"),
+          outputBox: document.querySelector("#player-output-box"),
+          output: document.querySelector("#player-output"),
+          chips: document.querySelector("#player-chips"),
+        };
+        const player = { scenarios: [], current: null, timer: null, playing: false, busy: false, visited: new Set() };
+        const PLAY_DELAY_MS = 2500;
+
+        const stopPlaying = () => {
+          player.playing = false;
+          if (player.timer !== null) window.clearTimeout(player.timer);
+          player.timer = null;
+          playerUI.play.innerHTML = "&#9654; Play";
+        };
+
+        const renderChips = () => {
+          const model = flow.model;
+          if (!model) return;
+          const covered = new Set();
+          for (const edge of model.edges) {
+            if (player.visited.has(edge.id)) for (const id of edge.flows) covered.add(id);
+          }
+          const meta = player.scenarios.find((s) => player.current && s.id === player.current.scenarioId);
+          const active = new Set(meta ? meta.flows : []);
+          playerUI.chips.replaceChildren(...model.flows.map((def) => {
+            const chip = make("span", "player-chip", def.title);
+            chip.title = def.summary;
+            if (covered.has(def.id)) chip.classList.add("is-covered");
+            if (active.has(def.id)) chip.classList.add("is-current");
+            return chip;
+          }));
+        };
+
+        const renderPlayer = (current) => {
+          player.current = current;
+          const frame = current.frame;
+          const meta = player.scenarios.find((s) => s.id === current.scenarioId);
+          const atEnd = !frame || current.index >= current.total - 1;
+          playerUI.prev.disabled = !frame || current.index === 0;
+          playerUI.next.disabled = !frame || atEnd;
+          playerUI.reset.disabled = !frame;
+          if (!frame) {
+            stopPlaying();
+            playerUI.progress.textContent = "no scenario loaded";
+            playerUI.bar.style.width = "0";
+            playerUI.summary.textContent = "Pick a scenario and press Play.";
+            playerUI.narration.textContent = "";
+            playerUI.fn.hidden = playerUI.inputBox.hidden = playerUI.outputBox.hidden = true;
+            if (window.orchFlowGraph) window.orchFlowGraph.clear();
+            renderChips();
+            return;
+          }
+          if (frame.edge) player.visited.add(frame.edge);
+          playerUI.pick.value = current.scenarioId;
+          playerUI.progress.textContent = `frame ${current.index + 1} / ${current.total}`;
+          playerUI.bar.style.width = `${((current.index + 1) / current.total) * 100}%`;
+          playerUI.summary.textContent = meta ? `${meta.title}: ${meta.summary}` : "";
+          playerUI.narration.textContent = frame.narration;
+          const decision = frame.decision;
+          playerUI.fn.hidden = playerUI.inputBox.hidden = playerUI.outputBox.hidden = !decision;
+          if (decision) {
+            playerUI.fn.replaceChildren("Real decider called: ", make("code", "", `${decision.fn}()`));
+            playerUI.input.textContent = JSON.stringify(decision.input, null, 2);
+            playerUI.output.textContent = JSON.stringify(decision.output, null, 2);
+          }
+          if (window.orchFlowGraph) window.orchFlowGraph.highlight(frame.activeNode, frame.edge || null);
+          renderChips();
+          if (atEnd) stopPlaying();
+        };
+
+        // Every control goes through POST /actions/demo; the board then re-reads /status.
+        const demoAction = async (body) => {
+          if (player.busy) return null;
+          player.busy = true;
+          try {
+            const response = await fetch("/actions/demo", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Orch-Request": "dashboard" },
+              body: JSON.stringify(body),
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(data.error || `demo action failed (${response.status})`);
+            renderPlayer(data);
+            refreshNow();
+            return data;
+          } catch (error) {
+            stopPlaying();
+            playerUI.progress.textContent = error instanceof Error ? error.message : String(error);
+            return null;
+          } finally {
+            player.busy = false;
+          }
+        };
+
+        const scheduleAdvance = () => {
+          player.timer = window.setTimeout(async () => {
+            player.timer = null;
+            if (!player.playing) return;
+            const current = await demoAction({ action: "next" });
+            if (current && player.playing && current.frame && current.index < current.total - 1) scheduleAdvance();
+            else stopPlaying();
+          }, PLAY_DELAY_MS);
+        };
+
+        playerUI.play.addEventListener("click", async () => {
+          if (player.playing) {
+            stopPlaying();
+            return;
+          }
+          const cur = player.current;
+          const needsLoad = !cur || !cur.frame || cur.scenarioId !== playerUI.pick.value || cur.index >= cur.total - 1;
+          if (needsLoad && !(await demoAction({ action: "load", id: playerUI.pick.value }))) return;
+          player.playing = true;
+          playerUI.play.innerHTML = "&#10074;&#10074; Pause";
+          scheduleAdvance();
+        });
+        const manual = (body) => () => {
+          stopPlaying();
+          void demoAction(body);
+        };
+        playerUI.next.addEventListener("click", manual({ action: "next" }));
+        playerUI.prev.addEventListener("click", manual({ action: "prev" }));
+        playerUI.reset.addEventListener("click", manual({ action: "reset" }));
+        playerUI.pick.addEventListener("change", () => {
+          stopPlaying();
+          void demoAction({ action: "load", id: playerUI.pick.value });
+        });
+
+        const loadPlayer = async () => {
+          // /flow's X-Orch-Demo header says whether the demo routes exist, so a normal server is
+          // never probed (its 404 would log a console error on every load).
+          await window.orchFlowGraph.ready;
+          const model = flow.model;
+          if (!flow.isDemo) return;
+          let data;
+          try {
+            const response = await fetch("/demo/scenarios", { cache: "no-store" });
+            if (!response.ok) return; // not a demo server: the player stays hidden
+            data = await response.json();
+          } catch {
+            return;
+          }
+          if (!data || !Array.isArray(data.scenarios) || !data.scenarios.length) return;
+          player.scenarios = data.scenarios;
+          const titles = new Map(model.flows.map((def) => [def.id, def.title]));
+          const groups = new Map();
+          for (const scenario of data.scenarios) {
+            const key = scenario.flows[0] || "";
+            if (!groups.has(key)) groups.set(key, make("optgroup"));
+            const option = make("option", "", `${scenario.title} (${scenario.frameCount})`);
+            option.value = scenario.id;
+            groups.get(key).append(option);
+          }
+          for (const [key, group] of groups) {
+            group.label = titles.get(key) || key || "Other";
+            playerUI.pick.append(group);
+          }
+          playerUI.count.textContent = String(data.scenarios.length);
+          playerUI.panel.hidden = false;
+          renderPlayer(data.current);
+        };
+        void loadPlayer();
 
         void refresh();
       })();
