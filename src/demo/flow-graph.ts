@@ -87,11 +87,11 @@ function node(
 
 export const NODES: readonly FlowNode[] = [
   // plan
-  node("plan.goal", "Goal + interactive plan", "stage", "plan", 0, 0, "src/tasks/planner.ts#runPlanner", "The lead brainstorms with the human and writes tickets.json plus a plan brief.", "ADR-0010"),
-  node("plan.gate", "Plan gate", "decision", "plan", 1, 0, "src/commands/plan-pipeline.ts#planGate", "The single human gate: ask on a TTY, run with --yes, otherwise print a hint.", "ADR-0010"),
-  node("plan.hint", "Print commands (hint)", "terminal", "plan", 1, 1, "src/commands/plan-pipeline.ts#planGate", "No TTY and no --yes: print the create/route/autopilot commands and stop."),
-  node("plan.resolve", "Resolve plan", "decision", "plan", 2, 0, "src/tasks/plan.ts#resolvePlan", "The single validator: errors block creation, warnings are advisory."),
-  node("plan.blocked", "Blocked by plan errors", "terminal", "plan", 2, 1, "src/tasks/plan.ts#resolvePlan", "Missing title or duplicate id: nothing is created."),
+  node("plan.goal", "Goal + interactive plan", "stage", "plan", 0, 0, "src/commands/plan.ts#runInteractivePlanner", "The lead brainstorms with the human and writes tickets.json plus a plan brief.", "ADR-0010"),
+  node("plan.gate", "Plan gate", "decision", "plan", 2, 0, "src/commands/plan-pipeline.ts#planGate", "The single human gate: ask on a TTY, run with --yes, otherwise print a hint.", "ADR-0010"),
+  node("plan.hint", "Print commands (hint)", "terminal", "plan", 2, 1, "src/commands/plan-pipeline.ts#planGate", "No TTY and no --yes, or the human declined: print the create/route/autopilot commands and stop."),
+  node("plan.resolve", "Resolve plan", "decision", "plan", 1, 0, "src/tasks/plan.ts#resolvePlan", "Validates and previews the plan before approval: errors block creation, warnings are advisory."),
+  node("plan.blocked", "Blocked by plan errors", "terminal", "plan", 1, 1, "src/tasks/plan.ts#resolvePlan", "Missing title or duplicate id: nothing is created."),
   node("plan.reuse", "Marker reuse?", "decision", "plan", 3, 0, "src/tasks/plan-create.ts#createFromPlan", "Deterministic plan/ticket markers reuse issues from earlier passes, including closed ones."),
   node("plan.create", "Create issues", "stage", "plan", 4, 0, "src/tasks/plan-create.ts#createFromPlan", "Creates missing issues with routing labels and the plan brief; re-lists after any error."),
   // route
@@ -129,7 +129,8 @@ export const NODES: readonly FlowNode[] = [
   node("review.failclosed", "Fail closed", "terminal", "review", 5, 1, "src/board/review-run.ts#parseVerdict", "Unreadable verdict or missing diff: nothing is recorded."),
   node("review.gate", "Merge gate", "decision", "review", 6, 0, "src/board/review.ts#checkMergeGate", "Accepted approval on the current head; labels never authorize a merge."),
   node("review.merge", "Merge", "stage", "review", 7, 0, "src/board/review.ts#merge", "REST SHA-guarded merge; releases the claim lock and cleans up safely."),
-  node("state.done", "done", "state", "review", 8, 0, "src/tasks/lifecycle.ts#deriveTaskState", "Merged and closed."),
+  node("state.done", "done", "state", "review", 8, 0, "src/tasks/lifecycle.ts#deriveTaskState", "Merged and closed with no retained claim lock or worktree."),
+  node("review.cleanup", "Safe cleanup", "decision", "review", 7, 1, "src/git/worktree.ts#worktreeRemovalSafety", "After the merge the lock is released; only a safely removable worktree is pruned, otherwise it is retained and reported.", "ADR-0006"),
   // autopilot
   node("auto.observe", "Observe PRs", "stage", "autopilot", 0, 0, "src/tasks/observe.ts#observeTasks", "Re-derives reviews, CI and mergeability from GitHub; skips what it cannot read.", "ADR-0009"),
   node("auto.decide", "Decide step", "decision", "autopilot", 1, 0, "src/tasks/steps.ts#decideStep", "Pure map from observed PR facts to exactly one step.", "ADR-0009"),
@@ -143,6 +144,7 @@ export const NODES: readonly FlowNode[] = [
   node("step.merge", "merge", "stage", "autopilot", 4, 1, "src/board/review.ts#merge", "Approved and green; always goes through the merge gate."),
   node("step.triage", "triage", "stage", "autopilot", 5, 1, "src/tasks/step-exec.ts#executeTriage", "Round budget spent: the lead decides retry or escalate.", "ADR-0010"),
   node("step.escalate", "escalate", "stage", "autopilot", 6, 1, "src/tasks/step-exec.ts#executeEscalate", "Labels needs-attention and comments why; the loop then ignores the task.", "ADR-0009"),
+  node("auto.handoff", "Human handoff", "terminal", "autopilot", 6, 2, "src/tasks/step-exec.ts#executeEscalate", "The needs-attention label and PR comment are a projection only: lifecycle facts are unchanged, so the loop reads it as a human-owned task.", "ADR-0009"),
   node("auto.report", "Run report", "terminal", "autopilot", 1, 1, "src/board/report.ts#buildRunReport", "Escalation rate, rounds to approval and cost per merged task.", "ADR-0009"),
   // recovery
   node("state.needs-attention", "needs-attention", "state", "recovery", 0, 0, "src/tasks/lifecycle.ts#deriveTaskState", "A failed or empty run, closed PR or orphaned work awaits a human.", "ADR-0006"),
@@ -163,11 +165,12 @@ function edge(from: string, to: string, label: string, ...flows: FlowId[]): Flow
 
 export const EDGES: readonly FlowEdge[] = [
   // plan-pipeline
-  edge("plan.goal", "plan.gate", "tickets.json written", "plan-pipeline"),
-  edge("plan.gate", "plan.hint", "no TTY, no --yes: hint", "plan-pipeline"),
-  edge("plan.gate", "plan.resolve", "ask (y) or --yes: run", "plan-pipeline"),
+  edge("plan.goal", "plan.resolve", "tickets.json written", "plan-pipeline"),
   edge("plan.resolve", "plan.blocked", "errors block", "plan-pipeline"),
-  edge("plan.resolve", "plan.reuse", "valid (warnings advisory)", "plan-pipeline"),
+  edge("plan.resolve", "plan.gate", "valid (warnings advisory), previewed", "plan-pipeline"),
+  edge("plan.gate", "plan.hint", "no TTY, no --yes: hint", "plan-pipeline"),
+  edge("plan.gate", "plan.hint", "declined (n): hint", "plan-pipeline"),
+  edge("plan.gate", "plan.reuse", "ask (y) or --yes: run", "plan-pipeline"),
   edge("plan.reuse", "plan.create", "no marker: create", "plan-pipeline"),
   edge("plan.create", "plan.reuse", "create error: re-list", "plan-pipeline"),
   edge("plan.reuse", "route.assign", "marker found: reuse issue", "plan-pipeline"),
@@ -219,7 +222,9 @@ export const EDGES: readonly FlowEdge[] = [
   edge("review.approve", "review.gate", "approval on current head", "cross-review"),
   edge("review.gate", "review.merge", "gate passes", "cross-review"),
   edge("review.gate", "state.in-review", "stale head or no accepted approval", "cross-review"),
-  edge("review.merge", "state.done", "merged, lock released", "cross-review"),
+  edge("review.merge", "review.cleanup", "merged, lock released", "cross-review"),
+  edge("review.cleanup", "state.done", "worktree removed: resources released", "cross-review"),
+  edge("review.cleanup", "state.inconsistent", "worktree retained, lock released", "cross-review", "failure-recovery"),
   // autopilot
   edge("state.in-review", "auto.observe", "autopilot polls open PRs", "autopilot-fix"),
   edge("auto.observe", "auto.decide", "observed facts", "autopilot-fix"),
@@ -242,7 +247,8 @@ export const EDGES: readonly FlowEdge[] = [
   edge("step.triage", "auto.observe", "retry: guidance recorded, re-observe", "triage"),
   edge("step.triage", "step.escalate", "escalate, paused, failed or unparseable", "triage", "escalation"),
   edge("auto.decide", "step.escalate", "budget spent, triage off", "escalation"),
-  edge("step.escalate", "state.needs-attention", "label + PR comment", "escalation"),
+  edge("step.escalate", "auto.handoff", "label + PR comment", "escalation"),
+  edge("auto.handoff", "step.none", "loop ignores the task until handed back", "escalation"),
   edge("auto.decide", "auto.report", "drained or plan-complete", "report"),
   // recovery
   edge("state.needs-attention", "rec.repair", "human runs orch repair", "repair", "failure-recovery"),

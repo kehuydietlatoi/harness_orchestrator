@@ -71,3 +71,32 @@ describe("flow graph regressions", () => {
     expect(EDGES.some((e) => e.from === "run.fail" && e.to === "rec.safe")).toBe(false);
   });
 });
+
+describe("flow graph review-round regressions", () => {
+  const outOf = (from: string) => EDGES.filter((e) => e.from === from).map((e) => e.to);
+
+  it("validates the plan before the approval gate and sends declines to the hint", () => {
+    expect(outOf("plan.goal")).toEqual(["plan.resolve"]);
+    expect(outOf("plan.resolve").sort()).toEqual(["plan.blocked", "plan.gate"]);
+    expect(outOf("plan.gate")).not.toContain("plan.resolve");
+    expect(EDGES.filter((e) => e.from === "plan.gate" && e.to === "plan.hint").map((e) => e.label)).toEqual([
+      "no TTY, no --yes: hint",
+      "declined (n): hint",
+    ]);
+    expect(NODES.find((n) => n.id === "plan.goal")!.codeRef).toBe("src/commands/plan.ts#runInteractivePlanner");
+  });
+
+  it("models the escalation handoff separately from the needs-attention state", () => {
+    expect(outOf("step.escalate")).toEqual(["auto.handoff"]);
+    expect(outOf("auto.handoff")).toEqual(["step.none"]);
+    expect(STATE_NODES["needs-attention"]).not.toBe("auto.handoff");
+    expect(EDGES.some((e) => e.from === "step.escalate" && e.to === "state.needs-attention")).toBe(false);
+  });
+
+  it("only reaches done from a merge whose resources were released", () => {
+    expect(outOf("review.merge")).toEqual(["review.cleanup"]);
+    expect(outOf("review.cleanup").sort()).toEqual(["state.done", "state.inconsistent"]);
+    expect(EDGES.filter((e) => e.to === "state.done").map((e) => e.from)).toEqual(["review.cleanup"]);
+    expect(outOf("state.inconsistent")).toContain("rec.repair");
+  });
+});
