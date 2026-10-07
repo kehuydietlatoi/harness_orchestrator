@@ -232,6 +232,7 @@ export const EDGES: readonly FlowEdge[] = [
   edge("review.cleanup", "state.inconsistent", "worktree retained, lock released", "cross-review", "failure-recovery"),
   // autopilot
   edge("state.in-review", "auto.observe", "autopilot polls open PRs", "autopilot-fix"),
+  edge("state.in-progress", "auto.observe", "autopilot polls author bounce", "autopilot-fix"),
   edge("auto.observe", "auto.decide", "observed facts", "autopilot-fix"),
   edge("auto.decide", "step.none", "needs-attention or no PR", "autopilot-fix"),
   edge("auto.decide", "step.review", "no accepted approval", "autopilot-fix", "cross-review"),

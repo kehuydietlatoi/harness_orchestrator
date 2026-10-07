@@ -1,5 +1,6 @@
 // The scenario registry. Each scenario module appends its list here.
 import type { Scenario } from "../scenario-engine.js";
 import { CORE_SCENARIOS } from "./core.js";
+import { AUTOPILOT_SCENARIOS } from "./autopilot.js";
 
-export const SCENARIOS: readonly Scenario[] = [...CORE_SCENARIOS];
+export const SCENARIOS: readonly Scenario[] = [...CORE_SCENARIOS, ...AUTOPILOT_SCENARIOS];
