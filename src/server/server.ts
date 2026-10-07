@@ -381,6 +381,9 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
     }
 
     if (request.method === "GET" && pathname === "/flow") {
+      // Lets the page detect demo mode without probing a demo-only route (its 404 would log a
+      // console resource error on every normal load).
+      response.setHeader("X-Orch-Demo", deps.demo ? "1" : "0");
       sendJson(response, 200, { lanes: LANES, nodes: NODES, edges: EDGES, flows: FLOWS,
         stepNodes: STEP_NODES, stateNodes: STATE_NODES });
       return;

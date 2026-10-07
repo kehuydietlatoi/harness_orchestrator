@@ -21,6 +21,7 @@ vi.mock("../src/board/snapshot.js", () => ({
 interface ResponseView {
   status: number | undefined;
   contentType: string | undefined;
+  demoHeader?: string | string[] | undefined;
   body: string;
 }
 
@@ -39,6 +40,7 @@ function request(port: number, path: string): Promise<ResponseView> {
         resolve({
           status: response.statusCode,
           contentType: response.headers["content-type"],
+          demoHeader: response.headers["x-orch-demo"],
           body,
         }),
       );
@@ -472,6 +474,7 @@ describe("write surface", () => {
     const port = await start(deps);
     const response = await request(port, "/flow");
     expect(response.status).toBe(200);
+    expect(response.demoHeader).toBe("0");
     expect(JSON.parse(response.body)).toEqual({ lanes: LANES, nodes: NODES, edges: EDGES,
       flows: FLOWS, stepNodes: STEP_NODES, stateNodes: STATE_NODES });
     expect((await request(port, "/status")).body).toBe(JSON.stringify(await deps.snapshot(process.cwd())));
@@ -488,6 +491,7 @@ describe("write surface", () => {
       step: vi.fn(() => current), reset: vi.fn(() => ({ scenarioId: null, index: 0, total: 0, frame: null })),
     };
     const port = await start(fakeDeps({ demo }).deps);
+    expect((await request(port, "/flow")).demoHeader).toBe("1");
     expect(JSON.parse((await request(port, "/demo/scenarios")).body)).toEqual({ scenarios: [], current });
     for (const options of [
       { omitHeaders: ["Origin"] }, { headers: { Host: `evil.example:${port}` } },

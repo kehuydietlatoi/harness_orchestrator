@@ -700,6 +700,204 @@
         cursor: pointer;
       }
 
+      /* "How orch works" flow graph. Own palette so the panel reads in light and dark. */
+      .flow-panel {
+        --fg-bg: #0d131b;
+        --fg-lane: rgba(132, 184, 255, 0.05);
+        --fg-lane-line: #253040;
+        --fg-text: #eef3f9;
+        --fg-muted: #90a0b5;
+        --fg-edge: #5b6b80;
+        --fg-edge-hl: #69e2b1;
+        --fg-node: #161e29;
+        --fg-stage: #84b8ff;
+        --fg-decision: #f3bd67;
+        --fg-state: #69e2b1;
+        --fg-terminal: #ff8585;
+        --fg-active: #ffffff;
+      }
+
+      @media (prefers-color-scheme: light) {
+        .flow-panel {
+          --fg-bg: #f6f8fb;
+          --fg-lane: rgba(30, 80, 160, 0.05);
+          --fg-lane-line: #c9d3e0;
+          --fg-text: #172030;
+          --fg-muted: #51607a;
+          --fg-edge: #8795a8;
+          --fg-edge-hl: #0a7d55;
+          --fg-node: #ffffff;
+          --fg-stage: #1f5fbf;
+          --fg-decision: #9a6200;
+          --fg-state: #0a7d55;
+          --fg-terminal: #b3261e;
+          --fg-active: #000000;
+        }
+      }
+
+      .flow-tools {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .flow-tools select {
+        max-width: 100%;
+      }
+
+      .flow-scroll {
+        overflow-x: auto;
+        max-width: 100%;
+        background: var(--fg-bg);
+      }
+
+      .flow-scroll:focus-visible,
+      .flow-node:focus-visible {
+        outline: 2px solid var(--fg-edge-hl);
+        outline-offset: -2px;
+      }
+
+      .flow-svg {
+        display: block;
+        font-family: inherit;
+      }
+
+      .flow-lane {
+        fill: var(--fg-lane);
+        stroke: var(--fg-lane-line);
+        stroke-width: 1;
+      }
+
+      .flow-lane-label {
+        fill: var(--fg-muted);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .flow-edge path {
+        fill: none;
+        stroke: var(--fg-edge);
+        stroke-width: 1.4;
+      }
+
+      .flow-edge text {
+        fill: var(--fg-muted);
+        font-size: 10px;
+        text-anchor: middle;
+        paint-order: stroke;
+        stroke: var(--fg-bg);
+        stroke-width: 4px;
+        stroke-linejoin: round;
+      }
+
+      .flow-arrow {
+        fill: var(--fg-edge);
+      }
+
+      .flow-edge.is-hl path {
+        stroke: var(--fg-edge-hl);
+        stroke-width: 2.4;
+      }
+
+      .flow-edge.is-hl text {
+        fill: var(--fg-text);
+      }
+
+      .flow-edge.is-active path {
+        stroke: var(--fg-active);
+        stroke-width: 3.2;
+      }
+
+      .flow-edge.is-dim,
+      .flow-node.is-dim {
+        opacity: 0.18;
+      }
+
+      .flow-node {
+        cursor: pointer;
+      }
+
+      .flow-node .shape {
+        fill: var(--fg-node);
+        stroke-width: 1.8;
+      }
+
+      .flow-node.kind-stage .shape {
+        stroke: var(--fg-stage);
+      }
+
+      .flow-node.kind-decision .shape {
+        stroke: var(--fg-decision);
+      }
+
+      .flow-node.kind-state .shape {
+        stroke: var(--fg-state);
+      }
+
+      .flow-node.kind-terminal .shape {
+        stroke: var(--fg-terminal);
+        stroke-dasharray: 5 3;
+      }
+
+      .flow-node text {
+        fill: var(--fg-text);
+        font-size: 11px;
+        text-anchor: middle;
+        dominant-baseline: central;
+        pointer-events: none;
+      }
+
+      .flow-node.is-selected .shape,
+      .flow-node.is-active .shape {
+        stroke: var(--fg-active);
+        stroke-width: 3;
+      }
+
+      .flow-node.is-active .shape {
+        fill: var(--accent-soft);
+      }
+
+      .flow-count circle {
+        fill: var(--fg-edge-hl);
+      }
+
+      .flow-count text {
+        fill: var(--fg-bg);
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .flow-detail {
+        padding: 12px 18px 16px;
+        border-top: 1px solid var(--line);
+        font-size: 0.9rem;
+        line-height: 1.5;
+      }
+
+      .flow-detail code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.82rem;
+      }
+
+      .flow-detail h3 {
+        margin: 0 0 4px;
+        font-size: 1rem;
+      }
+
+      .flow-detail p {
+        margin: 4px 0;
+      }
+
+      .flow-hint {
+        margin: 0;
+        padding: 8px 18px;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+
       @media (max-width: 760px) {
         .shell {
           width: min(100% - 24px, 680px);
@@ -942,6 +1140,21 @@
         <div class="review-list" id="reviews-list">
           <p class="empty">Waiting for the first snapshot…</p>
         </div>
+      </section>
+
+      <section class="panel flow-panel" id="flow" aria-labelledby="flow-heading">
+        <div class="panel-header">
+          <h2 id="flow-heading">How orch works</h2>
+          <div class="flow-tools">
+            <label for="flow-filter">Flow</label>
+            <select id="flow-filter" aria-label="Highlight one flow">
+              <option value="">All flows</option>
+            </select>
+          </div>
+        </div>
+        <p class="flow-hint" id="flow-hint">Loading the workflow graph…</p>
+        <div class="flow-scroll" id="flow-scroll" tabindex="0" role="region" aria-label="Workflow graph (scrolls horizontally)"></div>
+        <div class="flow-detail" id="flow-detail" aria-live="polite" hidden></div>
       </section>
 
       <p class="timestamp" id="last-updated">Last updated: waiting for data</p>
@@ -1404,6 +1617,7 @@
 
         const render = (snapshot) => {
           latestSnapshot = snapshot;
+          updateFlowCounts(snapshot);
           repoUrl = typeof snapshot.repoUrl === "string" && snapshot.repoUrl ? snapshot.repoUrl : null;
           const tasks = Array.isArray(snapshot.tasks) ? snapshot.tasks : [];
           const reviewQueue = Array.isArray(snapshot.reviewQueue) ? snapshot.reviewQueue : [];
@@ -1828,6 +2042,357 @@
             planUI.createBtn.disabled = false;
           }
         });
+
+        // ---- "How orch works" flow graph -------------------------------------------------
+        const flowUI = {
+          scroll: document.querySelector("#flow-scroll"),
+          filter: document.querySelector("#flow-filter"),
+          hint: document.querySelector("#flow-hint"),
+          detail: document.querySelector("#flow-detail"),
+        };
+        const SVG_NS = "http://www.w3.org/2000/svg";
+        const NODE_W = 150;
+        const NODE_H = 40;
+        // BEGIN flow-adr-link (pure; exercised by test/flow-adr-link.test.ts)
+        // ADRs ship with orch itself, so links target orch's own docs, never the managed project's repo.
+        const ORCH_DOCS_URL = "https://github.com/kehuydietlatoi/harness_orchestrator/blob/main";
+        const ADR_FILES = {
+          1: "0001-build-vs-adopt.md",
+          2: "0002-atomic-claim-via-git-ref.md",
+          3: "0003-cross-review-is-a-process-guarantee.md",
+          4: "0004-dashboard-write-surface.md",
+          5: "0005-judge-evaluation.md",
+          6: "0006-recoverable-task-lifecycle.md",
+          7: "0007-prompt-injection-threat-model.md",
+          8: "0008-self-review-fallback.md",
+          9: "0009-autonomous-task-loop.md",
+          10: "0010-lead-at-decision-points.md",
+        };
+        const flowAdrLink = (adr) => {
+          const file = ADR_FILES[Number(String(adr).replace(/\D/g, ""))];
+          const path = file ? `docs/adr/${file}` : "docs/adr";
+          return { path, href: `${ORCH_DOCS_URL}/${path}` };
+        };
+        // END flow-adr-link
+        const flow = {
+          model: null,
+          nodeEls: new Map(),
+          edgeEls: new Map(),
+          countEls: new Map(),
+          filter: "",
+          selected: null,
+          activeNode: null,
+          activeEdge: null,
+          isDemo: false,
+        };
+
+        const svgEl = (name, attrs, parent) => {
+          const el = document.createElementNS(SVG_NS, name);
+          for (const [key, value] of Object.entries(attrs || {})) el.setAttribute(key, String(value));
+          if (parent) parent.append(el);
+          return el;
+        };
+
+        // Where the line from `from` toward `to` leaves a node's rectangle (plus a small gap).
+        const boundary = (from, to, gap) => {
+          const dx = to.x - from.x;
+          const dy = to.y - from.y;
+          if (dx === 0 && dy === 0) return { x: from.x, y: from.y };
+          const sx = dx === 0 ? Infinity : (NODE_W / 2 + gap) / Math.abs(dx);
+          const sy = dy === 0 ? Infinity : (NODE_H / 2 + gap) / Math.abs(dy);
+          const t = Math.min(sx, sy);
+          return { x: from.x + dx * t, y: from.y + dy * t };
+        };
+
+        const nodeShape = (kind, parent) => {
+          const hw = NODE_W / 2;
+          const hh = NODE_H / 2;
+          if (kind === "decision") {
+            const inset = 14;
+            return svgEl("polygon", {
+              class: "shape",
+              points: `${-hw + inset},${-hh} ${hw - inset},${-hh} ${hw},0 ${hw - inset},${hh} ${-hw + inset},${hh} ${-hw},0`,
+            }, parent);
+          }
+          return svgEl("rect", {
+            class: "shape", x: -hw, y: -hh, width: NODE_W, height: NODE_H,
+            rx: kind === "state" ? hh : kind === "terminal" ? 3 : 8,
+          }, parent);
+        };
+
+        const wrapLabel = (label) => {
+          if (label.length <= 20) return [label];
+          const lines = [""];
+          for (const word of label.split(" ")) {
+            const last = lines[lines.length - 1];
+            if (last && (last + " " + word).length > 20) lines.push(word);
+            else lines[lines.length - 1] = last ? last + " " + word : word;
+          }
+          return lines.slice(0, 2);
+        };
+
+        const applyFlowClasses = () => {
+          const model = flow.model;
+          if (!model) return;
+          const touched = new Set();
+          for (const edge of model.edges) {
+            const el = flow.edgeEls.get(edge.id);
+            if (!el) continue;
+            const hit = Boolean(flow.filter) && edge.flows.includes(flow.filter);
+            if (hit) {
+              touched.add(edge.from);
+              touched.add(edge.to);
+            }
+            el.classList.toggle("is-hl", hit);
+            el.classList.toggle("is-dim", Boolean(flow.filter) && !hit);
+            el.classList.toggle("is-active", edge.id === flow.activeEdge);
+          }
+          for (const node of model.nodes) {
+            const el = flow.nodeEls.get(node.id);
+            el.classList.toggle("is-dim", Boolean(flow.filter) && !touched.has(node.id));
+            el.classList.toggle("is-selected", node.id === flow.selected);
+            el.classList.toggle("is-active", node.id === flow.activeNode);
+          }
+        };
+
+        const showFlowDetail = (nodeId) => {
+          const node = flow.model && flow.model.nodes.find((n) => n.id === nodeId);
+          flow.selected = node ? node.id : null;
+          applyFlowClasses();
+          const box = flowUI.detail;
+          box.replaceChildren();
+          if (!node) {
+            box.hidden = true;
+            return;
+          }
+          box.hidden = false;
+          box.append(make("h3", "", node.label));
+          box.append(make("p", "", node.summary));
+          const ref = make("p", "");
+          ref.append("Code: ", make("code", "", node.codeRef));
+          box.append(ref);
+          box.append(make("p", "", `${node.kind} · ${node.lane} lane`));
+          if (node.adr) {
+            const { path: adrPath, href } = flowAdrLink(node.adr);
+            const line = make("p", "");
+            line.append("Decision record: ");
+            const link = make("a", "", `${node.adr} (${adrPath})`);
+            link.href = href;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            line.append(link);
+            box.append(line);
+          }
+        };
+
+        // Live mode: map each task's health (falling back to its status label) onto a lifecycle
+        // state node and show how many tasks currently sit there.
+        const updateFlowCounts = (snapshot) => {
+          const model = flow.model;
+          if (!model || flow.isDemo) return;
+          const byStatus = { todo: "ready", claimed: "claimed", "in-progress": "in-progress", "in-review": "in-review", done: "done", "needs-attention": "needs-attention" };
+          const counts = new Map();
+          for (const task of Array.isArray(snapshot.tasks) ? snapshot.tasks : []) {
+            const kind = (task.health && task.health.kind) || byStatus[String(task.status || "").replace(/^status:/, "")];
+            const nodeId = kind && model.stateNodes[kind];
+            if (nodeId) counts.set(nodeId, (counts.get(nodeId) || 0) + 1);
+          }
+          for (const [nodeId, badge] of flow.countEls) {
+            const count = counts.get(nodeId) || 0;
+            badge.style.display = count > 0 ? "" : "none";
+            badge.querySelector("text").textContent = String(count);
+            const title = flow.nodeEls.get(nodeId).querySelector("title");
+            title.textContent = count > 0
+              ? `${title.dataset.base} (${count} current task${count === 1 ? "" : "s"})`
+              : title.dataset.base;
+          }
+        };
+
+        // BEGIN flow-edge-geometry (pure; exercised by test/flow-edge-geometry.test.ts)
+        // Edges sharing a from/to pair (and opposite pairs) get distinct perpendicular offsets.
+        const flowEdgeSlots = (edges) => {
+          const groups = new Map();
+          for (const edge of edges) {
+            const key = `${edge.from}|${edge.to}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(edge);
+          }
+          const slots = new Map();
+          for (const [key, group] of groups) {
+            const [from, to] = key.split("|");
+            const hasReverse = from !== to && groups.has(`${to}|${from}`);
+            group.forEach((edge, index) => {
+              const offset = hasReverse ? 44 + 36 * index : 36 * (index - (group.length - 1) / 2);
+              slots.set(edge.id, { index, offset });
+            });
+          }
+          return slots;
+        };
+        const flowEdgePath = (start, end, offset) => {
+          const mx = (start.x + end.x) / 2;
+          const my = (start.y + end.y) / 2;
+          if (!offset) return { d: `M${start.x},${start.y} L${end.x},${end.y}`, lx: mx, ly: my - 3 };
+          const len = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+          const cx = mx - ((end.y - start.y) / len) * offset * 2;
+          const cy = my + ((end.x - start.x) / len) * offset * 2;
+          return {
+            d: `M${start.x},${start.y} Q${cx},${cy} ${end.x},${end.y}`,
+            lx: (start.x + 2 * cx + end.x) / 4,
+            ly: (start.y + 2 * cy + end.y) / 4 - 3,
+          };
+        };
+        // END flow-edge-geometry
+
+        const drawFlow = (model) => {
+          const width = Math.ceil(Math.max(...model.nodes.map((n) => n.x)) + NODE_W / 2 + 30);
+          const lastLane = model.lanes[model.lanes.length - 1];
+          const height = Math.ceil(Math.max(Math.max(...model.nodes.map((n) => n.y)) + NODE_H / 2 + 30, lastLane.y + 160));
+          const svg = svgEl("svg", {
+            class: "flow-svg", width, height, viewBox: `0 0 ${width} ${height}`,
+            role: "group", "aria-label": "orch workflow graph",
+          });
+          const defs = svgEl("defs", {}, svg);
+          const marker = svgEl("marker", {
+            id: "flow-arrowhead", viewBox: "0 0 10 10", refX: 9, refY: 5,
+            markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse",
+          }, defs);
+          svgEl("path", { class: "flow-arrow", d: "M0,0 L10,5 L0,10 z" }, marker);
+
+          for (const lane of model.lanes) {
+            svgEl("rect", { class: "flow-lane", x: 2, y: lane.y - 30, width: width - 4, height: 180, rx: 10 }, svg);
+            svgEl("text", { class: "flow-lane-label", x: 14, y: lane.y - 14 }, svg).textContent = lane.label;
+          }
+
+          const byId = new Map(model.nodes.map((n) => [n.id, n]));
+          const slots = flowEdgeSlots(model.edges);
+          const edgeLayer = svgEl("g", {}, svg);
+          for (const edge of model.edges) {
+            const a = byId.get(edge.from);
+            const b = byId.get(edge.to);
+            if (!a || !b) continue;
+            const group = svgEl("g", { class: "flow-edge", "data-edge": edge.id }, edgeLayer);
+            svgEl("title", {}, group).textContent = `${edge.label} (${edge.flows.join(", ")})`;
+            let d;
+            let lx;
+            let ly;
+            if (a === b) {
+              const x = a.x + NODE_W / 2;
+              const spread = slots.get(edge.id).index * 24;
+              d = `M${x},${a.y - 8} C${x + 40 + spread},${a.y - 30} ${x + 40 + spread},${a.y + 30} ${x},${a.y + 8}`;
+              lx = x + 34 + spread;
+              ly = a.y;
+            } else {
+              const start = boundary(a, b, 2);
+              const end = boundary(b, a, 5);
+              ({ d, lx, ly } = flowEdgePath(start, end, slots.get(edge.id).offset));
+            }
+            svgEl("path", { d, "marker-end": "url(#flow-arrowhead)" }, group);
+            svgEl("text", { x: lx, y: ly }, group).textContent = edge.label;
+            flow.edgeEls.set(edge.id, group);
+          }
+
+          const nodeLayer = svgEl("g", {}, svg);
+          for (const node of model.nodes) {
+            const group = svgEl("g", {
+              class: `flow-node kind-${node.kind}`, transform: `translate(${node.x},${node.y})`,
+              tabindex: 0, role: "button", "data-node": node.id,
+              "aria-label": `${node.label} (${node.kind}, ${node.lane} lane)`,
+            }, nodeLayer);
+            const title = svgEl("title", {}, group);
+            title.textContent = node.summary;
+            title.dataset.base = node.summary;
+            nodeShape(node.kind, group);
+            const lines = wrapLabel(node.label);
+            lines.forEach((line, i) => {
+              svgEl("text", { y: (i - (lines.length - 1) / 2) * 13 }, group).textContent = line;
+            });
+            group.addEventListener("click", () => showFlowDetail(node.id));
+            group.addEventListener("keydown", (event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                showFlowDetail(node.id);
+              }
+            });
+            flow.nodeEls.set(node.id, group);
+          }
+
+          // Live task-count badges sit on the lifecycle state nodes.
+          for (const nodeId of new Set(Object.values(model.stateNodes))) {
+            const node = byId.get(nodeId);
+            if (!node) continue;
+            const badge = svgEl("g", {
+              class: "flow-count", transform: `translate(${node.x + NODE_W / 2 - 6},${node.y - NODE_H / 2 + 2})`,
+              "pointer-events": "none",
+            }, nodeLayer);
+            badge.style.display = "none";
+            svgEl("circle", { r: 10 }, badge);
+            svgEl("text", { "text-anchor": "middle", "dominant-baseline": "central" }, badge).textContent = "0";
+            flow.countEls.set(nodeId, badge);
+          }
+
+          flowUI.scroll.replaceChildren(svg);
+        };
+
+        const setFlowFilter = (flowId) => {
+          const def = flow.model && flow.model.flows.find((f) => f.id === flowId);
+          flow.filter = def ? def.id : "";
+          flowUI.filter.value = flow.filter;
+          flowUI.hint.textContent = def
+            ? `${def.title}: ${def.summary}`
+            : "Pick a flow to highlight its edges, or select a node for details.";
+          applyFlowClasses();
+        };
+
+        // API for the scenario player: highlight(nodeId, edgeId) marks the current node/edge;
+        // highlight(null, null) clears it.
+        const highlight = (nodeId, edgeId) => {
+          flow.activeNode = nodeId && flow.nodeEls.has(nodeId) ? nodeId : null;
+          flow.activeEdge = edgeId && flow.edgeEls.has(edgeId) ? edgeId : null;
+          applyFlowClasses();
+          const target = flow.activeNode && flow.model.nodes.find((n) => n.id === flow.activeNode);
+          if (target) {
+            const box = flowUI.scroll;
+            if (target.x < box.scrollLeft + 90 || target.x > box.scrollLeft + box.clientWidth - 90) {
+              box.scrollLeft = Math.max(0, target.x - box.clientWidth / 2);
+            }
+          }
+        };
+
+        let flowReadyResolve;
+        window.orchFlowGraph = {
+          highlight,
+          clear: () => highlight(null, null),
+          select: showFlowDetail,
+          setFlow: setFlowFilter,
+          ready: new Promise((resolve) => {
+            flowReadyResolve = resolve;
+          }),
+        };
+
+        flowUI.filter.addEventListener("change", () => setFlowFilter(flowUI.filter.value));
+
+        const loadFlow = async () => {
+          try {
+            const flowResponse = await fetch("/flow", { cache: "no-store" });
+            if (!flowResponse.ok) throw new Error(`Flow request failed (${flowResponse.status})`);
+            const model = await flowResponse.json();
+            if (!model || !Array.isArray(model.nodes) || !Array.isArray(model.edges)) throw new Error("Invalid flow response");
+            flow.model = model;
+            flow.isDemo = flowResponse.headers.get("X-Orch-Demo") === "1";
+            for (const def of model.flows) {
+              const option = make("option", "", def.title);
+              option.value = def.id;
+              flowUI.filter.append(option);
+            }
+            drawFlow(model);
+            setFlowFilter("");
+            if (latestSnapshot) updateFlowCounts(latestSnapshot);
+            flowReadyResolve(window.orchFlowGraph);
+          } catch (error) {
+            flowUI.hint.textContent = `Workflow graph unavailable: ${error instanceof Error ? error.message : String(error)}`;
+          }
+        };
+        void loadFlow();
 
         void refresh();
       })();
