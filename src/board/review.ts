@@ -12,7 +12,9 @@ import {
   recordPrReview,
   prChecksPass,
   mergePr,
+  closeIssue,
 } from "../github/github.js";
+import { log } from "../util/log.js";
 import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "../github/labels.js";
 import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
@@ -288,6 +290,14 @@ export async function merge(
       });
     } catch {
       /* issue already closed by "Closes #n"; labelling is best-effort */
+    }
+    // GitHub honours "Closes #n" only for merges into the default branch, so with a non-default
+    // `baseBranch` the issue would stay open and keep blocking its dependents. Close it here;
+    // a failure is left for `orch repair` (close-issue) rather than failing a completed merge.
+    try {
+      await closeIssue(gate.issue, { cwd });
+    } catch (err) {
+      log.warn(`PR #${prNum} merged but issue #${gate.issue} could not be closed (run \`orch repair ${gate.issue} --apply\`): ${(err as Error).message}`);
     }
   }
   return { issue: gate.issue, worktree };
