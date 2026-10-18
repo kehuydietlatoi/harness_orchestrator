@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
 vi.mock("../src/github/github.js", () => ({
-  editIssue: vi.fn(), commentOnPr: vi.fn(), failingChecks: vi.fn(), getPr: vi.fn(), getIssue: vi.fn(),
+  ensureLabels: vi.fn(), editIssue: vi.fn(), commentOnPr: vi.fn(), failingChecks: vi.fn(), getPr: vi.fn(), getIssue: vi.fn(),
   prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(),
 }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn() }));
@@ -29,9 +29,10 @@ import { observeWorktree } from "../src/git/worktree.js";
 import * as gh from "../src/github/github.js";
 import type { TaskObservation } from "../src/tasks/observe.js";
 import { recordRun } from "../src/tasks/runner.js";
+import { readEvents } from "../src/tasks/events.js";
 import { readSession, writeSession } from "../src/tasks/sessions.js";
 import {
-  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, pickResolver,
+  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, pickResolver,
   type StepEnv,
 } from "../src/tasks/step-exec.js";
 import type { StepFacts } from "../src/tasks/steps.js";
@@ -105,6 +106,27 @@ function fakeEnv(opts: {
 describe("step executors", () => {
   let cwd = "";
   let wt = "";
+  it("cascade relabels, clears the old session and records the hop while preserving PR resources", async () => {
+    vi.mocked(gh.getPr).mockResolvedValue(pr);
+    const task = obs();
+    task.issue = { ...issue, labels: ["agent:codex", "effort:standard", "model:gpt-6.1-sol", "status:in-review"] };
+    writeSession(38, { agent: "codex", sessionId: "old" }, cwd);
+    const route = { agent: "claude", tier: "lead", model: "new" } as const;
+    expect(await executeCascade(task, route, { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [{ agent: "codex", model: "gpt-6.1-sol" }], lead: [{ agent: "claude", model: "new" }] } }, cwd)).toEqual({ signal: "cascade.hop" });
+    expect(gh.editIssue).toHaveBeenCalledWith(38, { cwd, addLabels: ["agent:claude", "effort:lead", "model:new"], removeLabels: ["agent:codex", "effort:standard", "model:gpt-6.1-sol"] });
+    expect(readEvents(cwd)).toContainEqual(expect.objectContaining({ type: "cascade.hop", cascadeTo: route, cascadeFrom: expect.objectContaining({ agent: "codex", tier: "standard" }) }));
+    expect(readSession(38, cwd)).toBeNull();
+  });
+  it("does not record a hop when relabelling fails or the head changed", async () => {
+    vi.mocked(gh.getPr).mockResolvedValue(pr);
+    vi.mocked(gh.editIssue).mockRejectedValueOnce(new Error("write failed"));
+    expect((await executeCascade(obs(), { agent: "claude", tier: "lead" }, DEFAULT_CONFIG, cwd)).signal).toBe("step.failed");
+    expect(readEvents(cwd)).toEqual([]);
+    vi.mocked(gh.getPr).mockResolvedValue({ ...pr, headSha: NEW_HEAD });
+    vi.mocked(gh.editIssue).mockClear();
+    expect((await executeCascade(obs(), { agent: "claude", tier: "lead" }, DEFAULT_CONFIG, cwd)).signal).toBe("step.failed");
+    expect(gh.editIssue).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "orch-step-"));
     wt = mkdtempSync(join(tmpdir(), "orch-step-wt-"));

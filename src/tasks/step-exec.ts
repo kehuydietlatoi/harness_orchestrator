@@ -1,3 +1,5 @@
+import { cascadeRequeue } from "./cascade-requeue.js";
+import { appendEvent } from "./events.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RunContext, RunResult } from "../adapters/types.js";
@@ -11,7 +13,7 @@ import {
   NoReviewerError, listChangedFiles, prepareReviewCheckout, runAutomatedReview, type ChangedFile,
 } from "../board/review-run.js";
 import type { RunPhase } from "../board/telemetry.js";
-import { raiseEffort, type EffortTier, resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
+import { raiseEffort, type EffortTier, type CascadeRoute, resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
 import { observeWorktree } from "../git/worktree.js";
 import { commentOnPr, ensureLabels, editIssue, failingChecks, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
@@ -22,7 +24,7 @@ import { log } from "../util/log.js";
 import { logSize, readLogSince } from "../util/log-file.js";
 import type { TaskObservation } from "./observe.js";
 import { formatConflictPrompt, formatFixPrompt } from "./step-prompts.js";
-import { readSession, writeSession } from "./sessions.js";
+import { clearSession, readSession, writeSession } from "./sessions.js";
 import { recordRun, resolveTaskModel } from "./runner.js";
 import { formatTriageComment, formatTriagePrompt, parseTriageDecision, type TriageRecord } from "./triage.js";
 
@@ -34,6 +36,7 @@ export type Signal =
   | "conflict.resolved"
   | "task.merged"
   | "task.escalated"
+  | "cascade.hop"
   | "triage.retry"
   | "agent.unavailable"
   | "step.failed";
@@ -507,4 +510,21 @@ export async function executeEscalate(obs: TaskObservation, reason: string, cwd:
     log.warn(`#${obs.issue.number}: escalated but could not comment: ${error instanceof Error ? error.message : String(error)}`);
   }
   return { signal: "task.escalated", detail: reason };
+}
+
+/** Switch the writable route without discarding the PR, claim or retained work. */
+export async function executeCascade(obs: TaskObservation, route: CascadeRoute, cfg: OrchConfig, cwd: string): Promise<StepResult> {
+  try {
+    if ((await getPr(obs.pr.number, { cwd })).headSha !== obs.pr.headSha) return failure("PR head moved before cascade");
+    const cascadeFrom: CascadeRoute = {
+      agent: obs.author, ...resolveTaskModel(obs.author, obs.issue, cfg),
+      tier: issueEffort(obs.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    };
+    await cascadeRequeue(obs.issue, route, cwd);
+    clearSession(obs.issue.number, cwd);
+    appendEvent({ type: "cascade.hop", issue: obs.issue.number, pr: obs.pr.number, agent: obs.author, cascadeFrom, cascadeTo: route }, cwd);
+    return { signal: "cascade.hop" };
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error));
+  }
 }

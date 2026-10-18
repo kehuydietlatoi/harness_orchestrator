@@ -1,9 +1,12 @@
+import { nextHop } from "./cascade.js";
+import { resolveTaskModel } from "./runner.js";
+import { issueRole } from "../routing/route-policy.js";
 import { reviewIdentity } from "../board/review-identity.js";
 import type { Issue, Pr, PrReview } from "../github/github.js";
 import { ghBoard, type Board } from "../github/board.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
 import { answeredChangeRequestRounds, latestChangeRequestNotes, reviewState } from "../board/approval.js";
-import { byNumber, issueAgent } from "../board/board.js";
+import { byNumber, issueAgent, issueEffort } from "../board/board.js";
 import { prIssueNumber, reviewSatisfied } from "../board/review.js";
 import type { OrchConfig } from "../config.js";
 import { log } from "../util/log.js";
@@ -56,6 +59,10 @@ export function assembleFacts(params: {
       agents: cfg.agents,
     });
   return {
+    nextCascade: nextHop({
+      agent: author, ...resolveTaskModel(author, issue, cfg),
+      tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    }, [], issueRole(issue), cfg),
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },

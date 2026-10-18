@@ -7,12 +7,12 @@ import { appendEvent, type OrchEvent } from "./events.js";
 import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
 import { processNext, resolveTaskModel, type RunSummary } from "./runner.js";
 import {
-  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
+  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
 } from "./step-exec.js";
-import type { Step } from "./steps.js";
+import { decideStep, type Step } from "./steps.js";
 
 /** Steps the coordinator performs (the rest of `Step` is "do nothing, just report"). */
-export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" }>;
+export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" | "cascade" }>;
 
 export interface AutopilotOptions {
   /** Agent runs in flight at once. */
@@ -83,7 +83,7 @@ export interface CoordinatorDeps {
 
 /** Finish work before starting new work, and cheap decisive steps before slow agent runs. */
 const PRIORITY: Record<ActionableStep["kind"], number> = {
-  merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
+  cascade: 0, merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
 };
 
 /** Consecutive failed attempts at a task's step before a human is called in. */
@@ -115,6 +115,7 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
     observe: () => observeTasks(cfg, cwd, { issues: scope }),
     execute: (obs, step) => {
       switch (step.kind) {
+        case "cascade": return executeCascade(obs, step.route, cfg, cwd);
         case "review": return executeReview(obs, cfg, cwd);
         case "fix": return executeFix(obs, step.reason, cfg, cwd);
         case "resolve-conflict": return executeResolveConflict(obs, cfg, cwd);
@@ -172,7 +173,7 @@ async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): 
 }
 
 function isActionable(step: Step): step is ActionableStep {
-  return step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
+  return step.kind === "cascade" || step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
     step.kind === "merge" || step.kind === "triage" || step.kind === "escalate";
 }
 
@@ -198,7 +199,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const inflight = new Map<string, Promise<void>>();
   /** Consecutive failures of ONE step on an issue. A different step starts a fresh count: a failed review followed
    * by an external approval and one failed merge is a first failure of the merge, not a second failure. */
-  const failing = new Map<number, { count: number; detail: string; step: string }>();
+  const failing = new Map<number, { count: number; detail: string; step: string; head?: string }>();
   /** The step that last ended in `agent.unavailable` per issue: relaunching that same step is a retry after a
    * pause, not new work. A different step on the same issue is real work. */
   const lastUnavailable = new Map<number, string>();
@@ -222,7 +223,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
    * not from "nothing in flight", because probing a harness for new work is not progress. */
   let lastProgress = deps.now();
 
-  const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step): void => {
+  const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step, head?: string): void => {
     settledDuringObserve.add(issue);
     if (result.signal === "agent.unavailable") lastUnavailable.set(issue, identity);
     else lastUnavailable.delete(issue);
@@ -247,8 +248,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
           break;
         }
         const previous = failing.get(issue);
-        const count = (previous && previous.step === identity ? previous.count : 0) + 1;
-        failing.set(issue, { count, detail: result.detail ?? "unknown error", step: identity });
+        const count = (previous && previous.step === identity && previous.head === head ? previous.count : 0) + 1;
+        failing.set(issue, { count, detail: result.detail ?? "unknown error", step: identity, head });
         retryAt.set(issue, { at: deps.now() + FAILURE_BACKOFF_MS * count, step: identity });
         summary.failures += 1;
         break;
@@ -297,7 +298,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       } catch (error) {
         result = { signal: "step.failed", detail: error instanceof Error ? error.message : String(error) };
       }
-      settle(n, step.kind, result, startedAt, describe(step));
+      settle(n, step.kind, result, startedAt, describe(step), obs.pr.headSha);
     })().finally(() => inflight.delete(key));
     inflight.set(key, run);
   };
@@ -407,7 +408,11 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (ambiguousPrs.has(n)) continue;
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
-      const fails = failing.get(n);
+      const previous = failing.get(n);
+      const fails = previous?.head === obs.pr.headSha ? previous : undefined;
+      if (fails && (step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade")) {
+        step = decideStep({ ...obs.facts, failedFixAttempts: fails.count });
+      }
       if (fails && isActionable(step) && step.kind !== "escalate" && fails.step === describe(step) && fails.count >= MAX_STEP_FAILURES) {
         step = { kind: "escalate", reason: `${describe(step)} failed ${fails.count} times in a row (${fails.detail})` };
       }

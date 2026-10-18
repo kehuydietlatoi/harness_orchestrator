@@ -1,3 +1,4 @@
+import { cascadeLabels } from "./cascade-requeue.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -363,9 +364,9 @@ async function requeueClaim(n: number, worktree: string, cfg: OrchConfig, cwd: s
     const addLabels = [STATUS.todo as string];
     const removeLabels = [STATUS.claimed as string, STATUS.inProgress as string];
     if (cascade) {
-      addLabels.push(`agent:${cascade.route.agent}`, `effort:${cascade.route.tier}`);
-      if (cascade.route.model) addLabels.push(`model:${cascade.route.model}`);
-      removeLabels.push(...cascade.issue.labels.filter((label) => /^(agent|effort|model):/.test(label)), NEEDS_ATTENTION);
+      const labels = cascadeLabels(cascade.issue, cascade.route);
+      addLabels.push(...labels.addLabels);
+      removeLabels.push(...labels.removeLabels, NEEDS_ATTENTION);
       await ensureLabels(labelDefs(addLabels), cwd);
     }
     if (!(await removeWorktree(worktree, { cwd, disposableIgnored: cfg.disposableIgnored }))) return false;
