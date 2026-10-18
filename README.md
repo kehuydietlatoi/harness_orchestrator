@@ -273,6 +273,19 @@ without an effort label use `defaultEffort`. The lead's decision points (plannin
 the routing judge) use its `leadModel`, falling back to its `hard` tier when unset: by
 default a Claude lead plans on Opus at `high` effort while task runs stay on the tiers.
 
+Optional role allowances constrain issues carrying a `role:<name>` label:
+
+```json
+"roles": {
+  "coder": { "tiers": ["hard"], "families": ["openai", "anthropic"] }
+}
+```
+
+Issues without a role label remain unrestricted. Unknown roles are rejected.
+`adapters.<agent>.family` defaults to `anthropic` for Claude and `openai` for
+Codex; a model spec's `family` overrides it. OpenCode requires a family on each
+configured model, including `leadModel`. Role tiers must be valid effort tiers.
+
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
 are `Depends-on: #n` references in issue bodies; open prerequisites block dispatch.

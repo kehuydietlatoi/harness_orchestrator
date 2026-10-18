@@ -1,3 +1,4 @@
+import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
 import { parseDeps } from "../board/board.js";
 import type { OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
@@ -148,7 +149,7 @@ export function formatBrief(issues: readonly Issue[], rollup: readonly AgentRoll
 export function applyPlan(
   plan: readonly PlanEntry[],
   issues: readonly Issue[],
-  cfg: Pick<OrchConfig, "agents">,
+  cfg: Pick<OrchConfig, "agents"> & RoutePolicyConfig,
 ): PlannedAssignments {
   const issueByNumber = new Map(
     issues.filter((issue) => issue.state.toUpperCase() === "OPEN").map((issue) => [issue.number, issue]),
@@ -176,6 +177,11 @@ export function applyPlan(
     }
     if (entry.effort !== "easy" && entry.effort !== "hard") {
       skips.push({ issue: entry.issue, reason: `invalid effort '${entry.effort}' (expected easy or hard)` });
+      continue;
+    }
+    const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: entry.effort }, cfg);
+    if (!route.ok) {
+      skips.push({ issue: entry.issue, reason: `disallowed route: ${route.reason}` });
       continue;
     }
     if (planned.has(entry.issue)) {

@@ -1,3 +1,4 @@
+import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
 import { selectUnassigned, type PlanEntry } from "./assign.js";
 import type { OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
@@ -29,6 +30,7 @@ export type ViolationKind =
   | "duplicate" // the same issue routed more than once
   | "invalid-agent" // agent is not one of the configured agents
   | "invalid-effort" // effort is neither "easy" nor "hard"
+  | "disallowed-route"
   | "missing-rationale"; // the contract requires one grounded sentence
 
 export interface Violation {
@@ -57,7 +59,7 @@ const VALID_EFFORTS = new Set(["easy", "hard"]);
 export function evaluatePlan(
   plan: readonly PlanEntry[],
   issues: readonly Issue[],
-  cfg: Pick<OrchConfig, "agents">,
+  cfg: Pick<OrchConfig, "agents"> & RoutePolicyConfig,
 ): EvalReport {
   const expectedNumbers = selectUnassigned(issues)
     .map((issue) => issue.number)
@@ -94,6 +96,11 @@ export function evaluatePlan(
         issue: entry.issue,
         detail: `effort '${entry.effort}' is neither easy nor hard`,
       });
+    }
+    const issue = issues.find((issue) => issue.number === entry.issue);
+    if (issue && agents.has(entry.agent) && (entry.effort === "easy" || entry.effort === "hard")) {
+      const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: entry.effort }, cfg);
+      if (!route.ok) violations.push({ kind: "disallowed-route", issue: entry.issue, detail: route.reason });
     }
     if (!(entry.rationale ?? "").trim()) {
       violations.push({ kind: "missing-rationale", issue: entry.issue, detail: "empty rationale" });

@@ -1,3 +1,4 @@
+import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
@@ -33,6 +34,8 @@ export function resolveTaskModel(
   cfg: OrchConfig,
 ): ModelSpec | undefined {
   const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
+  const route = validateRoute({ role: issueRole(issue), agent, tier }, cfg);
+  if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
   return cfg.adapters[agent]?.models?.[tier];
 }
 
@@ -75,6 +78,7 @@ export function resolveDispatchAgent(
   if (blockers.length > 0) {
     throw new Error(`#${issue.number} is blocked by open issue(s): ${blockers.map((n) => `#${n}`).join(", ")}.`);
   }
+  resolveTaskModel(agent, issue, cfg); // refuse before claiming resources
   return agent;
 }
 

@@ -17,6 +17,24 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("validates role tiers and families", () => {
+    expect(loadConfig(writeConfig({ roles: { coder: { tiers: ["hard"], families: ["openai"] } } })).roles)
+      .toEqual({ coder: { tiers: ["hard"], families: ["openai"] } });
+    expect(() => loadConfig(writeConfig({ roles: { coder: { tiers: ["medium"], families: ["openai"] } } })))
+      .toThrow(/roles.coder.tiers.*known tiers/);
+    expect(() => loadConfig(writeConfig({ roles: { coder: { tiers: ["hard"], families: "openai" } } })))
+      .toThrow(/roles.coder.families/);
+  });
+
+  it("requires OpenCode family on each model, including the lead", () => {
+    expect(() => loadConfig(writeConfig({ adapters: { opencode: { cmd: "opencode", family: "openai", models: { easy: { model: "m" } } } } })))
+      .toThrow(/opencode.easy.family/);
+    expect(() => loadConfig(writeConfig({ adapters: { opencode: { cmd: "opencode", leadModel: { model: "m" } } } })))
+      .toThrow(/opencode.leadModel.family/);
+    const config = loadConfig(writeConfig({ adapters: { opencode: { cmd: "opencode", models: { easy: { model: "m", family: "openai" } } } } }));
+    expect(config.adapters.opencode.models?.easy).toEqual({ model: "m", family: "openai" });
+  });
+
   it("fills effort and model defaults for an older config", () => {
     const config = loadConfig(writeConfig({
       agents: ["claude", "codex"],
@@ -26,6 +44,7 @@ describe("loadConfig", () => {
     expect(config.defaultEffort).toBe("hard");
     expect(config.adapters.claude).toEqual({
       cmd: "custom-claude",
+      family: "anthropic",
       models: {
         easy: { model: "claude-sonnet-5-5", effort: "medium" },
         hard: { model: "claude-sonnet-5-5", effort: "medium" },
@@ -34,6 +53,7 @@ describe("loadConfig", () => {
     });
     expect(config.adapters.codex).toEqual({
       cmd: "codex",
+      family: "openai",
       models: {
         easy: { model: "gpt-6.1-sol", effort: "medium" },
         hard: { model: "gpt-6.1-sol", effort: "medium" },
@@ -90,6 +110,7 @@ describe("loadConfig", () => {
 
     expect(config.adapters.claude).toEqual({
       cmd: "claude",
+      family: "anthropic",
       models: {
         easy: { model: "haiku", effort: "medium" },
         hard: { model: "claude-sonnet-5-5", effort: "medium" },

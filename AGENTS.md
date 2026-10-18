@@ -5,6 +5,9 @@
 > **Review:** when `orch review-queue --agent <you>` is non-empty, review the other harness's PRs.
 
 ## Conventions
+
+- **Role routing (#120)**: `src/routing/route-policy.ts` is the pure authority for role tier/family allowances; no `role:` label is unrestricted, unknown roles fail closed. Assignment and execution share it. Provider family comes from the selected model override, then adapter default; OpenCode requires a family per configured model and never inherits its adapter family. Role constraints do not define approval policy.
+
 _(add project-specific facts, gotchas, and architectural decisions below)_
 
 - **Flow label visibility (#110)**: `public/index.html` keeps state-driven edge-label visibility in the extractable pure `flow-label-visibility` block; hover/focus visibility stays in CSS. Hit paths share the rendered edge geometry and must keep their transparent 10px stroke even on highlighted/active edges.

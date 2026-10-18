@@ -34,6 +34,15 @@ function entry(issue: number, over: Partial<PlanEntry> = {}): PlanEntry {
 }
 
 describe("evaluatePlan — validity invariants", () => {
+  it("reports disallowed role routes", () => {
+    const issues = [mkIssue(1, "restricted", { labels: ["role:coder"] })];
+    const policy = { ...cfg, roles: { coder: { tiers: ["hard" as const], families: ["openai"] } } };
+    expect(evaluatePlan([entry(1)], issues, policy).violations).toEqual([
+      { kind: "disallowed-route", issue: 1, detail: expect.stringContaining("tier 'easy'") },
+    ]);
+    expect(evaluatePlan([entry(1, { effort: "hard" })], issues, policy).ok).toBe(true);
+  });
+
   it("passes a complete, well-formed plan and reports the covered set", () => {
     const plan: PlanEntry[] = [
       entry(107, { agent: "claude", effort: "hard" }),

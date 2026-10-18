@@ -6,7 +6,7 @@ or cleared**. Traced from source (`src/github/labels.ts`, `src/tasks/service.ts`
 `src/commands/abandon.ts`, `src/tasks/reconcile.ts`) — if code and this table disagree, the
 code wins and this file is the bug. Vocabulary lives in `CONTEXT.md`.
 
-All labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
+The built-in labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
 
 **Schema drift & self-heal.** The canonical set is **additive** — new labels arrive with
 new features (e.g. `effort:*` in #20, `assigned-by:brain` with the judge), so a repo
@@ -30,6 +30,7 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `plan` (ticket `agent`); `claimSpecific` | `abandon` only (**sticky**) |
 | `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign`; `plan` (ticket `effort`) | autopilot triage (retry on the hard tier) only |
 | `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign`; `plan` (ticket `effort`); autopilot triage | — (**sticky**) |
+| `role:<name>` | user-defined | Constrain routing to `roles[name].tiers` and `.families` | Human / external issue author (create the label manually) | Human / external issue author |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open task PR without current approval or current-head changes requested | `approve`; `requestChanges`; `repair` after current approval, current-head changes requested, or PR closure |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve`; `repair` from current review records | `requestChanges`; `repair` removes stale or revoked approvals |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
@@ -38,6 +39,14 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 **Sticky** = set once at routing/claim time and honored on every future run; only
 `abandon` clears `agent:`, and *nothing* clears `effort:`. Re-routing an issue to a
 different agent/effort today means `abandon` then re-`assign`.
+
+A task without a `role:` label remains unrestricted. A named role must exist in
+`orch.config.json`; unknown roles, disallowed tiers, and disallowed provider families
+are rejected during assignment and before harness execution. Orch does not add or
+remove role labels. The selected model's `family` overrides the adapter's family;
+Claude defaults to `anthropic`, Codex to `openai`. OpenCode must specify `family`
+on each configured model (including `leadModel`). These are routing constraints;
+review approval policy is configured separately.
 
 ## Lifecycle (happy path)
 
