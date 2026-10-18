@@ -462,6 +462,19 @@ describe("processNext recovery", () => {
     expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ issue: 35, outcome: "failed" });
   });
 
+  it.each([false, true])("clears active labels after a failed implement (timedOut=%s)", async (timedOut) => {
+    let labels = ["agent:codex", "status:claimed", "status:in-progress"];
+    mocks.editIssue.mockImplementation(async (_n: number, edit: { addLabels?: string[]; removeLabels?: string[] }) => {
+      labels = [...new Set([...labels.filter((label) => !edit.removeLabels?.includes(label)), ...(edit.addLabels ?? [])])];
+    });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1, timedOut });
+
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+    expect(labels).toEqual(["agent:codex", "needs-attention"]);
+    expect(mocks.removeWorktree).toHaveBeenCalledOnce();
+    expect(mocks.lockRelease).toHaveBeenCalledOnce();
+  });
+
   it("returns one failed outcome when the child process cannot start", async () => {
     mocks.runTask.mockResolvedValue({
       ok: false,

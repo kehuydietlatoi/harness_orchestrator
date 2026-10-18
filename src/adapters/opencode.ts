@@ -1,5 +1,5 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { AdapterConfig, ModelSpec } from "../config.js";
 import { projectStateDir } from "../board/telemetry.js";
 import { commandExists, exec } from "../util/exec.js";
@@ -9,7 +9,10 @@ import { buildOpencodeArgv, reduceOpencode } from "./opencode-events.js";
 import type { HarnessAdapter, HeadlessContext, HeadlessResult, RunContext, RunResult } from "./types.js";
 
 /** Ordered rules: the last matching bash pattern wins in OpenCode. */
-export function opencodePermissions(readOnly = false, verify: readonly string[][] = []) {
+export function opencodePermissions(worktree: string, readOnly = false, verify: readonly string[][] = []) {
+  const root = resolve(worktree).replaceAll("\\", "/").replace(/\/$/, "");
+  // OpenCode's wildcard matcher has no literal escape for these characters.
+  if (/[?*]/.test(root)) throw new Error("OpenCode worktree path must not contain wildcard characters");
   const checks: Record<string, string> = {};
   // Bash permissions are glob patterns, not argv. Only expose commands whose
   // literal spelling cannot introduce shell syntax or broaden a glob rule.
@@ -19,6 +22,7 @@ export function opencodePermissions(readOnly = false, verify: readonly string[][
     }
   }
   return {
+    external_directory: { "*": "deny", [`${root}/*`]: "allow" },
     edit: readOnly ? "deny" : "allow",
     bash: {
       "*": "deny",
@@ -84,7 +88,7 @@ export class OpencodeAdapter implements HarnessAdapter {
     const runDir = mkdtempSync(join(state, "opencode-"));
     try {
       const config = join(runDir, "config.json");
-      writeFileSync(config, JSON.stringify({ permission: opencodePermissions(ctx.readOnly, this.verify) }), { mode: 0o600 });
+      writeFileSync(config, JSON.stringify({ permission: opencodePermissions(realpathSync(ctx.cwd), ctx.readOnly, this.verify) }), { mode: 0o600 });
       const logFile = ctx.logFile ?? join(runDir, "output.jsonl");
       mkdirSync(dirname(logFile), { recursive: true });
       const mark = logSize(logFile);
@@ -92,7 +96,12 @@ export class OpencodeAdapter implements HarnessAdapter {
         model: ctx.model.model, variant: ctx.model.effort, resumeSession: ctx.resumeSession,
       }), {
         cwd: ctx.cwd, input: ctx.prompt, logFile, timeoutMs: ctx.timeoutMs,
-        shell: false, env: { ...process.env, OPENCODE_CONFIG: config },
+        // 1.19.3 merges project files AFTER OPENCODE_CONFIG, including agent permissions.
+        // Exclude those files rather than trying to undo their deep-merged allow rules.
+        shell: false, env: {
+          ...process.env, OPENCODE_CONFIG: config, OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+          OPENCODE_CONFIG_CONTENT: "", OPENCODE_CONFIG_DIR: "", OPENCODE_PERMISSION: "",
+        },
       });
       const raw = readLogSince(logFile, mark);
       // spawnLogged combines both streams; the reducer ignores non-JSON stderr lines.

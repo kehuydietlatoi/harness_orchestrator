@@ -16,7 +16,7 @@ import {
   createPr,
   currentLogin,
 } from "../github/github.js";
-import { STATUS, agentLabel, REVIEW_NEEDED } from "../github/labels.js";
+import { STATUS, agentLabel, REVIEW_NEEDED, NEEDS_ATTENTION } from "../github/labels.js";
 import {
   addWorktree,
   observeWorktree,
@@ -141,6 +141,9 @@ async function observeClaim(
 
 function decideClaim(number: number, observation: ClaimObservation): void {
   if (observation.issue.state !== "OPEN") throw new Error(`#${number} is not open.`);
+  if (observation.issue.labels.includes(NEEDS_ATTENTION)) {
+    throw new Error(`#${number} needs-attention; human recovery is required before claiming.`);
+  }
   if (observation.lockOwner !== null) {
     throw new Error(`#${number} is already claimed by another agent.`);
   }

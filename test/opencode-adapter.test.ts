@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -24,14 +24,14 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const dir of di
 describe("OpenCode adapter", () => {
   it("allows only literal configured verify commands in implement mode", () => {
     const verify = [["node", "--test"], ["npm", "test"], ["git", "push"], ["node", "*.js"]];
-    const rules = opencodePermissions(false, verify).bash;
+    const rules = opencodePermissions(process.cwd(), false, verify).bash;
     expect(rules["node --test"]).toBe("allow");
     expect(rules["npm test"]).toBe("allow");
     expect(rules["node --test *"]).toBeUndefined();
     expect(rules["node *.js"]).toBeUndefined();
     expect(Object.keys(rules).at(-1)).toBe("git push*");
     expect(rules["git push*"]).toBe("deny");
-    expect(opencodePermissions(true, verify).bash["node --test"]).toBeUndefined();
+    expect(opencodePermissions(process.cwd(), true, verify).bash["node --test"]).toBeUndefined();
   });
   it("pings the slug with Reply OK on stdin and a 60 second timeout", async () => {
     const cwd = temp();
@@ -53,10 +53,13 @@ describe("OpenCode adapter", () => {
   });
 
   it.each([false, true])("uses deterministic permissions (readOnly=%s)", readOnly => {
-    const permission = opencodePermissions(readOnly);
+    const permission = opencodePermissions(process.cwd(), readOnly);
     expect(JSON.stringify(permission)).not.toContain("ask");
     expect(permission.edit).toBe(readOnly ? "deny" : "allow");
     expect(permission.webfetch).toBe("deny");
+    expect(permission.external_directory).toEqual({
+      "*": "deny", [`${process.cwd().replaceAll("\\", "/")}/*`]: "allow",
+    });
     expect(permission.bash).toEqual({
       "*": "deny", "git status*": "allow", "git diff*": "allow", "git log*": "allow",
       "rg *": "allow", "ls*": "allow", "git push*": "deny",
@@ -75,7 +78,8 @@ describe("OpenCode adapter", () => {
       const rel = relative(worktree, path);
       expect(isAbsolute(path)).toBe(true);
       expect(rel.startsWith("..") || isAbsolute(rel)).toBe(true);
-      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ permission: opencodePermissions(false, verify) });
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ permission: opencodePermissions(realpathSync(worktree), false, verify) });
+      expect(opts!.env!.OPENCODE_DISABLE_PROJECT_CONFIG).toBe("true");
       configs.push(path);
       appendFileSync(opts!.logFile!, fixture("success-edit"));
       return { code: 0, durationMs: 12, timedOut: false };
@@ -87,6 +91,34 @@ describe("OpenCode adapter", () => {
     }
     expect(configs[0]).not.toBe(configs[1]);
     expect(configs.every(path => !existsSync(path))).toBe(true);
+  });
+
+  it.each([false, true])("excludes repository permissions and inherited config overrides (readOnly=%s)", async readOnly => {
+    const cwd = temp();
+    writeFileSync(join(cwd, "opencode.json"), JSON.stringify({ permission: { bash: "allow", edit: "allow", external_directory: "allow" } }));
+    vi.stubEnv("OPENCODE_DISABLE_PROJECT_CONFIG", "false");
+    vi.stubEnv("OPENCODE_CONFIG_CONTENT", '{"permission":"allow"}');
+    vi.stubEnv("OPENCODE_CONFIG_DIR", cwd);
+    vi.stubEnv("OPENCODE_PERMISSION", '{"bash":"allow"}');
+    const spawn: typeof spawnLogged = vi.fn(async (_cmd, _args, opts) => {
+      expect(opts!.env).toMatchObject({
+        OPENCODE_DISABLE_PROJECT_CONFIG: "true", OPENCODE_CONFIG_CONTENT: "",
+        OPENCODE_CONFIG_DIR: "", OPENCODE_PERMISSION: "",
+      });
+      const { permission } = JSON.parse(readFileSync(opts!.env!.OPENCODE_CONFIG!, "utf8"));
+      expect(permission).toEqual(opencodePermissions(realpathSync(cwd), readOnly));
+      expect(permission.bash["*"]).toBe("deny");
+      expect(permission.edit).toBe(readOnly ? "deny" : "allow");
+      appendFileSync(opts!.logFile!, fixture("success-edit"));
+      return { code: 0, durationMs: 1, timedOut: false };
+    });
+    await new OpencodeAdapter({ cmd: "opencode.exe" }, spawn).runHeadless({ cwd, prompt: "review", model, readOnly });
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+
+  it("refuses paths that would widen the external directory pattern", () => {
+    expect(() => opencodePermissions(join(temp(), "task?"))).toThrow("wildcard");
+    expect(() => opencodePermissions(join(temp(), "task*"))).toThrow("wildcard");
   });
 
   it("reads only this run's log and rejects incomplete exit-zero output", async () => {
@@ -163,16 +195,79 @@ describe("OpenCode adapter", () => {
   });
 });
 
-it.skipIf(process.env.ORCH_OPENCODE_LIVE !== "1")("live OpenCode fixes a toy file", async () => {
+const live = it.skipIf(process.env.ORCH_OPENCODE_LIVE !== "1");
+const liveConfig = () => process.env.ORCH_OPENCODE_CMD ? { cmd: process.env.ORCH_OPENCODE_CMD } : undefined;
+
+async function liveWorktree() {
+  vi.mocked(exec).mockImplementation((await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js")).exec);
+  const root = temp();
+  const repo = join(root, "main");
+  const worktree = join(root, "task");
+  mkdirSync(repo);
+  for (const args of [
+    ["init", repo],
+    ["-C", repo, "-c", "user.name=Orch Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture"],
+    ["-C", repo, "worktree", "add", "--detach", worktree],
+  ]) expect((await exec("git", args)).code).toBe(0);
+  return { root, repo, worktree };
+}
+
+live("live 1.19.3 project permissions override OPENCODE_CONFIG unless project config is disabled", async () => {
+  const { root, repo, worktree } = await liveWorktree();
+  const cmd = liveConfig()?.cmd ?? (process.platform === "win32" ? "opencode.exe" : "opencode");
+  expect((await exec(cmd, ["--version"])).stdout.trim()).toBe("1.19.3");
+  const config = join(root, "worker.json");
+  writeFileSync(config, JSON.stringify({ permission: opencodePermissions(worktree, true) }));
+  const widening = { permission: { bash: "allow", edit: "allow", external_directory: "allow" } };
+  // Cover both the observed main-checkout source and worktree-local config.
+  for (const dir of [repo, worktree]) {
+    writeFileSync(join(dir, "opencode.json"), JSON.stringify(widening));
+    mkdirSync(join(dir, ".opencode"));
+    writeFileSync(join(dir, ".opencode", "opencode.jsonc"), JSON.stringify(widening));
+  }
+  vi.stubEnv("OPENCODE_CONFIG", config);
+  vi.stubEnv("OPENCODE_CONFIG_CONTENT", "");
+  vi.stubEnv("OPENCODE_CONFIG_DIR", "");
+  vi.stubEnv("OPENCODE_PERMISSION", "");
+  vi.stubEnv("OPENCODE_DISABLE_PROJECT_CONFIG", "false");
+  const widened = await exec(cmd, ["debug", "config"], { cwd: worktree });
+  expect(widened.code).toBe(0);
+  expect(JSON.parse(widened.stdout).permission).toMatchObject({ bash: "allow", edit: "allow", external_directory: "allow" });
+  vi.stubEnv("OPENCODE_DISABLE_PROJECT_CONFIG", "true");
+  const protectedConfig = await exec(cmd, ["debug", "config"], { cwd: worktree });
+  expect(protectedConfig.code).toBe(0);
+  expect(JSON.parse(protectedConfig.stdout).permission).toEqual(opencodePermissions(worktree, true));
+}, 60_000);
+
+live("live OpenCode runs bash with explicit workdir in a git worktree without an external_directory prompt", async () => {
+  const { repo, worktree } = await liveWorktree();
+  writeFileSync(join(repo, "opencode.json"), JSON.stringify({ permission: { bash: "allow", edit: "allow" } }));
+  const logFile = join(worktree, "bash.jsonl");
+  const result = await new OpencodeAdapter(liveConfig()).runTask({
+    issue: 138, agent: "opencode", worktree, logFile,
+    prompt: `Call the bash tool exactly once with command "git status --short" and workdir ${JSON.stringify(worktree)}. You must set workdir explicitly. Then reply DONE and stop.`,
+    model: { model: "opencode/deepseek-v4.1-flash-free" }, timeoutMs: 180_000,
+  });
+  const raw = readFileSync(logFile, "utf8");
+  expect(result.ok).toBe(true);
+  expect(raw).not.toMatch(/permission requested: external_directory|auto-rejecting/);
+  const events = raw.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+  expect(events.some(event => event.type === "tool_use" && event.part?.tool === "bash"
+    && event.part.state?.status === "completed"
+    && realpathSync(event.part.state.input.workdir) === realpathSync(worktree))).toBe(true);
+}, 200_000);
+
+live("live OpenCode fixes a toy file", async () => {
   vi.mocked(exec).mockImplementation((await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js")).exec);
   const worktree = temp();
   writeFileSync(join(worktree, "toy.txt"), "broken\n");
-  const result = await new OpencodeAdapter().runTask({
-    issue: 119, agent: "opencode", worktree,
-    prompt: "Use the edit tool to replace broken with fixed in toy.txt. Do not run shell commands. Then stop.",
+  const logFile = join(worktree, "toy.jsonl");
+  const result = await new OpencodeAdapter(liveConfig()).runTask({
+    issue: 119, agent: "opencode", worktree, logFile,
+    prompt: `Read ${JSON.stringify(join(worktree, "toy.txt"))}, then use the edit tool to replace broken with fixed in that file. Do not run shell commands. Then stop.`,
     model: { model: "opencode/deepseek-v4.1-flash-free" }, timeoutMs: 180_000,
   });
   expect(result.ok).toBe(true);
   expect(result.sessionId).toBeTruthy();
-  expect(readFileSync(join(worktree, "toy.txt"), "utf8")).toBe("fixed\n");
+  expect(readFileSync(join(worktree, "toy.txt"), "utf8"), readFileSync(logFile, "utf8")).toBe("fixed\n");
 }, 200_000);

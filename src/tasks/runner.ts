@@ -110,6 +110,9 @@ export function resolveDispatchAgent(
   open: ReadonlyMap<number, Issue>,
   cfg: OrchConfig,
 ): string {
+  if (issue.labels.includes(NEEDS_ATTENTION)) {
+    throw new Error(`#${issue.number} needs-attention; human recovery is required before dispatch.`);
+  }
   if (issueStatus(issue) !== STATUS.todo) {
     throw new Error(`#${issue.number} is ${issueStatus(issue)}, not a todo.`);
   }
