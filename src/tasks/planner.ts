@@ -30,7 +30,7 @@ const OUTPUT_REMINDER = [
   "of ticket objects. Each ticket:",
   '  { "id": "short-slug", "title": "…", "body": "…",',
   '    "dependsOn": ["earlier-id", …], "after": ["earlier-id", …], "files": ["path/hint", …],',
-  '    "agent": "claude|codex", "effort": "easy|hard",',
+  '    "agent": "claude|codex", "effort": "free|cheap|standard|lead",',
   '    "acceptance": ["a check a test or command can verify", …], "outOfScope": ["tempting adjacent work", …] }',
   "- `title` is required; the others are optional.",
   "- `acceptance` is the definition of done: every ticket needs checks a test or command can verify. A ticket worded",
@@ -131,8 +131,8 @@ export function ensurePlanSkill(cwd: string): { path: string; created: boolean }
  * paths live here. Pure. */
 export function formatInteractiveSeed(outputPath: string, briefPath?: string, agents: readonly string[] = []): string {
   const route = agents.length
-    ? `Route a ticket with agent (one of ${agents.join(", ")}) and effort (easy or hard) when you are confident; omit both to let the routing judge decide.`
-    : "Route a ticket with agent and effort (easy or hard) when you are confident; omit both to let the routing judge decide.";
+    ? `Route a ticket with agent (one of ${agents.join(", ")}) and effort (free, cheap, standard, or lead) when you are confident; omit both to let the routing judge decide.`
+    : "Route a ticket with agent and effort (free, cheap, standard, or lead) when you are confident; omit both to let the routing judge decide.";
   return [
     "You are in an interactive orch plan session: help the user break a goal into a tickets.json for the orch orchestrator.",
     "Use the orch-plan skill for the ticket schema (id, title, body, dependsOn, after, files, agent, effort, acceptance, outOfScope) and the plan brief.",

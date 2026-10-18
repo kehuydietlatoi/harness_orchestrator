@@ -32,7 +32,7 @@ export function resolveTaskModel(
   issue: Issue,
   cfg: OrchConfig,
 ): ModelSpec | undefined {
-  const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
+  const tier = issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
   return cfg.adapters[agent]?.models?.[tier];
 }
 

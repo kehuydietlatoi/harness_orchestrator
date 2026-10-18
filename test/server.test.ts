@@ -106,7 +106,7 @@ function fakeDeps(over: Partial<ServerDeps> = {}): {
     loadConfig: () => ({ agents: ["claude", "codex"] }) as OrchConfig,
     listOpenIssues: async () => [issue(1), issue(2, ["agent:claude"])],
     readRuns: () => [],
-    runJudge: async () => [{ issue: 1, agent: "codex", effort: "easy", rationale: "mechanical" }],
+    runJudge: async () => [{ issue: 1, agent: "codex", effort: "standard", rationale: "mechanical" }],
     editIssue: async (n, labels) => {
       edits.push({ n, labels });
     },
@@ -285,7 +285,7 @@ describe("write surface", () => {
     const port = await start(deps);
     const response = await post(port, "/actions/assign", {
       origin: "human",
-      plan: [{ issue: 1, agent: "codex", effort: "easy" }],
+      plan: [{ issue: 1, agent: "codex", effort: "standard" }],
     }, {
       headers: {
         Host: `localhost:${port}`,
@@ -295,7 +295,7 @@ describe("write surface", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(edits).toEqual([{ n: 1, labels: ["agent:codex", "effort:easy"] }]);
+    expect(edits).toEqual([{ n: 1, labels: ["agent:codex", "effort:standard"] }]);
   });
 
   it("POST /actions/suggest returns the judge's suggestions and writes nothing", async () => {
@@ -305,7 +305,7 @@ describe("write surface", () => {
 
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body)).toEqual({
-      suggestions: [{ issue: 1, agent: "codex", effort: "easy", rationale: "mechanical" }],
+      suggestions: [{ issue: 1, agent: "codex", effort: "standard", rationale: "mechanical" }],
     });
     expect(edits).toHaveLength(0);
   });
@@ -313,7 +313,7 @@ describe("write surface", () => {
   it("POST /actions/suggest short-circuits to empty without calling the judge when nothing is unassigned", async () => {
     let judged = false;
     const { deps } = fakeDeps({
-      listOpenIssues: async () => [issue(1, ["agent:claude", "effort:hard"])],
+      listOpenIssues: async () => [issue(1, ["agent:claude", "effort:lead"])],
       runJudge: async () => {
         judged = true;
         return [];
@@ -347,24 +347,24 @@ describe("write surface", () => {
     const res = await post(port, "/actions/assign", {
       origin: "brain",
       plan: [
-        { issue: 1, agent: "codex", effort: "easy" },
-        { issue: 2, agent: "codex", effort: "hard" },
+        { issue: 1, agent: "codex", effort: "standard" },
+        { issue: 2, agent: "codex", effort: "lead" },
       ],
     });
 
     expect(res.status).toBe(200);
     const parsed = JSON.parse(res.body);
-    expect(parsed.writes).toEqual([{ issue: 1, agent: "codex", effort: "easy" }]);
+    expect(parsed.writes).toEqual([{ issue: 1, agent: "codex", effort: "standard" }]);
     expect(parsed.skips).toEqual([{ issue: 2, reason: "already pinned" }]);
-    expect(edits).toEqual([{ n: 1, labels: ["agent:codex", "effort:easy", "assigned-by:brain"] }]);
+    expect(edits).toEqual([{ n: 1, labels: ["agent:codex", "effort:standard", "assigned-by:brain"] }]);
   });
 
   it("POST /actions/assign with origin human omits the brain label", async () => {
     const { deps, edits } = fakeDeps();
     const port = await start(deps);
-    await post(port, "/actions/assign", { origin: "human", plan: [{ issue: 1, agent: "claude", effort: "hard" }] });
+    await post(port, "/actions/assign", { origin: "human", plan: [{ issue: 1, agent: "claude", effort: "lead" }] });
 
-    expect(edits).toEqual([{ n: 1, labels: ["agent:claude", "effort:hard"] }]);
+    expect(edits).toEqual([{ n: 1, labels: ["agent:claude", "effort:lead"] }]);
   });
 
   it("POST /actions/assign rejects a malformed body with 400 and no writes", async () => {

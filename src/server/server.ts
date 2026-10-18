@@ -276,13 +276,13 @@ async function handlePlanCreate(
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     return;
   }
-  const agents = deps.loadConfig(cwd).agents; // a ticket routed to an unknown agent is created unrouted
-  const { errors } = resolvePlan(tickets, { agents });
+  const { agents, tierAliases } = deps.loadConfig(cwd); // a ticket routed to an unknown agent is created unrouted
+  const { errors } = resolvePlan(tickets, { agents, tierAliases });
   if (errors.length) {
     sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
     return;
   }
-  const result = await deps.createIssues(tickets, cwd, { agents });
+  const result = await deps.createIssues(tickets, cwd, { agents, tierAliases });
   sendJson(response, 200, result);
 }
 

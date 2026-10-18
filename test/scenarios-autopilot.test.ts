@@ -63,7 +63,7 @@ describe("autopilot scenarios", () => {
   });
 
   it("recovers a hard retry's round and guidance from its durable comment", () => {
-    expect(decisions("triage-retry", "parseTriageDecision")[0]!.output).toMatchObject({ decision: "retry", effort: "hard" });
+    expect(decisions("triage-retry", "parseTriageDecision")[0]!.output).toMatchObject({ decision: "retry", effort: "raise" });
     const recovered = decisions("triage-retry", "triageFacts")[0]!;
     expect(recovered.output).toMatchObject({ triages: 1, extraRounds: 1, guidance: expect.stringContaining("regression test") });
     expect(decisions("triage-retry", "decideStep").map((d) => (d.output as Step).kind)).toEqual(["triage", "fix", "review", "merge"]);
