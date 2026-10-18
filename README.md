@@ -170,11 +170,11 @@ the gate applies to merges through `orch`, not direct GitHub merges.
 **Usage limits and self-review.** When a harness runs out of usage (Codex's "You've hit your
 usage limit", Claude's rejected rate-limit event), orch records a cooldown in
 `~/.orch/<project>/availability.json` and stops dispatching to it. `orch review-run` then
-reviews with the other harness when it is available; if every other harness is on cooldown and
-`reviewPolicy` is `"cross-or-self"` (the default), the author's own harness reviews in a
+reviews at tier `standard` or `lead` with a different model family. The default policy is
+`"cross"`. If every eligible cross reviewer is unavailable and `reviewPolicy` is explicitly `"cross-or-self"`, the author's own harness reviews in a
 **fresh read-only session** and the record is marked `mode: "self"`. Self-review is a
-fallback only: it is refused while another harness is available, and `reviewPolicy: "cross"`
-turns it off. See [ADR-0008](docs/adr/0008-self-review-fallback.md).
+premium fallback only: it is refused while an eligible cross reviewer is available.
+Free/cheap approvals never count. See [ADR-0011](docs/adr/0011-premium-family-review-and-conflict-resolvers.md).
 
 Reported CI checks must pass or be skipped; **no configured checks also passes**.
 The gate does not establish review quality or prove that distinct underlying
@@ -226,7 +226,8 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "agents": ["claude", "codex"],
   "lead": "claude",
   "requireCrossReview": true,
-  "reviewPolicy": "cross-or-self",
+  "reviewPolicy": "cross",
+  "conflictResolvers": ["claude", "<author>"],
   "requireHumanMerge": false,
   "maxReviewRounds": 3,
   "maxLeadTriage": 1,

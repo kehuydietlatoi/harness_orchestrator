@@ -572,6 +572,12 @@ describe("step executors", () => {
   });
 
   describe("pickResolver", () => {
+    it("follows the configured order, skips unconfigured names and respects an empty list", () => {
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: ["missing", "<author>", "claude"] }, cwd)).toBe("codex");
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: [] }, cwd)).toBeNull();
+      markUnavailable("codex", { resetAt: null, reason: "x" }, cwd);
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: ["codex", "claude"] }, cwd)).toBe("claude");
+    });
     it("prefers claude, then the author, then nobody", () => {
       expect(pickResolver("codex", DEFAULT_CONFIG, cwd)).toBe("claude");
       markUnavailable("claude", { resetAt: null, reason: "x" }, cwd);

@@ -28,9 +28,8 @@ export function raiseEffort(tier: EffortTier): EffortTier {
   return EFFORT_TIERS[Math.min(EFFORT_TIERS.indexOf(tier) + 1, EFFORT_TIERS.length - 1)];
 }
 
-/** Who may review a PR: `cross` = only the other harness; `cross-or-self` additionally
- * lets the author's harness review in a fresh session while every other harness is
- * unavailable (usage limit), so one exhausted harness cannot block the other. */
+/** Reviews require premium different-family models. `cross-or-self` additionally
+ * permits a marked premium author review when no eligible cross reviewer is available. */
 export type ReviewPolicy = "cross" | "cross-or-self";
 
 export interface AdapterConfig {
@@ -108,6 +107,8 @@ export interface OrchConfig {
   baseBranch?: string;
   requireCrossReview: boolean;
   reviewPolicy: ReviewPolicy;
+  /** Ordered resolver harnesses; <author> expands to the task author. */
+  conflictResolvers: string[];
   requireHumanMerge: boolean;
   /** Fix/conflict rounds the autonomous loop may spend on one task before handing it to a human. */
   maxReviewRounds: number;
@@ -151,7 +152,8 @@ export const DEFAULT_CONFIG: OrchConfig = {
   agents: ["claude", "codex"],
   lead: "claude",
   requireCrossReview: true,
-  reviewPolicy: "cross-or-self",
+  reviewPolicy: "cross",
+  conflictResolvers: ["claude", "<author>"],
   requireHumanMerge: false,
   maxReviewRounds: 3,
   maxLeadTriage: 1,
@@ -246,6 +248,11 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     (!Number.isInteger(raw.reviewTimeoutMs) || (raw.reviewTimeoutMs as number) < 1)
   ) {
     throw new Error("reviewTimeoutMs must be a positive integer (milliseconds)");
+  }
+  if (raw.conflictResolvers !== undefined &&
+      (!Array.isArray(raw.conflictResolvers) ||
+       !raw.conflictResolvers.every((agent) => typeof agent === "string" && agent.trim().length > 0))) {
+    throw new Error("conflictResolvers must be an array of non-empty harness names or <author>");
   }
   const aliases = raw.tierAliases ?? {};
   if (typeof aliases !== "object" || Array.isArray(aliases) ||

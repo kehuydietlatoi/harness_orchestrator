@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
-import { formatReview } from "../src/board/approval.js";
+import { formatReview, parseReview } from "../src/board/approval.js";
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
@@ -22,6 +22,28 @@ beforeEach(() => {
   vi.mocked(gh.prChecksPass).mockResolvedValue({ pass: true, detail: "ok" });
 });
 describe("review and merge boundary", () => {
+  it("manual review writers include tier and model family", async () => {
+    await approve(62, "claude", "/repo", "ok", head, { cfg: DEFAULT_CONFIG });
+    await requestChanges(62, "claude", "/repo", "fix", { cfg: DEFAULT_CONFIG });
+    for (const call of vi.mocked(gh.recordPrReview).mock.calls) {
+      expect(parseReview({ id: 1, state: "COMMENTED", commit_id: head, body: call[2] }))
+        .toMatchObject({ tier: "lead", family: "anthropic" });
+    }
+  });
+  it("refuses ineligible manual approvals before changing records or labels", async () => {
+    for (const identity of [{ tier: "free" as const, family: "anthropic" },
+      { tier: "cheap" as const, family: "anthropic" }, { tier: "standard" as const, family: "openai" }]) {
+      await expect(approve(62, "claude", "/repo", "ok", head, { cfg: DEFAULT_CONFIG, identity })).rejects.toThrow(/premium/);
+    }
+    expect(gh.recordPrReview).not.toHaveBeenCalled();
+    expect(gh.editIssue).not.toHaveBeenCalled();
+  });
+  it.each(["free", "cheap"] as const)("never merges a %s approval", async (tier) => {
+    vi.mocked(gh.listPrReviews).mockResolvedValue([{ id: 1, state: "COMMENTED", commit_id: head,
+      body: formatReview({ reviewer: "claude", tier, family: "anthropic", pr: 62, head,
+        timestamp: "2026-10-18T12:00:00Z", decision: "approve" }, "ok") }]);
+    expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).ok).toBe(false);
+  });
   it("excludes a current-head request-changes decision from the queue", async () => {
     vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
     vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: ["agent:codex", "status:in-progress"] }]);

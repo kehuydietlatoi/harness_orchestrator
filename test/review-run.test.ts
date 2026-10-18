@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
-import { formatReview } from "../src/board/approval.js";
+import { formatReview, parseReview } from "../src/board/approval.js";
 
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
@@ -24,6 +24,7 @@ import {
 } from "../src/board/review-run.js";
 import { checkMergeGate } from "../src/board/review.js";
 
+const selfConfig = { ...DEFAULT_CONFIG, reviewPolicy: "cross-or-self" as const };
 const head = "a".repeat(40);
 const issue = { number: 38, title: "task", body: "do the thing", state: "OPEN", labels: ["agent:claude"], assignees: [] };
 const pr = { number: 62, title: "task", body: "Closes #38", state: "OPEN", headSha: head, headRefName: "task/38-task", htmlUrl: "" };
@@ -294,7 +295,7 @@ describe("runAutomatedReview", () => {
 
     it("uses a fresh checkout for each attempt when falling back to a self-review", async () => {
       const { deps, calls, checkouts } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
-      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+      await runAutomatedReview(62, selfConfig, cwd, {}, deps);
 
       expect(checkouts).toHaveLength(2);
       expect(calls.map((c) => c.runCwd)).toEqual(checkouts.map((c) => c.path));
@@ -399,7 +400,7 @@ describe("runAutomatedReview", () => {
 
     it("asks for the diff strictly, and only once even when it falls back to another reviewer", async () => {
       const { deps } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
-      await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+      await runAutomatedReview(62, selfConfig, cwd, {}, deps);
 
       expect(gh.prDiff).toHaveBeenCalledTimes(1);
       expect(gh.prDiff).toHaveBeenCalledWith(62, { cwd, strict: true });
@@ -415,9 +416,26 @@ describe("runAutomatedReview", () => {
     expect(gh.editIssue).toHaveBeenCalledWith(38, expect.objectContaining({ addLabels: ["status:in-progress"] }));
   });
 
+  it("runs free implementation tickets through a premium reviewer and records its identity", async () => {
+    vi.mocked(gh.getIssue).mockResolvedValue({ ...issue, labels: ["agent:claude", "effort:free"] });
+    const { deps, calls } = runner([{ text: approveText }]);
+    await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+    expect(calls[0].model).toEqual(DEFAULT_CONFIG.adapters.codex.models?.standard);
+    const body = vi.mocked(gh.recordPrReview).mock.calls[0][2];
+    expect(parseReview({ id: 1, state: "COMMENTED", commit_id: head, body })).toMatchObject({ tier: "standard", family: "openai" });
+  });
+
+  it("refuses a pinned same-family reviewer before starting a session", async () => {
+    const cfg = { ...DEFAULT_CONFIG, adapters: { ...DEFAULT_CONFIG.adapters,
+      codex: { ...DEFAULT_CONFIG.adapters.codex, family: "anthropic" } } };
+    const { deps, calls } = runner([{ text: approveText }]);
+    await expect(runAutomatedReview(62, cfg, cwd, { reviewer: "codex" }, deps)).rejects.toThrow(/not eligible/);
+    expect(calls).toHaveLength(0);
+  });
+
   it("falls back to a fresh self-review when the other harness hits its usage limit", async () => {
     const { deps, calls } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
-    const out = await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+    const out = await runAutomatedReview(62, selfConfig, cwd, {}, deps);
 
     expect(calls.map((c) => c.reviewer)).toEqual(["codex", "claude"]);
     expect(out).toMatchObject({ reviewer: "claude", mode: "self" });
@@ -427,17 +445,17 @@ describe("runAutomatedReview", () => {
 
   it("a fallback self-approval satisfies the merge gate, an unmarked author approval does not", async () => {
     const { deps } = runner([{ code: 1, raw: limitRaw }, { text: approveText }]);
-    await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+    await runAutomatedReview(62, selfConfig, cwd, {}, deps);
     const selfBody = vi.mocked(gh.recordPrReview).mock.calls[0][2];
     const review = (body: string) => [{ id: 1, state: "COMMENTED", commit_id: head, body }];
 
     vi.mocked(gh.listPrReviews).mockResolvedValue(review(selfBody));
-    expect((await checkMergeGate(62, DEFAULT_CONFIG, cwd)).ok).toBe(true);
+    expect((await checkMergeGate(62, selfConfig, cwd)).ok).toBe(true);
     expect((await checkMergeGate(62, { ...DEFAULT_CONFIG, reviewPolicy: "cross" }, cwd)).ok).toBe(false);
 
     const forged = formatReview({ reviewer: "claude", pr: 62, head, timestamp: "2026-10-06T12:00:00Z", decision: "approve" }, "ok");
     vi.mocked(gh.listPrReviews).mockResolvedValue(review(forged));
-    expect((await checkMergeGate(62, DEFAULT_CONFIG, cwd)).ok).toBe(false);
+    expect((await checkMergeGate(62, selfConfig, cwd)).ok).toBe(false);
   });
 
   it("does not self-review under the cross policy and says when to retry", async () => {
@@ -452,7 +470,7 @@ describe("runAutomatedReview", () => {
   it("skips a harness already known to be on cooldown without launching it", async () => {
     markUnavailable("codex", { resetAt: null, reason: "usage limit" }, cwd);
     const { deps, calls } = runner([{ text: approveText }]);
-    const out = await runAutomatedReview(62, DEFAULT_CONFIG, cwd, {}, deps);
+    const out = await runAutomatedReview(62, selfConfig, cwd, {}, deps);
 
     expect(calls.map((c) => c.reviewer)).toEqual(["claude"]);
     expect(out.mode).toBe("self");
@@ -466,7 +484,7 @@ describe("runAutomatedReview", () => {
 
   it("a pinned self-review is refused while the other harness is available", async () => {
     const { deps } = runner([{ text: approveText }]);
-    await expect(runAutomatedReview(62, DEFAULT_CONFIG, cwd, { reviewer: "claude" }, deps)).rejects.toThrow(/only a fallback/);
+    await expect(runAutomatedReview(62, selfConfig, cwd, { reviewer: "claude" }, deps)).rejects.toThrow(/only a fallback/);
     expect(gh.recordPrReview).not.toHaveBeenCalled();
   });
 
