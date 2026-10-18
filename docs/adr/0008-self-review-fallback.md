@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-10-06
+- Amended by [ADR-0011](0011-premium-family-review-and-conflict-resolvers.md): premium different-family approval; self-review opt-in.
 
 ## Context
 

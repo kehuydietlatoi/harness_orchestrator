@@ -1,3 +1,4 @@
+import { reviewIdentity } from "./review-identity.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
@@ -8,7 +9,7 @@ import { detectUsageLimit } from "../adapters/usage-limit.js";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
 import { getIssue, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
 import { hasDefinitionOfDone } from "../tasks/definition-of-done.js";
-import { recordRun, resolveTaskModel } from "../tasks/runner.js";
+import { recordRun } from "../tasks/runner.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize } from "../util/log-file.js";
@@ -330,13 +331,15 @@ export async function runAutomatedReview(
   const diff = await prDiff(prNum, { cwd, strict: true });
   if (diff.trim().length === 0) throw new Error(`PR #${prNum} has an empty diff; there is nothing to review`);
 
+  const identities = Object.fromEntries(cfg.agents.map((agent) => [agent, reviewIdentity(agent, issue, cfg)]));
+  const authorFamily = author ? reviewIdentity(author, issue, cfg, "author").family : undefined;
   const tried = new Set<string>();
   for (;;) {
     const now = deps.now();
     const pick = opts.reviewer
       ? { reviewer: opts.reviewer, mode: (opts.reviewer === author ? "self" : "cross") as ReviewMode }
       : pickReviewer({
-          author,
+          author, identities, authorFamily,
           agents: cfg.agents,
           policy: cfg.reviewPolicy,
           unavailable: new Set([...unavailableAgents(cfg.agents, cwd, now), ...tried]),
@@ -348,9 +351,13 @@ export async function runAutomatedReview(
       );
     }
     if (!cfg.agents.includes(pick.reviewer)) throw new Error(`'${pick.reviewer}' is not a configured agent.`);
+    const validPick = pickReviewer({ author, agents: opts.reviewer ? [opts.reviewer] : cfg.agents,
+      identities, authorFamily, policy: cfg.reviewPolicy, unavailable: new Set() });
+    if (!validPick) throw new Error("reviewer is not eligible for premium, different-family review");
     tried.add(pick.reviewer);
 
-    const model = resolveTaskModel(pick.reviewer, issue, cfg, { purpose: "review" });
+    const { model, tier, family } = identities[pick.reviewer];
+    if (!family) throw new Error("reviewer has no model family");
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
     const logName = `review-${prNum}-${pick.reviewer}`;
@@ -403,7 +410,7 @@ export async function runAutomatedReview(
     const current = await getPr(prNum, { cwd });
     if (current.headSha !== head) throw new Error(`PR #${prNum} changed during review; run it again`);
 
-    const recordOpts = { mode: pick.mode, cfg, head };
+    const recordOpts = { mode: pick.mode, cfg, head, identity: { tier, family } };
     if (verdict.decision === "approve") {
       await approve(prNum, pick.reviewer, cwd, withFollowups(verdict.notes, verdict.followups), head, recordOpts);
     } else {

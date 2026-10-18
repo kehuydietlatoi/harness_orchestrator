@@ -1,3 +1,4 @@
+import { reviewIdentity } from "./review-identity.js";
 import {
   type ChecksState,
   type Issue,
@@ -24,7 +25,7 @@ import { compareBranchToBase, resolveBaseBranch } from "../git/git.js";
 import { loadConfig } from "../config.js";
 import { deriveTaskState, type TaskFacts, type TaskState } from "../tasks/lifecycle.js";
 import { acceptedReviewers } from "./approval.js";
-import type { ReviewPolicy } from "../config.js";
+import type { OrchConfig, ReviewPolicy } from "../config.js";
 import { prFact, reviewFact, telemetryFact } from "../tasks/facts.js";
 import { existsSync } from "node:fs";
 
@@ -109,6 +110,7 @@ export function assemble(
   branches: ReadonlyMap<number, BranchObservation> = new Map(),
   reviews: ReadonlyMap<number, readonly PrReview[]> = new Map(),
   reviewPolicy?: ReviewPolicy,
+  reviewConfig?: OrchConfig,
 ): Snapshot {
   const locked = new Set(locks);
 
@@ -169,7 +171,7 @@ export function assemble(
       prNumber: pr?.number ?? null,
       prUrl: pr?.htmlUrl || null,
       prChecks: pr ? (checks.get(pr.number) ?? null) : null,
-      reviewedBy: acceptedReviewers(review, issueAgent(issue), reviewPolicy),
+      reviewedBy: acceptedReviewers(review, issueAgent(issue), reviewPolicy, reviewConfig && issueAgent(issue) ? reviewIdentity(issueAgent(issue)!, issue, reviewConfig, "author").family : undefined),
       locked: locked.has(issue.number),
       worktree: worktreeByIssue.get(issue.number) ?? null,
       latestRun: run
@@ -375,5 +377,5 @@ export async function buildSnapshot(cwd: string): Promise<Snapshot> {
   const [checks, reviews] = await Promise.all([
     reviewChecks(prs, issues, cwd), taskReviews(prs, issues, cwd, branches),
   ]);
-  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString(), repoUrl, checks, branches, reviews, cfg.reviewPolicy);
+  return assemble(issues, prs, locks, worktrees, runs, new Date().toISOString(), repoUrl, checks, branches, reviews, cfg.reviewPolicy, cfg);
 }

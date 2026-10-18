@@ -1,3 +1,4 @@
+import { reviewIdentity } from "./review-identity.js";
 import { existsSync } from "node:fs";
 import {
   type Issue,
@@ -17,7 +18,7 @@ import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
 import type { OrchConfig, ReviewPolicy } from "../config.js";
-import { acceptedReviewers, formatReview, reviewState, type ReviewMode } from "./approval.js";
+import { acceptedReviewers, defaultFamily, formatReview, reviewState, type ReviewMode, type ReviewIdentity } from "./approval.js";
 import { assertSelfReviewAllowed } from "./reviewer.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
@@ -35,7 +36,7 @@ export interface ReviewItem {
 }
 
 /** PRs awaiting review by `agent` (needs review, and not authored by that agent). */
-export async function reviewQueue(agent: string, cwd: string, policy?: ReviewPolicy): Promise<ReviewItem[]> {
+export async function reviewQueue(agent: string, cwd: string, policy?: ReviewPolicy, cfg?: OrchConfig): Promise<ReviewItem[]> {
   const [prs, open] = await Promise.all([
     listOpenPrs({ cwd }),
     listIssues({ cwd, state: "open" }).then(byNumber),
@@ -50,7 +51,7 @@ export async function reviewQueue(agent: string, cwd: string, policy?: ReviewPol
     if (author === agent) continue; // never review your own work
     if (!issue.labels.includes(REVIEW_NEEDED)) {
       const review = reviewState(await listPrReviews(pr.number, { cwd }), pr.number, pr.headSha);
-      if (review.changesRequested || acceptedReviewers(review, author, policy).length > 0) continue;
+      if (review.changesRequested || acceptedReviewers(review, author, policy, cfg && author ? reviewIdentity(author, issue, cfg, "author").family : undefined).length > 0) continue;
       if (!review.staleApproval && !issue.labels.some((label) => label.startsWith(REVIEWED_BY_PREFIX))) continue;
     }
     items.push({ pr, issue, author });
@@ -61,6 +62,7 @@ export async function reviewQueue(agent: string, cwd: string, policy?: ReviewPol
 /** How a review is being recorded; `self` needs the config to prove the fallback applies. */
 export interface ReviewOpts {
   mode?: ReviewMode;
+  identity?: ReviewIdentity;
   cfg?: OrchConfig;
   /** Head the decision was made against; the write is refused if the PR has moved. */
   head?: string;
@@ -80,12 +82,18 @@ async function resolvePrIssue(
   if (opts.mode === "self") {
     if (author !== agent) throw new Error(`self-review must be recorded by the author '${author ?? "?"}', not '${agent}'.`);
     if (!opts.cfg) throw new Error("self-review requires the orch config to verify the fallback applies.");
-    assertSelfReviewAllowed(agent, opts.cfg, cwd);
+    assertSelfReviewAllowed(agent, opts.cfg, cwd, new Date(), issue);
   } else if (author === agent) {
     throw new Error(`agent '${agent}' cannot review its own PR (authored by '${author}').`);
   }
   if (pr.state !== "OPEN" || !pr.headSha) throw new Error("review requires an open PR with a known head");
   return { issue, author, pr };
+}
+
+function recordIdentity(agent: string, issue: Issue, opts: ReviewOpts): ReviewIdentity {
+  const identity = opts.identity ?? (opts.cfg ? reviewIdentity(agent, issue, opts.cfg) : { tier: "standard" as const, family: defaultFamily(agent) });
+  if (!identity.family) throw new Error("review requires a known model family");
+  return { tier: identity.tier ?? "standard", family: identity.family };
 }
 
 /** Record a cross-review approval by `agent`. */
@@ -101,7 +109,13 @@ export async function approve(
   if (!reviewedHead || reviewedHead !== pr.headSha) {
     throw new Error("pass --head with the full commit reviewed; the PR head must still match");
   }
+  const identity = recordIdentity(agent, issue, opts);
+  const eligible = acceptedReviewers({ reviewers: [agent], selfReviewers: opts.mode === "self" ? [agent] : [],
+    reviewMetadata: { [agent]: identity } }, author, opts.cfg?.reviewPolicy,
+    opts.cfg && author ? reviewIdentity(author, issue, opts.cfg, "author").family : undefined);
+  if (!eligible.length) throw new Error("approval requires a premium different-family reviewer or an allowed premium self-review");
   await recordPrReview(prNum, reviewedHead, formatReview({
+    ...identity,
     reviewer: agent, pr: prNum, head: reviewedHead, timestamp: new Date().toISOString(), decision: "approve",
     ...(opts.mode === "self" ? { mode: "self" as const } : {}),
   }, note || `Approved by ${agent} via orch.`), { cwd });
@@ -124,6 +138,7 @@ export async function requestChanges(
   const { issue, author, pr } = await resolvePrIssue(prNum, agent, cwd, opts);
   if (opts.head && opts.head !== pr.headSha) throw new Error("the PR head changed since it was reviewed; review it again");
   await recordPrReview(prNum, pr.headSha, formatReview({
+    ...recordIdentity(agent, issue, opts),
     reviewer: agent, pr: prNum, head: pr.headSha, timestamp: new Date().toISOString(), decision: "request-changes",
     ...(opts.mode === "self" ? { mode: "self" as const } : {}),
   }, note), { cwd });
@@ -155,16 +170,13 @@ export function reviewSatisfied(params: {
   author: string | null;
   reviewers: readonly string[];
   selfReviewers?: readonly string[];
+  reviewMetadata?: Readonly<Record<string, ReviewIdentity>>;
+  authorFamily?: string;
   reviewPolicy?: ReviewPolicy;
   agents: readonly string[];
 }): boolean {
-  const cross = params.reviewers.some((r) => r !== params.author && params.agents.includes(r));
-  const self =
-    params.reviewPolicy === "cross-or-self" &&
-    params.author !== null &&
-    params.agents.includes(params.author) &&
-    (params.selfReviewers ?? []).includes(params.author);
-  return cross || self;
+  const eligible = acceptedReviewers({ ...params, selfReviewers: params.selfReviewers ?? [] }, params.author, params.reviewPolicy, params.authorFamily);
+  return eligible.some((r) => params.agents.includes(r));
 }
 
 /**
@@ -176,6 +188,8 @@ export function evaluateGate(params: {
   reviewers: string[];
   /** Reviewers whose current approval was a fallback self-review. */
   selfReviewers?: string[];
+  reviewMetadata?: Readonly<Record<string, ReviewIdentity>>;
+  authorFamily?: string;
   reviewPolicy?: ReviewPolicy;
   agents: string[];
   requireCrossReview: boolean;
@@ -188,7 +202,7 @@ export function evaluateGate(params: {
   if (params.requireCrossReview) {
     if (!reviewSatisfied(params)) {
       reasons.push(
-        `needs approval from the other harness (author='${params.author ?? "?"}', reviewers=[${params.reviewers.join(", ") || "none"}])`,
+        `needs approval from the other harness at standard/lead with a different family (author='${params.author ?? "?"}', reviewers=[${params.reviewers.join(", ") || "none"}])`,
       );
     }
   }
@@ -225,6 +239,8 @@ export async function checkMergeGate(
       author,
       reviewers: approvals?.reviewers ?? [],
       selfReviewers: approvals?.selfReviewers ?? [],
+      reviewMetadata: approvals?.reviewMetadata,
+      authorFamily: author ? reviewIdentity(author, issue, cfg, "author").family : undefined,
       reviewPolicy: cfg.reviewPolicy,
       agents: cfg.agents,
       requireCrossReview: cfg.requireCrossReview,

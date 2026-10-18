@@ -6,10 +6,21 @@ import { availabilityPath, markUnavailable } from "../src/board/availability.js"
 import { assertSelfReviewAllowed, pickReviewer } from "../src/board/reviewer.js";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
 
+const selfConfig = { ...DEFAULT_CONFIG, reviewPolicy: "cross-or-self" as const };
 const agents = ["claude", "codex"];
 const none = new Set<string>();
 
 describe("pickReviewer", () => {
+  it("skips low-tier and same-family harnesses and rejects cheap self-review", () => {
+    const params = { author: "claude", agents: ["opencode", "codex", "claude"], policy: "cross-or-self" as const,
+      unavailable: none, identities: { opencode: { tier: "lead" as const, family: "anthropic" },
+        codex: { tier: "cheap" as const, family: "openai" }, claude: { tier: "standard" as const, family: "anthropic" } } };
+    expect(pickReviewer(params)).toEqual({ reviewer: "claude", mode: "self" });
+    expect(pickReviewer({ ...params, policy: "cross" })).toBeNull();
+    expect(pickReviewer({ ...params, identities: { ...params.identities, claude: { tier: "free", family: "anthropic" } } })).toBeNull();
+    expect(pickReviewer({ ...params, identities: { ...params.identities, codex: { tier: "standard", family: "openai" } } }))
+      .toEqual({ reviewer: "codex", mode: "cross" });
+  });
   it("prefers the other harness", () => {
     expect(pickReviewer({ author: "claude", agents, policy: "cross-or-self", unavailable: none }))
       .toEqual({ reviewer: "codex", mode: "cross" });
@@ -46,12 +57,12 @@ describe("assertSelfReviewAllowed", () => {
   });
 
   it("refuses while the other harness is available", () => {
-    expect(() => assertSelfReviewAllowed("claude", DEFAULT_CONFIG, cwd)).toThrow(/only a fallback.*'codex' is available/);
+    expect(() => assertSelfReviewAllowed("claude", selfConfig, cwd)).toThrow(/only a fallback.*'codex' is available/);
   });
 
   it("allows once every other harness is on cooldown", () => {
     markUnavailable("codex", { resetAt: null, reason: "usage limit" }, cwd);
-    expect(() => assertSelfReviewAllowed("claude", DEFAULT_CONFIG, cwd)).not.toThrow();
+    expect(() => assertSelfReviewAllowed("claude", selfConfig, cwd)).not.toThrow();
   });
 
   it("refuses when the policy is cross, even during a cooldown", () => {
@@ -61,7 +72,7 @@ describe("assertSelfReviewAllowed", () => {
   });
 
   it("allows a single-harness setup, which has no other reviewer", () => {
-    const cfg: OrchConfig = { ...DEFAULT_CONFIG, agents: ["claude"] };
+    const cfg: OrchConfig = { ...selfConfig, agents: ["claude"] };
     expect(() => assertSelfReviewAllowed("claude", cfg, cwd)).not.toThrow();
   });
 });
