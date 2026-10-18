@@ -46,8 +46,8 @@ describe("selectUnassigned", () => {
       selectUnassigned([
         blocked,
         issue(2, ["agent:claude"]),
-        issue(3, ["effort:hard"]),
-        issue(4, ["agent:codex", "effort:easy"]),
+        issue(3, ["effort:lead"]),
+        issue(4, ["agent:codex", "effort:standard"]),
         closed,
       ]).map((candidate) => candidate.number),
     ).toEqual([1]);
@@ -129,29 +129,29 @@ describe("applyPlan", () => {
     const cfg = { agents: ["claude", "codex"] } as Pick<OrchConfig, "agents">;
     const result = applyPlan(
       [
-        { issue: 1, agent: "claude", effort: "hard" },
-        { issue: 2, agent: "codex", effort: "easy" },
-        { issue: 3, agent: "codex", effort: "hard" },
-        { issue: 4, agent: "other", effort: "easy" },
+        { issue: 1, agent: "claude", effort: "lead" },
+        { issue: 2, agent: "codex", effort: "standard" },
+        { issue: 3, agent: "codex", effort: "lead" },
+        { issue: 4, agent: "other", effort: "standard" },
         { issue: 5, agent: "codex", effort: "huge" },
-        { issue: 99, agent: "codex", effort: "easy" },
+        { issue: 99, agent: "codex", effort: "standard" },
       ],
       [
         issue(1),
         issue(2, ["agent:claude"]),
-        issue(3, ["effort:easy"]),
+        issue(3, ["effort:standard"]),
         issue(4),
         issue(5),
       ],
       cfg,
     );
 
-    expect(result.writes).toEqual([{ issue: 1, agent: "claude", effort: "hard" }]);
+    expect(result.writes).toEqual([{ issue: 1, agent: "claude", effort: "lead" }]);
     expect(result.skips).toEqual([
       { issue: 2, reason: "already pinned" },
       { issue: 3, reason: "already pinned" },
       { issue: 4, reason: "invalid agent 'other' (expected one of: claude, codex)" },
-      { issue: 5, reason: "invalid effort 'huge' (expected easy or hard)" },
+      { issue: 5, reason: "invalid effort 'huge' (expected free, cheap, standard, or lead)" },
       { issue: 99, reason: "open issue not found" },
     ]);
   });

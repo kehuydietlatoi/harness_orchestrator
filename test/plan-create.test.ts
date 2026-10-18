@@ -246,7 +246,7 @@ describe("createFromPlan recovery", () => {
 
 describe("plan brief and routing at creation", () => {
   const routed: Ticket[] = [
-    { id: "a", title: "First", body: "one", agent: "codex", effort: "hard" },
+    { id: "a", title: "First", body: "one", agent: "codex", effort: "lead" },
     { id: "b", title: "Second", body: "two", dependsOn: ["a"], agent: "claude" },
     { id: "c", title: "Third", body: "three", dependsOn: ["b"] },
   ];
@@ -284,9 +284,9 @@ describe("plan brief and routing at creation", () => {
     const result = await createFromPlan(routed, CWD, h.deps, { agents: ["claude", "codex"], brief });
 
     expect(result.failed).toEqual([]);
-    expect(h.ensured).toEqual([["agent:codex", "effort:hard", "agent:claude"]]);
+    expect(h.ensured).toEqual([["agent:codex", "effort:lead", "agent:claude"]]);
     expect(h.creates.map((c) => c.labels)).toEqual([
-      ["status:todo", "agent:codex", "effort:hard"],
+      ["status:todo", "agent:codex", "effort:lead"],
       ["status:todo", "agent:claude"],
       ["status:todo"],
     ]);
@@ -294,7 +294,7 @@ describe("plan brief and routing at creation", () => {
 
   it("drops routing to an unconfigured agent, creating that issue unrouted", async () => {
     const h = routingHarness();
-    await createFromPlan([{ title: "x", agent: "gemini", effort: "easy" }], CWD, h.deps, { agents: ["claude"] });
+    await createFromPlan([{ title: "x", agent: "gemini", effort: "standard" }], CWD, h.deps, { agents: ["claude"] });
     expect(h.creates[0].labels).toEqual(["status:todo"]);
     expect(h.ensured).toEqual([]);
   });
@@ -347,7 +347,7 @@ describe("plan brief and routing at creation", () => {
     expect(neutralizeReferences("see #5; Depends-on: #6, #7\n  after: #8\nfinish after #9")).toBe(
       "see #5; Depends-on: issue 6, issue 7\n  after: issue 8\nfinish after #9",
     );
-    expect(creationLabels({ effort: "hard" })).toEqual(["status:todo"]);
+    expect(creationLabels({ effort: "lead" })).toEqual(["status:todo"]);
   });
 });
 

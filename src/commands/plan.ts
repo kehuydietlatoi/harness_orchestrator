@@ -111,7 +111,7 @@ async function runPipeline(
   const result = await runPlanPipeline(
     { tickets, brief, agents: cfg.agents, run },
     {
-      create: (t, o) => createFromPlan(t, cwd, undefined, o),
+      create: (t, o) => createFromPlan(t, cwd, undefined, { ...o, tierAliases: cfg.tierAliases }),
       report: printCreateResult,
       route: (only) => autoRoute(cfg, cwd, { only }),
       autopilot: (issues) => autopilotCommand({ issues: issues.join(",") }),
@@ -136,7 +136,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   if (opts.draft) {
     const cfg = loadConfig(cwd);
     const tickets = await runPlanner(opts.draft, loadPlanSkill(), await repoContext(cwd), cfg, cwd);
-    resolvePlan(tickets).warnings.forEach((w) => console.error(pc.dim(`warning: ${w}`)));
+    resolvePlan(tickets, { tierAliases: cfg.tierAliases }).warnings.forEach((w) => console.error(pc.dim(`warning: ${w}`)));
     process.stdout.write(`${JSON.stringify(tickets, null, 2)}\n`);
     return;
   }
@@ -146,8 +146,10 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
     const tickets = parseTickets(readFileSync(file, "utf8"));
     const brief = readBrief(opts.brief);
     // Agents come from config when there is one; a bare --dry-run needs no repo.
-    const agents = opts.dryRun && !configExists(cwd) ? undefined : loadConfig(cwd).agents;
-    const plan = resolvePlan(tickets, { agents, brief });
+    const cfg = opts.dryRun && !configExists(cwd) ? undefined : loadConfig(cwd);
+    const agents = cfg?.agents;
+    const tierAliases = cfg?.tierAliases;
+    const plan = resolvePlan(tickets, { agents, brief, tierAliases });
 
     // --dry-run: pure validate + preview, write nothing (no repo/config needed).
     if (opts.dryRun) {
@@ -164,7 +166,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
       await runPipeline(tickets, brief, loadConfig(cwd), cwd, opts.run !== false);
       return;
     }
-    printCreateResult(await createFromPlan(tickets, cwd, undefined, { agents, brief }));
+    printCreateResult(await createFromPlan(tickets, cwd, undefined, { agents, brief, tierAliases }));
     return;
   }
 
@@ -208,7 +210,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   const briefWritten = existsSync(briefPath) && statSync(briefPath).mtimeMs >= started;
   const brief = briefWritten ? readBrief(briefPath) : undefined;
   const tickets = parseTickets(readFileSync(outputPath, "utf8"));
-  const plan = resolvePlan(tickets, { agents: cfg.agents, brief });
+  const plan = resolvePlan(tickets, { agents: cfg.agents, brief, tierAliases: cfg.tierAliases });
   console.log("");
   printPreview(plan, brief, "");
   console.log(pc.green(`\nSaved ${plan.tickets.length} ticket(s) to ${outputPath}${briefWritten ? ` and the brief to ${briefPath}` : ""}.`));

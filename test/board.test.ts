@@ -28,8 +28,8 @@ describe("parseDeps", () => {
 
 describe("issueEffort", () => {
   it.each([
-    ["easy", "easy"],
-    ["hard", "hard"],
+    ["easy", "standard"],
+    ["hard", "lead"],
   ])("parses effort:%s", (tier, expected) => {
     expect(issueEffort(issue(1, { labels: [`effort:${tier}`] }))).toBe(expected);
   });

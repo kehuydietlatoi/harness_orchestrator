@@ -31,7 +31,7 @@ const issue = (number: number, labels: string[], body = "", state = "OPEN"): Iss
 });
 
 const PLAN: Ticket[] = [
-  { id: "model", title: "Add the data model", body: "Define the types.", files: ["src/model.ts"], agent: "claude", effort: "easy" },
+  { id: "model", title: "Add the data model", body: "Define the types.", files: ["src/model.ts"], agent: "claude", effort: "standard" },
   { id: "api", title: "Expose it over the API", dependsOn: ["model"], files: ["src/api.ts"] },
 ];
 
@@ -278,8 +278,8 @@ const routingJudge = routingScenario(
   "Judge routes the backlog",
   "The lead judge returns a plan; valid entries fill in blank agent:/effort: labels.",
   [
-    { issue: 51, agent: "claude", effort: "hard", rationale: "Cross-cutting refactor; the stronger tier fits." },
-    { issue: 52, agent: "codex", effort: "easy", rationale: "A small localized change." },
+    { issue: 51, agent: "claude", effort: "lead", rationale: "Cross-cutting refactor; the stronger tier fits." },
+    { issue: 52, agent: "codex", effort: "standard", rationale: "A small localized change." },
   ],
   "state.ready",
 );
@@ -288,7 +288,7 @@ const routingSkip = routingScenario(
   "routing-skip",
   "Judge entry skipped",
   "An entry naming an unconfigured agent is skipped at write time; the issue stays unrouted.",
-  [{ issue: 51, agent: "gemini", effort: "hard", rationale: "Wrong agent." }],
+  [{ issue: 51, agent: "gemini", effort: "lead", rationale: "Wrong agent." }],
   "route.skipped",
 );
 
