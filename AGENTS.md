@@ -9,6 +9,8 @@ _(add project-specific facts, gotchas, and architectural decisions below)_
 
 - **Autopilot Board seam (#118)**: `src/github/board.ts` defines `Board` and its production delegate `ghBoard`. `observeTasks(cfg, cwd, opts, board)` routes GitHub observations through the optional fourth argument (defaults to `ghBoard`); existing `github.ts` exports and other consumers retain their contracts.
 
+- **OpenCode permissions (#119)**: every run gets a unique `OPENCODE_CONFIG` under the project state directory, outside the worktree (an `ORCH_HOME` inside the checkout is rejected). The config is removed after the child exits. OpenCode needs an explicit provider/model and a native executable for direct `shell:false` spawning; implementation and read-only profiles use deterministic allow/deny rules because interactive permission prompts can silently end a run with exit 0. Success is the reducer's `completed` outcome, and only the current run's appended log is reduced.
+
 - **OpenCode JSONL (#116)**: `src/adapters/opencode-events.ts` owns the pure OpenCode 1.19.3 argv/reducer contract, pinned by copied fixture snapshots. Prompts go on stdin; resume alone adds `-s`. Tool errors can recover to a final `stop`, while stderr `auto-rejecting` or a missing final `stop` means incomplete even at exit 0. Usage sums step finishes; requests count step starts.
 
 - **Flow label visibility (#110)**: `public/index.html` keeps state-driven edge-label visibility in the extractable pure `flow-label-visibility` block; hover/focus visibility stays in CSS. Hit paths share the rendered edge geometry and must keep their transparent 10px stroke even on highlighted/active edges.

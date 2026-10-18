@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { log } from "../util/log.js";
+import { reduceOpencode } from "../adapters/opencode-events.js";
 
 /** Which part of the task loop produced a run record (absent on records written before the loop). */
 export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "triage";
@@ -145,6 +146,14 @@ function parseLine(line: string): JsonObject | null {
 export function parseUsage(logText: string, agent: string): RunUsage {
   try {
     const normalizedAgent = agent.toLowerCase();
+    if (normalizedAgent === "opencode") {
+      const usage = reduceOpencode({ lines: logText, stderr: "", exitCode: 0, timedOut: false }).usage;
+      return {
+        tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
+        tokensTotal: usage.tokensIn + usage.tokensOut,
+        cachedInputTokens: usage.cachedInputTokens, costUsd: usage.costUsd,
+      };
+    }
     let latest = emptyUsage();
 
     for (const line of logText.split(/\r?\n/)) {
