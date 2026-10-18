@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Coordinator completion (#139)**: completed implementations with no commits and dirty task worktrees run trusted coordinator-loaded `verify` argv arrays (never issue text; `exec`, shell false, five minutes per command), then stage/commit with issue title/number and worker/model attribution and use normal `submit`. Failed checks retain worktree and lock, project needs-attention, and comment failing argv/output tail. Clean/no-commit runs retain the prior recovery path. OpenCode adds literal configured verify commands only to writable profiles; shell/glob syntax is not widened into permission patterns and push remains denied.
+
 - **Implementation cascade (#124)**: optional `tierMembers` enables an ordered fallback ladder; absent config keeps existing retry/wait behavior. `nextHop` moves forward through members and tiers, applying `validateRoute` to the resolved model/family. A hop requires the runner's no-commits/no-PR/safe-cleanup/lock-release proofs. `model:<id>` selects a configured member (including effort/family) on the next claim; abandon and tier-raising triage clear it. Independent reviewers keep their own premium model. Successful relabels emit one `cascade.hop` event and `cascadeFrom`/`cascadeTo` on the implement run; failed requeues emit neither.
 
 

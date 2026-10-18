@@ -22,6 +22,17 @@ const model = { model: "opencode/deepseek-v4.1-flash-free", effort: "high" };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("OpenCode adapter", () => {
+  it("allows only literal configured verify commands in implement mode", () => {
+    const verify = [["node", "--test"], ["npm", "test"], ["git", "push"], ["node", "*.js"]];
+    const rules = opencodePermissions(false, verify).bash;
+    expect(rules["node --test"]).toBe("allow");
+    expect(rules["npm test"]).toBe("allow");
+    expect(rules["node --test *"]).toBeUndefined();
+    expect(rules["node *.js"]).toBeUndefined();
+    expect(Object.keys(rules).at(-1)).toBe("git push*");
+    expect(rules["git push*"]).toBe("deny");
+    expect(opencodePermissions(true, verify).bash["node --test"]).toBeUndefined();
+  });
   it("pings the slug with Reply OK on stdin and a 60 second timeout", async () => {
     const cwd = temp();
     const spawn: typeof spawnLogged = vi.fn(async (_cmd, args, opts) => {
@@ -54,6 +65,7 @@ describe("OpenCode adapter", () => {
 
   it("sends stdin and resume argv directly, with a unique external config per run", async () => {
     const worktree = temp();
+    const verify = [["node", "--test"], ["npm", "test"]];
     const configs: string[] = [];
     const spawn: typeof spawnLogged = vi.fn(async (cmd, args, opts) => {
       expect(cmd).toBe("C:/tools/opencode.exe");
@@ -63,12 +75,12 @@ describe("OpenCode adapter", () => {
       const rel = relative(worktree, path);
       expect(isAbsolute(path)).toBe(true);
       expect(rel.startsWith("..") || isAbsolute(rel)).toBe(true);
-      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ permission: opencodePermissions() });
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ permission: opencodePermissions(false, verify) });
       configs.push(path);
       appendFileSync(opts!.logFile!, fixture("success-edit"));
       return { code: 0, durationMs: 12, timedOut: false };
     });
-    const adapter = new OpencodeAdapter({ cmd: "C:/tools/opencode.exe" }, spawn);
+    const adapter = new OpencodeAdapter({ cmd: "C:/tools/opencode.exe" }, spawn, verify);
     for (let i = 0; i < 2; i++) {
       const result = await adapter.runTask({ issue: 119, agent: "opencode", worktree, prompt: "fix toy\nwith `quotes`", model, resumeSession: "ses_previous" });
       expect(result).toMatchObject({ ok: true, code: 0, durationMs: 12, sessionId: reduceOpencode({ lines: fixture("success-edit"), stderr: "", exitCode: 0, timedOut: false }).sessionId });

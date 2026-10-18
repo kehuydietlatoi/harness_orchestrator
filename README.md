@@ -262,6 +262,20 @@ optional: when omitted, orch uses GitHub's default branch. Set it explicitly
 locally or as `origin/<name>` before work can be claimed, compared, repaired,
 or submitted.
 
+Optional `verify` supplies trusted local checks, for example
+`"verify": [["node", "--test"], ["npm", "test"]]`. After a successful worker run
+leaves uncommitted changes and no commits, the coordinator runs these argv arrays
+in the task worktree with no shell and a five-minute timeout per command, then
+commits and submits. A failed check retains the worktree and lock, flags
+`needs-attention`, and comments the failing command and output tail. Omit `verify`
+to commit and submit without local checks; review and CI still gate merging.
+Commands never come from issue text. On Windows, use a native executable (for npm,
+use `node` with the path to `npm-cli.js`), because direct spawning cannot run `.cmd`
+shims. OpenCode implementation runs also allow literal configured commands for
+self-checks; commands needing shell quoting or containing glob syntax stay denied
+in the worker profile. Read-only runs receive no additional verify permissions,
+and `git push*` stays denied.
+
 `effort:easy` and `effort:hard` select a `{ model, effort }` spec per adapter: Claude
 gets `--model` and `--effort`, Codex gets `-m` and `-c model_reasoning_effort=`. Either
 field may be omitted to defer to the harness's own default. Both harnesses pin their
