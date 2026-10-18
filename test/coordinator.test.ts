@@ -689,8 +689,9 @@ describe("runAutopilot", () => {
       for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
 
       expect(done).toBe(true);
-      expect(w.calls.slice(0, 2)).toEqual(["fix:review:38", "fix:ci:38"]);
-      expect((await run).escalated).toEqual([]); // two failures, but of two different steps
+      // A failed review fix must not skip the first CI attempt; that CI failure then hands off.
+      expect(w.calls).toEqual(["fix:review:38", "fix:ci:38", "escalate:38"]);
+      expect((await run).escalated).toEqual([38]);
     });
   });
 
@@ -1325,6 +1326,20 @@ describe("runAutopilot with lead triage", () => {
 describe("cascade scheduling", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+  it("red-ci-probe escalates after a failed fix without raising tier or model", async () => {
+    const w = new World();
+    w.maxTriages = 1;
+    const route = { agent: "codex", tier: "lead", model: "gpt-6.1-sol" } as const;
+    w.add(pr(38, { checks: "fail", nextCascade: route,
+      overrides: { fix: [{ signal: "step.failed", detail: "the new commits change no files" }] },
+    }));
+    const summary = await drive(w);
+    expect(w.calls).toEqual(["fix:ci:38", "escalate:38"]);
+    expect(w.prs.get(38)?.nextCascade).toEqual(route);
+    expect(w.events.some((event) => event.type === "cascade.hop" || event.type === "fix.pushed")).toBe(false);
+    expect(summary).toMatchObject({ merged: [], escalated: [38], triaged: [] });
+  });
+
   it.each([
     ["in-run", "codex"], ["pre-claim", "codex"],
     ["in-run", "claude"], ["pre-claim", "claude"],
