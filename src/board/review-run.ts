@@ -13,7 +13,7 @@ import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize } from "../util/log-file.js";
 import { normalizeFollowups, withFollowups, type ReviewMode } from "./approval.js";
-import { markUnavailable, unavailableAgents } from "./availability.js";
+import { availabilityKey, markUnavailable, unavailableAgents, unavailableUntil } from "./availability.js";
 import { issueAgent } from "./board.js";
 import { approve, prIssueNumber, requestChanges } from "./review.js";
 import { pickReviewer } from "./reviewer.js";
@@ -339,7 +339,12 @@ export async function runAutomatedReview(
           author,
           agents: cfg.agents,
           policy: cfg.reviewPolicy,
-          unavailable: new Set([...unavailableAgents(cfg.agents, cwd, now), ...tried]),
+          unavailable: new Set([
+            ...unavailableAgents(cfg.agents, cwd, now), ...tried,
+            ...cfg.agents.filter(a => a === "opencode" && unavailableUntil(
+              availabilityKey(a, resolveTaskModel(a, issue, cfg, { purpose: "review" })?.model), cwd, now,
+            ) !== null),
+          ]),
         });
     if (!pick) {
       throw new NoReviewerError(
@@ -351,6 +356,10 @@ export async function runAutomatedReview(
     tried.add(pick.reviewer);
 
     const model = resolveTaskModel(pick.reviewer, issue, cfg, { purpose: "review" });
+    const key = availabilityKey(pick.reviewer, model?.model);
+    if (pick.reviewer === "opencode" && unavailableUntil(key, cwd, now)) {
+      throw new Error(`'${key}' is paused (endpoint cooldown)`);
+    }
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
     const logName = `review-${prNum}-${pick.reviewer}`;
@@ -383,7 +392,7 @@ export async function runAutomatedReview(
     if (!verdict) {
       const limit = detectUsageLimit(run.raw, now);
       if (limit) {
-        const until = markUnavailable(pick.reviewer, { resetAt: limit.resetAt, reason: limit.message }, cwd, now);
+        const until = markUnavailable(key, { resetAt: limit.resetAt, reason: limit.message }, cwd, now);
         log.warn(`'${pick.reviewer}' hit its usage limit; unavailable until ${until.toISOString()}`);
         if (opts.reviewer) throw new Error(`'${pick.reviewer}' is out of usage until ${until.toISOString()}`);
         continue; // re-pick: another harness, or the author's own fresh session

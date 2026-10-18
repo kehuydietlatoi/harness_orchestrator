@@ -36,6 +36,7 @@ export type ReviewPolicy = "cross" | "cross-or-self";
 export interface AdapterConfig {
   cmd: string;
   family?: string;
+  pricingMode?: "api" | "subscription" | "quota";
   models?: Record<EffortTier, ModelSpec>;
   /**
    * What this adapter runs when it acts as the configured `lead`: the decision points
@@ -44,6 +45,10 @@ export interface AdapterConfig {
    * When omitted, the lead falls back to its `lead` tier.
    */
   leadModel?: ModelSpec;
+}
+
+export function resolvePricingMode(agent: string, cfg: Pick<OrchConfig, "adapters">): NonNullable<AdapterConfig["pricingMode"]> {
+  return cfg.adapters[agent]?.pricingMode ?? (agent === "opencode" ? "quota" : agent === "codex" ? "subscription" : "api");
 }
 
 /** Render a spec for telemetry/logs as `model@effort` (either half may be absent). */
@@ -164,6 +169,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
     claude: {
       cmd: "claude",
       family: "anthropic",
+      pricingMode: "api",
       models: {
         free: { model: "claude-sonnet-5-5", effort: "medium" },
         cheap: { model: "claude-sonnet-5-5", effort: "medium" },
@@ -175,6 +181,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
     codex: {
       cmd: "codex",
       family: "openai",
+      pricingMode: "subscription",
       models: {
         free: { model: "gpt-6.1-sol", effort: "medium" },
         cheap: { model: "gpt-6.1-sol", effort: "medium" },
@@ -271,6 +278,10 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
     const defaults = DEFAULT_CONFIG.adapters[agent];
     const merged = { ...defaults, ...override };
+    merged.pricingMode ??= agent === "opencode" ? "quota" : agent === "codex" ? "subscription" : "api";
+    if (!["api", "subscription", "quota"].includes(merged.pricingMode)) {
+      throw new Error(`adapters.${agent}.pricingMode must be api, subscription, or quota`);
+    }
     if (defaults?.models || override.models) {
       // Merge defaults, aliased legacy keys, then canonical keys per field.
       const models: Partial<Record<EffortTier, ModelSpec>> = {};

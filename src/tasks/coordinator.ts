@@ -2,10 +2,10 @@ import { eligibleIssues, issueAgent } from "../board/board.js";
 import { listIssues, type Issue } from "../github/github.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
 import type { OrchConfig } from "../config.js";
-import { unavailableUntil } from "../board/availability.js";
+import { availabilityKey, unavailableUntil } from "../board/availability.js";
 import { appendEvent, type OrchEvent } from "./events.js";
 import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
-import { processNext, type RunSummary } from "./runner.js";
+import { processNext, resolveTaskModel, type RunSummary } from "./runner.js";
 import {
   executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
 } from "./step-exec.js";
@@ -128,9 +128,19 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
     blockedBacklog: async () => {
       const paused = new Set(cfg.agents.filter((a) => unavailableUntil(a, cwd) !== null));
-      if (paused.size === 0) return [];
+      if (paused.size === 0 && !cfg.agents.includes("opencode")) return [];
       const eligible = await eligibleIssues(cwd);
-      return eligible.filter((i) => inScope(i.number) && paused.has(issueAgent(i) ?? "")).map((i) => i.number);
+      return eligible.filter((i) => {
+        if (!inScope(i.number)) return false;
+        const agent = issueAgent(i) ?? "";
+        if (paused.has(agent)) return true;
+        if (agent !== "opencode") return false;
+        try {
+          return unavailableUntil(availabilityKey(agent, resolveTaskModel(agent, i, cfg)?.model), cwd) !== null;
+        } catch {
+          return false; // A disallowed route is not work waiting for a cooldown.
+        }
+      }).map((i) => i.number);
     },
     // One batched open-issue read: a scoped issue absent from it is closed (or gone), i.e. finished.
     remaining: async () => {

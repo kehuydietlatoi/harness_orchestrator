@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { detectUsageLimit, nextClockTime } from "../src/adapters/usage-limit.js";
 
 // Real Codex failure lines captured from logs/issue-66.jsonl.
@@ -30,6 +31,29 @@ describe("nextClockTime", () => {
 });
 
 describe("detectUsageLimit", () => {
+  it("cools down the OpenCode retryable 503 fixture for ten minutes", () => {
+    const fixture = readFileSync(new URL("./fixtures/opencode-1.19.3/error-503-retryable.jsonl", import.meta.url), "utf8");
+    expect(detectUsageLimit(fixture, noon)?.resetAt).toBe(new Date(noon.getTime() + 600_000).toISOString());
+  });
+
+  it.each([
+    [{ "retry-after": "120" }, 120_000],
+    [{ "Retry-After": 120 }, 120_000],
+    [{}, 600_000],
+    [{ "retry-after": "invalid" }, 600_000],
+    [{ "x-ratelimit-reset": String(noon.getTime() / 1000 + 180) }, 180_000],
+    [{ "retry-after": new Date(noon.getTime() + 240_000).toUTCString() }, 240_000],
+  ])("uses 429 response headers %j", (responseHeaders, duration) => {
+    const event = { type: "error", error: { data: { statusCode: 429, responseHeaders } } };
+    expect(detectUsageLimit(JSON.stringify(event), noon)?.resetAt).toBe(new Date(noon.getTime() + duration).toISOString());
+  });
+
+  it("recognizes retryable errors without a status, but ignores auth and tool errors", () => {
+    expect(detectUsageLimit('{"type":"error","error":{"data":{"isRetryable":true}}}', noon)?.resetAt)
+      .toBe(new Date(noon.getTime() + 600_000).toISOString());
+    expect(detectUsageLimit('{"type":"error","error":{"data":{"statusCode":401}}}', noon)).toBeNull();
+    expect(detectUsageLimit('{"type":"tool_use","error":{"data":{"statusCode":503}}}', noon)).toBeNull();
+  });
   it("recognises a Codex usage-limit failure and its reset time", () => {
     const limit = detectUsageLimit(codexLog, noon);
     expect(limit?.message).toContain("hit your usage limit");

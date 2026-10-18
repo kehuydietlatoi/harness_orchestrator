@@ -300,9 +300,18 @@ Both appear separately in plan previews; created bodies render `Depends-on:` and
 `After:` references. File ownership remains a hint, not proof of independence.
 
 Completed runs append best-effort telemetry to `~/.orch/<project>/runs.jsonl`.
-Cost uses harness-reported data or configured per-million-token `pricing` rates;
-Codex cost remains null by default because this project treats it as subscription
-usage. Telemetry informs routing, but routing quality optimization is not yet
+Each adapter accepts `pricingMode`: `api` (Claude's default) uses reported costs
+or configured per-million-token `pricing` rates; `subscription` (Codex's default)
+leaves unreported costs unknown; `quota` (OpenCode's default) records zero dollar
+cost and the reducer's request count. Quota requests also accumulate by UTC date
+and endpoint in `~/.orch/<project>/quota.json`.
+
+OpenCode 429 and retryable/server errors cool down only the resolved
+`provider/model`, so other models remain available. A 429 uses `retry-after`
+(seconds or HTTP date), then `x-ratelimit-reset` (Unix seconds), with a ten-minute
+fallback. Server/retryable errors use ten minutes. Cooldowns live under
+`opencode:<provider/model>` keys in `availability.json`; safely recoverable tasks
+return to the queue. Telemetry informs routing, but routing quality optimization is not yet
 implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 
 ## Design

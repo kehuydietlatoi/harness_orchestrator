@@ -26,17 +26,21 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
 
 /**
  * Estimate a run's cost from token usage and the resolved model's rates. Returns
+ * zero in quota mode and null in subscription mode. API mode returns
  * null when the model has no configured pricing (e.g. subscription-billed Codex)
  * or when input token usage is unknown — a null result must never be treated as
  * zero. Cached input is billed at the cheaper cache-read rate; the remaining
  * input at the full rate. This is a *fallback*: when the harness log already
- * reports a cost, that authoritative figure is used instead of this estimate.
+ * reports a cost, API telemetry uses that figure instead of this estimate.
  */
 export function estimateCost(
   usage: Pick<RunUsage, "tokensIn" | "tokensOut" | "cachedInputTokens">,
   model: string | null,
   pricing: Record<string, ModelPricing>,
+  mode: "api" | "subscription" | "quota" = "api",
 ): number | null {
+  if (mode === "quota") return 0;
+  if (mode === "subscription") return null;
   if (!model) return null;
   const rates = pricing[model];
   if (!rates) return null;
