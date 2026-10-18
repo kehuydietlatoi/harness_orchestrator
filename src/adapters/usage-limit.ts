@@ -10,20 +10,37 @@ export interface UsageLimit {
 }
 
 const LIMIT_RE = /(usage|rate)[ _-]limit|limit reached|hit your limit|out of (credits|usage)/i;
-const CLOCK_RE = /(?:try again at|resets?(?: at)?)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)/i;
+const CLOCK_RE = /(?:try again at|resets?(?: at)?)\s+(?:([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i;
+const MONTHS = [
+  "january", "february", "march", "april", "may", "june",
+  "july", "august", "september", "october", "november", "december",
+];
 
 /**
- * Resolve a bare "4:33 PM" to the next time that clock reading occurs in local
- * time. Providers print the reset as a wall-clock time without a date. Pure.
+ * Resolve a provider reset in local time. A bare "4:33 PM" uses the next
+ * occurrence; an explicit date ("Oct 19th, 2026 12:07 AM") is kept as given. Pure.
  */
 export function nextClockTime(text: string, now: Date): string | null {
   const m = text.match(CLOCK_RE);
   if (!m) return null;
-  let hour = Number(m[1]) % 12;
-  if (m[3].toLowerCase() === "pm") hour += 12;
+  const clockHour = Number(m[4]);
+  const minute = m[5] ? Number(m[5]) : 0;
+  if (clockHour < 1 || clockHour > 12 || minute > 59) return null;
+  let hour = clockHour % 12;
+  if (m[6].toLowerCase() === "pm") hour += 12;
   const at = new Date(now);
-  at.setHours(hour, m[2] ? Number(m[2]) : 0, 0, 0);
-  if (at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
+  if (m[1]) {
+    const monthText = m[1].toLowerCase();
+    const month = MONTHS.findIndex((name) => name === monthText || name.slice(0, 3) === monthText);
+    const day = Number(m[2]);
+    const year = Number(m[3]);
+    if (month < 0) return null;
+    at.setFullYear(year, month, day);
+    // Date normalizes impossible dates (e.g. February 30); reject those.
+    if (at.getFullYear() !== year || at.getMonth() !== month || at.getDate() !== day) return null;
+  }
+  at.setHours(hour, minute, 0, 0);
+  if (!m[1] && at.getTime() <= now.getTime()) at.setDate(at.getDate() + 1);
   return at.toISOString();
 }
 
