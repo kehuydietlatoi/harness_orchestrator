@@ -22,6 +22,19 @@ const model = { model: "opencode/deepseek-v4.1-flash-free", effort: "high" };
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 describe("OpenCode adapter", () => {
+  it("pings the slug with Reply OK on stdin and a 60 second timeout", async () => {
+    const cwd = temp();
+    const spawn: typeof spawnLogged = vi.fn(async (_cmd, args, opts) => {
+      expect(args).toEqual(["run", "--format", "json", "-m", "zen/free"]);
+      expect(opts).toMatchObject({ cwd, input: "Reply OK", timeoutMs: 60_000, shell: false });
+      appendFileSync(opts!.logFile!, [
+        JSON.stringify({ type: "text", part: { text: "OK" } }),
+        JSON.stringify({ type: "step_finish", part: { reason: "stop" } }),
+      ].join("\n"));
+      return { code: 0, durationMs: 1, timedOut: false };
+    });
+    expect(await new OpencodeAdapter({ cmd: "opencode.exe" }, spawn).pingEndpoint("zen/free", cwd)).toBe(true);
+  });
   it("is registered without interactive planning", () => {
     const adapter = makeAdapter("opencode", DEFAULT_CONFIG);
     expect(adapter).toBeInstanceOf(OpencodeAdapter);
