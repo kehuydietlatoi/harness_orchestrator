@@ -12,16 +12,18 @@ export interface ModelPricing {
 
 /**
  * Built-in rates for the Claude model aliases orch routes to (`adapters.claude.models`).
- * Sourced from Anthropic's published pricing (Opus 4.8, Sonnet 5 standard tier);
- * cache-read ≈ 0.1× input. Codex runs under a flat subscription, so it has no
- * per-token entry — its `costUsd` stays null by design. Override or extend via
- * `pricing` in orch.config.json when rates change or a new per-token agent is added.
+ * Claude 5.5 rates: https://claude.com/pricing, verified 2026-10-19.
+ * Generic opus/sonnet aliases retain older-model rates. Codex runs under a flat
+ * subscription, so it has no per-token entry — its `costUsd` stays null by design.
+ * Override or extend via `pricing` in orch.config.json when rates change or a new
+ * per-token agent is added.
  */
 export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   opus: { input: 5, cachedInput: 0.5, output: 25 },
   sonnet: { input: 3, cachedInput: 0.3, output: 15 },
-  // Keyed by the resolved `ModelSpec.model`; the default tier model since Sonnet 5.5.
-  "claude-sonnet-5-5": { input: 3, cachedInput: 0.3, output: 15 },
+  // Keyed by the resolved `ModelSpec.model` for the default tier and lead models.
+  "claude-sonnet-5-5": { input: 2, cachedInput: 0.1, output: 10 },
+  "claude-opus-5-5": { input: 4, cachedInput: 0.2, output: 20 },
 };
 
 /**

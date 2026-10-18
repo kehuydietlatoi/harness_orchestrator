@@ -17,6 +17,17 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("overrides one model's pricing while retaining the other defaults", () => {
+    const override = { input: 7, cachedInput: 0.7, output: 35 };
+    const config = loadConfig(writeConfig({ pricing: { "claude-sonnet-5-5": override } }));
+    expect(config.pricing).toEqual({
+      opus: { input: 5, cachedInput: 0.5, output: 25 },
+      sonnet: { input: 3, cachedInput: 0.3, output: 15 },
+      "claude-sonnet-5-5": override,
+      "claude-opus-5-5": { input: 4, cachedInput: 0.2, output: 20 },
+    });
+  });
+
   it("loads trusted verification argv arrays", () => {
     expect(loadConfig(writeConfig({ verify: [["node", "--test"], ["npm", "test"]] })).verify)
       .toEqual([["node", "--test"], ["npm", "test"]]);
