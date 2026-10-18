@@ -34,6 +34,23 @@ const runs: RunRecord[] = [
 ];
 
 describe("buildRunReport", () => {
+  it("reports a budget cutoff separately from open tasks", () => {
+    const report = buildRunReport(events, [...runs, { ...run(3, 16, "codex", null), outcome: "budget-spent" }]);
+    expect(report.tasks.find(t => t.issue === 3)?.outcome).toBe("budget-stopped");
+    expect(report.totals).toMatchObject({ open: 0, budgetStopped: 1 });
+    expect(formatRunReport(report)).toMatch(/#3\s+budget-stopped/);
+  });
+
+  it("lets a later merge supersede a budget cutoff", () => {
+    const report = buildRunReport(events, [...runs, { ...run(4, 2, "codex", null), outcome: "budget-spent" }]);
+    expect(report.tasks.find(t => t.issue === 4)?.outcome).toBe("merged");
+  });
+
+  it("uses the latest run after a human resumes a budget-stopped task", () => {
+    const report = buildRunReport(events, [{ ...run(3, 16, "codex", null), outcome: "budget-spent" }, run(3, 17, "codex", null)]);
+    expect(report.tasks.find(t => t.issue === 3)?.outcome).toBe("open");
+  });
+
   it("derives outcomes, rounds, reviews, runs, cost, and time per task", () => {
     const report = buildRunReport(events, runs);
     expect(report.tasks).toEqual([
@@ -47,7 +64,7 @@ describe("buildRunReport", () => {
   it("totals escalation rate, rounds to approval, and a cost that never pretends unknown is zero", () => {
     const { totals } = buildRunReport(events, runs);
     expect(totals).toEqual({
-      tasks: 4, merged: 2, escalated: 1, open: 1,
+      tasks: 4, merged: 2, escalated: 1, open: 1, budgetStopped: 0,
       escalationRate: 1 / 3,
       meanFixRounds: 0.5,
       costUsd: 4.25,

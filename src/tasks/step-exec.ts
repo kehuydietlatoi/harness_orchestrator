@@ -131,12 +131,12 @@ async function pushAndRequeueReview(
   env: StepEnv,
   cwd: string,
   worktree: string,
-  extraCheck?: () => Promise<string | null>,
+  extraCheck?: (head: string) => Promise<string | null>,
 ): Promise<{ failed: StepResult } | { pushed: true; warning?: string }> {
   const state = await inspectWorktree(env, worktree);
   if (state.dirty) return { failed: failure("the agent left uncommitted changes; nothing was pushed") };
   if (state.head === obs.pr.headSha) return { failed: failure("the agent made no new commits") };
-  const problem = await extraCheck?.();
+  const problem = await extraCheck?.(state.head);
   if (problem) return { failed: failure(problem) };
 
   const push = await env.git(["push", "origin", `HEAD:refs/heads/${obs.pr.headRefName}`], worktree);
@@ -278,7 +278,15 @@ export async function executeFix(
     if (!run.ok) return afterAgentFailure(agent, attempt, cwd, model);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
     // The harness ran with write access: prove again that this is still the right worktree before publishing.
-    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, () => recheckWorktree(obs, cfg, cwd, env));
+    const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, async (head) => {
+      const problem = await recheckWorktree(obs, cfg, cwd, env);
+      if (problem) return problem;
+      // A moved HEAD alone is not a fix: empty commits (or a net reversion) buy no round.
+      const diff = await env.git(["diff", "--quiet", obs.pr.headSha, head, "--"], worktree);
+      if (diff.code === 0) return "the new commits change no files";
+      if (diff.code !== 1) return `git diff failed: ${diff.stderr.trim()}`;
+      return null;
+    });
     if ("failed" in pushed) return pushed.failed;
     return { signal: "fix.pushed", detail: `round ${round} (${reason})${pushed.warning ? `; ${pushed.warning}` : ""}` };
   };

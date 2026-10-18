@@ -63,6 +63,8 @@ function fakeEnv(opts: {
   runs?: Array<{ ok?: boolean; code?: number; sessionId?: string; log?: string; timedOut?: boolean }>;
   head?: string;
   dirty?: boolean;
+  changedFiles?: boolean;
+  diffCode?: number;
   pushCode?: number;
   /** Whether the base branch is an ancestor of HEAD (conflict resolution check). */
   ancestor?: boolean;
@@ -90,6 +92,7 @@ function fakeEnv(opts: {
         return { ...ok, stdout: `${opts.head ?? NEW_HEAD}\n` };
       }
       if (args[0] === "status") return { ...ok, stdout: opts.dirty ? " M file.ts\n" : "" };
+      if (args[0] === "diff") return { code: opts.diffCode ?? (opts.changedFiles === false ? 0 : 1), stdout: "", stderr: "" };
       if (args[0] === "push") return { code: opts.pushCode ?? 0, stdout: "", stderr: opts.pushCode ? "rejected" : "" };
       if (args[0] === "merge-base") {
         // `headContained` may be a sequence: [true, false] = fine before the run, lost by the time we push.
@@ -145,6 +148,23 @@ describe("step executors", () => {
   });
 
   describe("executeFix", () => {
+    it.each(["ci", "review"] as const)("rejects empty commits in a %s fix without pushing or counting progress", async (reason) => {
+      const { env, gitCalls } = fakeEnv({ changedFiles: false });
+      const result = await executeFix(obs(), reason, DEFAULT_CONFIG, cwd, env);
+      expect(result).toEqual({ signal: "step.failed", detail: "the new commits change no files" });
+      expect(gitCalls).toContainEqual(["diff", "--quiet", HEAD, NEW_HEAD, "--"]);
+      expect(gitCalls.some((args) => args[0] === "push")).toBe(false);
+      expect(gh.editIssue).not.toHaveBeenCalled();
+      expect(recordRun).toHaveBeenCalledWith(38, "codex", expect.anything(), "fix-failed", expect.any(Number),
+        expect.any(String), cwd, DEFAULT_CONFIG, expect.objectContaining({ phase: "fix", round: 1 }));
+    });
+
+    it("fails closed when inspecting the new commits' file changes fails", async () => {
+      const { env, gitCalls } = fakeEnv({ diffCode: 128 });
+      expect(await executeFix(obs(), "ci", DEFAULT_CONFIG, cwd, env)).toMatchObject({ signal: "step.failed" });
+      expect(gitCalls.some((args) => args[0] === "push")).toBe(false);
+    });
+
     it("passes the remaining minutes and USD caps to the harness", async () => {
       const { env, agentCalls } = fakeEnv({});
       await executeFix(obs(), "review", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 1, usd: 0.75 } } }, cwd, env);

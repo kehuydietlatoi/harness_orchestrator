@@ -66,8 +66,9 @@ export interface CoordinatorDeps {
    * `onClaimed` fires as soon as the issue is claimed, before the harness runs: the agent can open its
    * own PR (`orch submit`) while this call is still in progress, and the loop must not act on that PR
    * (review, fix, merge) until the implementation has finished and finalised.
+   * `onCascade` reports a successfully relabelled destination, including hops made before any claim.
    */
-  implement(agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null>;
+  implement(agent: string, onClaimed: (issue: number) => void, onCascade?: (agent: string) => void): Promise<RunSummary | null>;
   budgetSpent?(issue: Issue): boolean;
   availableAgents(): string[];
   /** Issues that are routed and ready but belong to a harness that is currently paused. */
@@ -134,7 +135,7 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
       }
     },
     // Unrouted backlog is never started by a loop that merges on its own.
-    implement: (agent, onClaimed) => processNext(agent, cfg, cwd, { requireRouted: true, only: scope, onClaimed }),
+    implement: (agent, onClaimed, onCascade) => processNext(agent, cfg, cwd, { requireRouted: true, only: scope, onClaimed, onCascade }),
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
     blockedBacklog: async () => {
       const paused = new Set(cfg.agents.filter((a) => unavailableUntil(a, cwd) !== null));
@@ -219,6 +220,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const escalationFailures = new Map<number, number>();
   const escalateRetryAt = new Map<number, number>();
   const drained = new Set<string>();
+  const routeGenerations = new Map<string, number>();
   /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
   const implementing = new Set<number>();
   /**
@@ -316,20 +318,26 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     const key = `impl:${agent}`;
     const startedAt = deps.now();
     const claim: { issue: number | null } = { issue: null };
+    const cascadeAgents = new Set<string>();
+    const generation = routeGenerations.get(agent) ?? 0;
+    const markDrained = (): void => {
+      // A concurrent claim read may predate a hop onto this harness.
+      if (generation === (routeGenerations.get(agent) ?? 0)) drained.add(agent);
+    };
     const run = (async (): Promise<void> => {
       let result: RunSummary | null = null;
       try {
         result = await deps.implement(agent, (issue) => {
           claim.issue = issue;
           implementing.add(issue);
-        });
+        }, (destination) => { cascadeAgents.add(destination); });
       } catch (error) {
-        drained.add(agent); // do not hot-loop a claim error
+        markDrained(); // do not hot-loop a claim error
         deps.say(`  ${agent} could not claim work: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
       if (result === null) {
-        drained.add(agent);
+        markDrained();
         return;
       }
       const requeued = result.outcome === "requeued";
@@ -341,7 +349,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (ok) summary.submitted.push(result.issue);
       else if (budgetEscalated) summary.escalated.push(result.issue);
       else if (!requeued) summary.failures += 1;
-      else drained.add(agent);
+      else markDrained();
       deps.record({
         type: "step.finished", issue: result.issue, step: "implement", agent,
         signal: ok ? "task.submitted" : budgetEscalated ? "task.escalated" : requeued ? "agent.unavailable" : "step.failed",
@@ -354,6 +362,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         settledDuringObserve.add(claim.issue); // ...but an observation already in progress predates that
       }
       inflight.delete(key);
+      // A null claim can have advanced an unclaimed todo, and a requeue can have changed endpoints.
+      // Invalidate only the destinations, after the result's ordinary drained handling has settled.
+      for (const destination of cascadeAgents) {
+        routeGenerations.set(destination, (routeGenerations.get(destination) ?? 0) + 1);
+        drained.delete(destination);
+      }
     });
     inflight.set(key, run);
   };
