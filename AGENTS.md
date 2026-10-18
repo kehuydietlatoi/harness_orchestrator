@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Failed implement hold (#140)**: `needs-attention` blocks eligibility, direct claim setup, and targeted dispatch even with `status:todo` or no status label. Failed-run recovery clears `status:claimed`/`status:in-progress` and adds `needs-attention` before safe cleanup releases resources; absent status alone defaults to todo and must never bypass this hold. A human must clear the hold before another implement attempt.
+
 - **Implementation cascade (#124)**: optional `tierMembers` enables an ordered fallback ladder; absent config keeps existing retry/wait behavior. `nextHop` moves forward through members and tiers, applying `validateRoute` to the resolved model/family. A hop requires the runner's no-commits/no-PR/safe-cleanup/lock-release proofs. `model:<id>` selects a configured member (including effort/family) on the next claim; abandon and tier-raising triage clear it. Independent reviewers keep their own premium model. Successful relabels emit one `cascade.hop` event and `cascadeFrom`/`cascadeTo` on the implement run; failed requeues emit neither.
 
 

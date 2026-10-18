@@ -1,6 +1,6 @@
 import { normalizeEffort, type EffortTier, type TierAliases } from "../config.js";
 import { type Issue, listIssues, getIssue } from "../github/github.js";
-import { STATUS } from "../github/labels.js";
+import { NEEDS_ATTENTION, STATUS } from "../github/labels.js";
 import { isLocked } from "../git/lock.js";
 
 export function issueStatus(i: Issue): string {
@@ -86,6 +86,7 @@ export async function isEligible(
   cwd?: string,
   open?: Map<number, Issue>,
 ): Promise<boolean> {
+  if (i.labels.includes(NEEDS_ATTENTION)) return false;
   const claimed = i.labels.some((l) => l.startsWith("status:") && l !== STATUS.todo);
   if (claimed) return false;
   if (await isLocked(i.number, { cwd })) return false;
