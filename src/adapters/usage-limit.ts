@@ -1,3 +1,6 @@
+/** Default for endpoint failures without a provider reset time, including health probes. */
+export const ENDPOINT_COOLDOWN_MS = 10 * 60_000;
+
 /** A harness refused work because its subscription/rate budget is exhausted. */
 export interface UsageLimit {
   /** ISO time the limit is expected to lift, or null when the log gave none. */
@@ -38,7 +41,7 @@ function opencodeLimit(event: Record<string, unknown>, now: Date): UsageLimit | 
   if (!data) return null;
   const status = data.statusCode;
   if (status !== 429 && !(typeof status === "number" && status >= 500) && data.isRetryable !== true) return null;
-  let reset = now.getTime() + 10 * 60_000;
+  let reset = now.getTime() + ENDPOINT_COOLDOWN_MS;
   if (status === 429) {
     const headers = data.responseHeaders;
     if (headers && typeof headers === "object" && !Array.isArray(headers)) {
@@ -58,7 +61,7 @@ function opencodeLimit(event: Record<string, unknown>, now: Date): UsageLimit | 
     }
   }
   // Invalid/overflowing headers must fall back to the endpoint default.
-  if (!Number.isFinite(new Date(reset).getTime())) reset = now.getTime() + 10 * 60_000;
+  if (!Number.isFinite(new Date(reset).getTime())) reset = now.getTime() + ENDPOINT_COOLDOWN_MS;
   return {
     resetAt: new Date(reset).toISOString(),
     message: typeof data.message === "string" ? data.message : `OpenCode endpoint error (${String(status ?? "retryable")})`,

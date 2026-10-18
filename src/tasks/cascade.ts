@@ -13,6 +13,7 @@ export function nextHop(
   tried: readonly CascadeRoute[],
   role: string | undefined,
   cfg: OrchConfig,
+  isAvailable: (route: CascadeRoute) => boolean = () => true,
 ): CascadeRoute | null {
   if (!cfg.tierMembers) return null;
   const visited = new Set([current, ...tried].map((route) => routeKey(route, cfg)));
@@ -25,7 +26,7 @@ export function nextHop(
     if (tier === current.tier && start === 0) continue;
     for (const member of members.slice(start)) {
       if (!cfg.agents.includes(member.agent) || !cfg.adapters[member.agent] || visited.has(routeKey(member, cfg))) continue;
-      if (validateRoute({ ...member, role, model: member }, cfg).ok) return member;
+      if (validateRoute({ ...member, role, model: member }, cfg).ok && isAvailable(member)) return member;
     }
   }
   return null;

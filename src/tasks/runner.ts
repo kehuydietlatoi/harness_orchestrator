@@ -1,5 +1,5 @@
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
-import { cascadeLabels } from "./cascade-requeue.js";
+import { cascadeLabels, cascadeRequeue } from "./cascade-requeue.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,6 +25,7 @@ import { availabilityKey, markUnavailable, noteUsageLimitFromLog, unavailableUnt
 import { incrementQuota } from "../board/quota.js";
 import { writeSession } from "./sessions.js";
 import { endpointHealthy } from "../board/health.js";
+import { ENDPOINT_COOLDOWN_MS } from "../adapters/usage-limit.js";
 import { exec } from "../util/exec.js";
 
 class VerificationFailed extends Error {}
@@ -208,7 +209,7 @@ export async function processNext(
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
     ...(agent === "opencode" ? {
-      canClaim: (issue: Issue) => endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]),
+      canClaim: (issue: Issue) => preClaimHealthy(issue, agent, cfg, cwd),
     } : {}),
   });
   if (!task) return null;
@@ -237,11 +238,27 @@ export async function dispatchSpecific(
   if (pausedUntil) {
     throw new Error(`'${key}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
   }
-  if (!(await endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]))) {
+  if (!(await preClaimHealthy(issue, agent, cfg, cwd))) {
     return { issue: number, outcome: "requeued", durationMs: 0 };
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
+}
+
+/** No harness or claim resources have been created: only advance the todo's route. */
+async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+  const model = resolveTaskModel(agent, issue, cfg);
+  if (await endpointHealthy(agent, model?.model, cwd, cfg.adapters[agent])) return true;
+  const current: CascadeRoute = { agent, ...model, tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
+  const hop = nextHop(current, [], issueRole(issue), cfg,
+    member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd));
+  if (hop) {
+    // Failed relabels must not report a hop. Keep this path free of run telemetry:
+    // no implementation harness ran and no ticket request budget was consumed.
+    await cascadeRequeue(issue, hop, cwd);
+    appendEvent({ type: "cascade.hop", issue: issue.number, agent, cascadeFrom: current, cascadeTo: hop }, cwd);
+  }
+  return false;
 }
 
 /** Drive an already-claimed task through harness execution and finalisation. */
@@ -297,9 +314,13 @@ async function processClaimed(
       const key = availabilityKey(agent, model?.model);
       const limitedUntil = noteUsageLimit(key, logFile, cwd, logMark) ??
         (result.outcome === "quota" || result.outcome === "endpoint-unavailable"
-          ? markUnavailable(key, { resetAt: null, reason: result.outcome }, cwd) : null);
+          ? markUnavailable(key, {
+            resetAt: result.outcome === "endpoint-unavailable" ? new Date(Date.now() + ENDPOINT_COOLDOWN_MS).toISOString() : null,
+            reason: result.outcome,
+          }, cwd) : null);
       const current: CascadeRoute = { agent, ...model, tier: issueEffort(task.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
-      const hop = limitedUntil ? nextHop(current, [], issueRole(task.issue), cfg) : null;
+      const hop = limitedUntil ? nextHop(current, [], issueRole(task.issue), cfg,
+        member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd)) : null;
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
       if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd, hop ? { issue: task.issue, route: hop } : undefined))) {

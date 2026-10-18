@@ -65,7 +65,7 @@ vi.mock("../src/git/git.js", () => ({
 }));
 
 const { processNext, recordRun, runLoop } = await import("../src/tasks/runner.js");
-const { unavailableUntil } = await import("../src/board/availability.js");
+const { markUnavailable, unavailableUntil } = await import("../src/board/availability.js");
 
 const issue = {
   number: 35,
@@ -204,15 +204,22 @@ describe("processNext recovery", () => {
 
   it.each(["endpoint-unavailable", "quota"] as const)("cascades %s to a projected member and records one hop", async (outcome) => {
     const from = { agent: "opencode", tier: "free" as const, model: "zen/free", family: "openai" };
+    const cooled = { ...from, model: "zen/cooled" };
     const to = { agent: "opencode", tier: "cheap" as const, model: "zen/cheap", family: "openai", effort: "high" };
     const cfg = {
       ...DEFAULT_CONFIG, agents: [...DEFAULT_CONFIG.agents, "opencode"],
       adapters: { ...DEFAULT_CONFIG.adapters, opencode: { cmd: "opencode" } },
-      tierMembers: { free: [from], cheap: [to], standard: [], lead: [] },
+      tierMembers: { free: [from, cooled], cheap: [to], standard: [], lead: [] },
     };
+    markUnavailable("opencode:zen/cooled", { resetAt: null, reason: "known outage" }, cwd);
     mocks.claimNext.mockResolvedValue({ issue: { ...issue, labels: ["agent:opencode", "effort:free", "status:claimed"] }, worktree: { path: worktree, branch: "task/35" } });
     mocks.runTask.mockResolvedValue({ ok: false, outcome, code: 1, durationMs: 1, timedOut: false });
+    const started = Date.now();
     const result = await processNext("opencode", cfg, cwd);
+    const cooldownMs = outcome === "endpoint-unavailable" ? 10 * 60_000 : 60 * 60_000;
+    const until = unavailableUntil("opencode:zen/free", cwd)!.getTime();
+    expect(until).toBeGreaterThanOrEqual(started + cooldownMs);
+    expect(until).toBeLessThanOrEqual(Date.now() + cooldownMs);
     expect(result?.outcome).toBe("requeued");
     expect(mocks.editIssue).toHaveBeenLastCalledWith(35, {
       cwd, addLabels: ["status:todo", "agent:opencode", "effort:cheap", "model:zen/cheap"],

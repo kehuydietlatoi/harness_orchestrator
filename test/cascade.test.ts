@@ -31,6 +31,15 @@ describe("nextHop", () => {
     expect(nextHop(a, [], undefined, DEFAULT_CONFIG)).toBeNull();
   });
 
+  it.each([
+    ["skips a cooled member", ["zen/b"], c],
+    ["skips across tiers", ["zen/b", "zen/c"], d],
+    ["exhausts available members", ["zen/b", "zen/c", "zen/d"], null],
+    ["keeps an available member", ["zen/c"], b],
+  ] as const)("%s", (_name, cooled, expected) => {
+    expect(nextHop(a, [], undefined, cfg, member => !new Set<string>(cooled).has(member.model!))).toEqual(expected);
+  });
+
   it("resolves inherited defaults when matching the current member", () => {
     const custom = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }, { agent: "claude" }] } };
     expect(nextHop({ agent: "codex", tier: "lead" }, [], undefined, custom)?.agent).toBe("claude");

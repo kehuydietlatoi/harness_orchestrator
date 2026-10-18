@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { AdapterConfig } from "../config.js";
 import { OpencodeAdapter } from "../adapters/opencode.js";
+import { ENDPOINT_COOLDOWN_MS } from "../adapters/usage-limit.js";
 import { availabilityKey, markUnavailable, unavailableUntil } from "./availability.js";
 import { projectStateDir } from "./telemetry.js";
 import { log } from "../util/log.js";
@@ -58,7 +59,10 @@ export async function endpointHealthy(
       log.warn(`could not record endpoint health: ${error instanceof Error ? error.message : String(error)}`);
     }
     if (!ok) {
-      markUnavailable(key, { resetAt: null, reason: "endpoint health ping failed" }, cwd, checkedAt);
+      markUnavailable(key, {
+        resetAt: new Date(checkedAt.getTime() + ENDPOINT_COOLDOWN_MS).toISOString(),
+        reason: "endpoint health ping failed",
+      }, cwd, checkedAt);
       log.warn(`'${key}' failed its health ping; skipping unclaimed work`);
     }
     return ok;
