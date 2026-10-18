@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Multi-provider routing**: when changing model selection, cascades, billing, budgets, or provider permissions, read [ADR-0012](docs/adr/0012-multi-provider-routing.md) for Phase 1 decisions and known gaps.
+
 - **OpenCode adapter reference (#161)**: `docs/opencode-adapter.md` owns the current adapter contract and dated 2026-10-18 spike evidence; fixtures remain in `test/fixtures/opencode-1.19.3/`. `test/opencode-doc.test.ts` checks repository links and named spike fixtures; the package e2e checks README-linked docs are shipped.
 
 - **Usage-limit reset dates (#152)**: `nextClockTime` parses explicit English month/day (optional ordinal)/year and AM/PM clocks as local dates without rolling them forward. Only bare clocks roll to their next occurrence. Invalid dates return null so availability retains its default cooldown.

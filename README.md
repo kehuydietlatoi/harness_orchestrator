@@ -375,6 +375,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Judge evaluation](docs/adr/0005-judge-evaluation.md) — contract validity and future quality evaluation
 - [Recoverable lifecycle](docs/adr/0006-recoverable-task-lifecycle.md) — observed state and safe recovery
 - [Prompt injection](docs/adr/0007-prompt-injection-threat-model.md) — trusted authorship and agent inputs
+- [Multi-provider routing](docs/adr/0012-multi-provider-routing.md) — tiers, fallback ladders, budgets, and provider boundaries
 
 ## Development
 
