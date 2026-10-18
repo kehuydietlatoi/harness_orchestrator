@@ -56,6 +56,11 @@ retaining the PR, claim and worktree, then re-observes before retrying with a fr
 session. With no next member the existing retry, triage and escalation policy applies.
 Each successful hop writes `cascade.hop`; implementation runs also carry
 `cascadeFrom`/`cascadeTo` in their run record.
+Cascade selection skips members whose resolved endpoint (or harness for Claude/Codex)
+is on cooldown. A failed OpenCode pre-claim health ping cools the endpoint for ten
+minutes and immediately advances the todo's routing labels to the next available
+member. This writes `cascade.hop` after successful relabelling, with no implementation
+run record because no harness was invoked. Without a next member the todo waits.
 
 A task without a `role:` label remains unrestricted. A named role must exist in
 `orch.config.json`; unknown roles, disallowed tiers, and disallowed provider families
