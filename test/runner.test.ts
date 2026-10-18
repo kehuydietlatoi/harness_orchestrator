@@ -82,6 +82,11 @@ describe("resolveTaskModel", () => {
 });
 
 describe("resolveDispatchAgent", () => {
+  it.each([[], ["status:todo"], ["status:in-progress"]].map((labels) => ({ labels })))("refuses needs-attention before dispatch ($labels)", ({ labels }) => {
+    const target = issue(["agent:codex", "needs-attention", ...labels]);
+    expect(() => resolveDispatchAgent(target, new Map([[19, target]]), DEFAULT_CONFIG)).toThrow(/needs-attention/);
+  });
+
   it("ignores available advisory predecessors while retaining hard prerequisites", () => {
     const target = { ...issue(["status:todo", "agent:codex"]), body: "After: #7" };
     const predecessor = { ...issue(["status:todo"]), number: 7 };

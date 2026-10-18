@@ -7,6 +7,10 @@ import type { Observation, TaskObservation } from "../src/tasks/observe.js";
 import type { RunSummary } from "../src/tasks/runner.js";
 import type { StepResult } from "../src/tasks/step-exec.js";
 import { decideStep, type StepFacts, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
+import { byNumber, isEligible } from "../src/board/board.js";
+import type { Issue } from "../src/github/github.js";
+
+vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
 
 /** A tiny fake GitHub: PR state that the fake executors mutate and `observe` reads back. */
 interface SimPr {
@@ -192,6 +196,40 @@ describe("runAutopilot", () => {
   });
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
+
+  it("does not reclaim a failed implement on later polls until a human clears needs-attention", async () => {
+    const w = new World();
+    // Keep polling for another task's CI while the failed implement has no PR, worktree, or lock.
+    w.add(pr(99, { checks: "pending" }));
+    const target: Issue = {
+      number: 8, title: "Failing endpoint", body: "", state: "OPEN",
+      labels: ["status:todo", "agent:codex"], assignees: [],
+    };
+    const starts: number[] = [];
+    const attempts = vi.fn(async (_agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null> => {
+      if (!(await isEligible(target, undefined, byNumber([target])))) return null;
+      starts.push(Date.now());
+      onClaimed(target.number);
+      await new Promise((resolve) => setTimeout(resolve, 20_000));
+      target.labels = ["agent:codex", "needs-attention"]; // failed-run recovery projection
+      return { issue: target.number, outcome: "failed", durationMs: 1 };
+    });
+    const deps = { ...w.deps(), availableAgents: () => ["codex"], implement: attempts };
+    const abort = new AbortController();
+    const run = runAutopilot({ ...OPTS, pollMs: 20_000, signal: abort.signal }, deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(attempts.mock.calls.length).toBeGreaterThan(1);
+    expect(starts).toHaveLength(1);
+
+    // Human handback during the same autopilot run makes it claimable again.
+    target.labels = ["agent:codex"];
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(starts).toHaveLength(2);
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await run;
+    expect(w.events.filter((e) => e.type === "step.finished" && e.issue === 8 && e.signal === "step.failed")).toHaveLength(2);
+  });
 
   it("drives a task from implementation through review feedback, a resumed fix, and merge", async () => {
     const w = new World();
