@@ -54,6 +54,11 @@ describe("harness availability store", () => {
     expect(until.getTime()).toBe(now.getTime() + DEFAULT_COOLDOWN_MS);
   });
 
+  it("falls back to the default cooldown when a Codex reset is unparseable", () => {
+    const log = JSON.stringify({ type: "error", message: "Usage limit reached. try again at Oct 19th, 2026 sometime" });
+    expect(noteUsageLimitFromLog("codex", log, cwd, now)?.getTime()).toBe(now.getTime() + DEFAULT_COOLDOWN_MS);
+  });
+
   it("clamps a reset that is implausibly far away or already past", () => {
     const far = markUnavailable("a", { resetAt: minutes(60 * 24 * 5), reason: "x" }, cwd, now);
     expect(far.getTime() - now.getTime()).toBe(12 * 60 * 60 * 1000);

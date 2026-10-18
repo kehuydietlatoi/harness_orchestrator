@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Usage-limit reset dates (#152)**: `nextClockTime` parses explicit English month/day (optional ordinal)/year and AM/PM clocks as local dates without rolling them forward. Only bare clocks roll to their next occurrence. Invalid dates return null so availability retains its default cooldown.
+
 - **PR diff escapes (#146)**: `prDiff` passes `--allow-escape-sequences` to gh and replaces every ESC byte with `<ESC>` before returning a successful diff to prompts or terminals. Other gh output is unchanged.
 - **Absolute adapter commands (#145)**: `commandExists` checks absolute paths directly with filesystem access and a regular-file check (POSIX execute permission required); command names keep the existing PATH lookup. Windows `where` rejects absolute paths, including native adapter executables.
 
