@@ -120,22 +120,22 @@ function waitScenario(id: string, unknown: boolean): Scenario {
 }
 
 function triageScenario(id: string, retry: boolean, disabled = false): Scenario {
-  const w = new Walk(id, disabled ? "Triage disabled" : retry ? "Lead grants a guided hard retry" : "Lead escalates", ["triage", "escalation"],
+  const w = new Walk(id, disabled ? "Triage disabled" : retry ? "Lead grants a guided lead retry" : "Lead escalates", ["triage", "escalation"],
     "Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.");
   const input = facts({ rounds: 3, maxTriages: disabled ? 0 : 1, review: { approved: false, changesRequested: true } });
   w.step(input);
   if (disabled) { w.handoff(input); return w.b.build(); }
   const verdict = decide("parseTriageDecision", parseTriageDecision, `\`\`\`json\n${JSON.stringify(retry
-    ? { decision: "retry", effort: "hard", guidance: GUIDANCE }
+    ? { decision: "retry", effort: "raise", guidance: GUIDANCE }
     : { decision: "escalate", diagnosis: "The spec has contradictory boundary requirements.", question: "Which boundary behavior should win?" })}\n\`\`\``);
   if (verdict.output?.decision !== "retry") {
     w.to("step.escalate", "Record the diagnosis; the human must resolve the conflicting requirements.", verdict.decision);
     w.handoff(input);
     return w.b.build();
   }
-  const comments = [{ id: 1, body: formatTriageComment({ pr: PR, head: HEAD, timestamp: "2026-01-01T00:00:00.000Z", decision: "retry", extraRounds: 1, effort: verdict.output.effort },
+  const comments = [{ id: 1, body: formatTriageComment({ pr: PR, head: HEAD, timestamp: "2026-01-01T00:00:00.000Z", decision: "retry", extraRounds: 1, effort: "lead" },
     { issue: ISSUE, reason: "round budget spent", text: verdict.output.guidance }) }];
-  w.to("auto.observe", "Write the durable triage comment, replace effort:easy with effort:hard, then re-observe.", verdict.decision);
+  w.to("auto.observe", "Write the durable triage comment, replace effort:standard with effort:lead, then re-observe.", verdict.decision);
   const recovered = decide("triageFacts", (i: { comments: typeof comments; pr: number; maxTriages: number }) => triageFacts(i.comments, i.pr, i.maxTriages), { comments, pr: PR, maxTriages: 1 });
   w.step({ ...input, triages: recovered.output.triages, extraRounds: recovered.output.extraRounds }, recovered.decision);
   w.push();

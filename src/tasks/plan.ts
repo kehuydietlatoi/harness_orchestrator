@@ -1,7 +1,7 @@
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
-import type { EffortTier, OrchConfig } from "../config.js";
+import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
 
 export interface Ticket {
@@ -12,7 +12,7 @@ export interface Ticket {
   after?: string[]; // earlier ticket ids: ordering preferences only
   files?: string[]; // file-ownership hints (to minimise overlap)
   agent?: string; // routing chosen while planning: becomes the `agent:` label
-  effort?: string; // routing tier (`easy` | `hard`): becomes the `effort:` label
+  effort?: string; // routing tier (`free` | `cheap` | `standard` | `lead`): becomes the `effort:` label
   acceptance?: string[]; // the definition of done: checks a test or command can verify
   outOfScope?: string[]; // tempting adjacent work this ticket does not do
 }
@@ -20,7 +20,6 @@ export interface Ticket {
 /** Longest plan brief embedded in every issue; longer is a blocking error, never truncated. */
 export const MAX_BRIEF_CHARS = 4000;
 
-const EFFORT_TIERS: readonly string[] = ["easy", "hard"];
 
 /** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
  * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
@@ -98,6 +97,7 @@ export interface ResolvedTicket {
 export interface ResolveOptions {
   /** Configured agents. When given, a ticket routed to any other agent is dropped (warning). */
   agents?: readonly string[];
+  tierAliases?: TierAliases;
   /** The plan brief embedded in every issue; an over-long brief is a blocking error. */
   brief?: string;
 }
@@ -162,9 +162,9 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
       warnings.push(`ticket ${index} is routed to unknown agent "${agent}"; dropped (the judge will route it)`);
       agent = undefined;
     }
-    let effort = t.effort?.trim() || undefined;
-    if (effort && !EFFORT_TIERS.includes(effort)) {
-      warnings.push(`ticket ${index} has unknown effort "${effort}" (use easy or hard); dropped`);
+    let effort = normalizeEffort(t.effort?.trim(), opts.tierAliases);
+    if (t.effort?.trim() && !effort) {
+      warnings.push(`ticket ${index} has unknown effort "${t.effort}" (use free, cheap, standard, or lead); dropped`);
       effort = undefined;
     }
     if (effort && !agent) {

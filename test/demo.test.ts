@@ -132,7 +132,7 @@ describe("demo backend", () => {
     vi.useFakeTimers();
     try {
       const deps = makeDemoDeps({ lifecycleStepMs: 100 });
-      await deps.editIssue(107, ["agent:claude", "effort:hard"], CWD);
+      await deps.editIssue(107, ["agent:claude", "effort:lead"], CWD);
 
       await deps.dispatchIssue(107, CWD);
       expect((await deps.snapshot(CWD)).tasks.find((t) => t.number === 107)).toMatchObject({
@@ -159,7 +159,7 @@ describe("demo backend", () => {
   it("refuses to simulate dispatch for an unrouted or dependency-blocked todo", async () => {
     const deps = makeDemoDeps();
     await expect(deps.dispatchIssue(107, CWD)).rejects.toThrow(/not routed/);
-    await deps.editIssue(108, ["agent:codex", "effort:easy"], CWD);
+    await deps.editIssue(108, ["agent:codex", "effort:standard"], CWD);
     await expect(deps.dispatchIssue(108, CWD)).rejects.toThrow(/blocked by.*#103/);
   });
 });

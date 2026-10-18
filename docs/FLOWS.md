@@ -526,7 +526,7 @@ Code references:
 
 Scenarios:
 
-- **Lead grants a guided hard retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
+- **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Lead escalates** (`autopilot-triage-escalate`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Triage disabled** (`autopilot-triage-disabled`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 
@@ -557,7 +557,7 @@ Code references:
 
 Scenarios:
 
-- **Lead grants a guided hard retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
+- **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Lead escalates** (`autopilot-triage-escalate`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Triage disabled** (`autopilot-triage-disabled`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 

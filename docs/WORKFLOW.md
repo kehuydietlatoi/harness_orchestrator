@@ -28,15 +28,19 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `status:done` | `5319e7` | Merged | `merge`; `repair` projection | `repair` projection only if observed facts no longer derive `done` |
 | `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | `repair` (stale lifecycle projection) |
 | `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `plan` (ticket `agent`); `claimSpecific` | `abandon` only (**sticky**) |
-| `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign`; `plan` (ticket `effort`) | autopilot triage (retry on the hard tier) only |
-| `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign`; `plan` (ticket `effort`); autopilot triage | — (**sticky**) |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open task PR without current approval or current-head changes requested | `approve`; `requestChanges`; `repair` after current approval, current-head changes requested, or PR closure |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve`; `repair` from current review records | `requestChanges`; `repair` removes stale or revoked approvals |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
+| `effort:free` | `c2e0c6` | Use the agent's *free* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:cheap` | `c2e0c6` | Use the agent's *cheap* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:standard` | `c2e0c6` | Use the agent's *standard* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:lead` | `f9d0c4` | Use the agent's *lead* model tier | `assign`; `plan`; autopilot triage | never raised further |
 | `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
+Legacy `effort:easy` / `effort:hard` labels and config model keys resolve as `standard` / `lead`. The optional `tierAliases: { "easy": "cheap", "hard": "lead" }` config overrides legacy mappings; canonical names always resolve directly and explicit canonical model keys win over aliases. All four tiers keep Sonnet 5.5 medium / gpt-6.1-sol medium by default.
+
 **Sticky** = set once at routing/claim time and honored on every future run; only
-`abandon` clears `agent:`, and *nothing* clears `effort:`. Re-routing an issue to a
+`abandon` clears `agent:`, and triage alone replaces `effort:` to raise one tier. Re-routing an issue to a
 different agent/effort today means `abandon` then re-`assign`.
 
 ## Lifecycle (happy path)
@@ -122,7 +126,7 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 ## Where routing labels get honored
 
 - `effort:` → `resolveTaskModel(agent, issue, cfg)` (a `ModelSpec`) at spawn → `RunContext.model` →
-  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`hard`).
+  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`lead`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`. Repair preserves `status:in-progress` and clears `review:needed` while the latest structured decision requests changes on the current head. A new head returns the task to review; stale approval labels are removed. The review queue includes explicit `review:needed` PRs without reading reviews, and otherwise recovers stale approvals or orphaned approval labels while excluding current-head changes requested.
 
@@ -139,7 +143,7 @@ every open task PR. `--issues <list>` (what the `orch plan` pipeline starts) nar
 | resolve-conflict | PR conflicts with the base | Claude (else the author) merges `origin/<base>` into the branch; orch checks the base is an ancestor, then pushes | same as fix |
 | merge | approved on the head, CI green/none, mergeable | `merge()` through `checkMergeGate` | `status:done`; releases lock, prunes worktree |
 | await-human | as merge, with `requireHumanMerge` | nothing; reported | - |
-| triage | round budget (`maxReviewRounds` + rounds granted by triage) spent and fewer than `maxLeadTriage` triages recorded on the PR | the lead (on `leadModel`) reads a read-only checkout of the head and decides: `retry` (one more fix round with its guidance) or `escalate`; recorded as an `orch-triage:v1` PR comment | on a retry that asks for it: adds `effort:hard`, removes `effort:easy` (the only path that changes `effort:`); escalation as below |
+| triage | round budget (`maxReviewRounds` + rounds granted by triage) spent and fewer than `maxLeadTriage` triages recorded on the PR | the lead (on `leadModel`) reads a read-only checkout of the head and decides: `retry` (one more fix round with its guidance) or `escalate`; recorded as an `orch-triage:v1` PR comment | on a retry that asks for it: raises one tier (free -> cheap -> standard -> lead, capped at lead), replacing existing effort labels (the only path that changes `effort:`); escalation as below |
 | escalate | round budget spent after triage (or `maxLeadTriage: 0`), the lead's decision, a failed/paused triage, or a step failed twice in a row | comment on the PR | sets `needs-attention` (the loop then ignores the task until a human clears it) |
 
 Run state lives outside GitHub: `~/.orch/<project>/events.jsonl` (every step start/finish and its signal),

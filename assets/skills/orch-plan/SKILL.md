@@ -21,7 +21,7 @@ Each ticket is a JSON object:
 | `after` | no | `id`s of **earlier** tickets preferred first, without blocking runnable work |
 | `files` | no | file/dir ownership hints that minimise overlap between parallel agents |
 | `agent` | no | which harness implements it (a configured agent, e.g. `claude` or `codex`) — becomes the `agent:` label |
-| `effort` | no | `easy` or `hard` model tier — becomes the `effort:` label; only used together with `agent` |
+| `effort` | no | `free`, `cheap`, `standard`, or `lead` model tier (legacy `easy`/`hard` accepted as `standard`/`lead`) — becomes the `effort:` label; only used together with `agent` |
 | `acceptance` | **strongly recommended** | the **definition of done**: checks a test or command can verify — rendered as a checklist in the issue |
 | `outOfScope` | recommended | tempting adjacent work this ticket does *not* do, naming the later ticket that owns it |
 
@@ -34,7 +34,7 @@ Each ticket is a JSON object:
 - File ownership is a hint, not proof of independence: check the actual interfaces and required results before choosing `after` instead of `dependsOn`.
 - Write each `body` so an agent with no extra context can act: scope, constraints, and a one-line acceptance check.
 - Base scope and `files` on the **actual repository structure** you are given, not on assumptions.
-- **Route** a ticket (`agent` + `effort`) when you are confident who should build it: `hard` for design-heavy, cross-cutting, or risky work, `easy` for mechanical changes. Omit both when unsure — orch's routing judge fills in unrouted tickets. An `effort` without an `agent` is dropped.
+- **Route** a ticket (`agent` + `effort`) when you are confident who should build it: `lead` for design-heavy, cross-cutting, or risky work, `standard` for mechanical changes. Omit both when unsure — orch's routing judge fills in unrouted tickets. An `effort` without an `agent` is dropped.
 
 ## Definition of done
 
@@ -75,7 +75,7 @@ Reply with **exactly one** fenced code block tagged `json` and nothing after it 
 ```json
 [
   { "id": "auth-config", "title": "Add OAuth provider config", "body": "Load client id/secret + issuer from env; fail fast on invalid config.", "files": ["src/auth/config.ts"], "acceptance": ["`loadAuthConfig()` throws a clear error when the issuer is missing (test)", "`npm test` passes"], "outOfScope": ["token refresh, owned by the session ticket"] },
-  { "id": "session-mw", "title": "Add session middleware", "body": "Verify the session cookie and attach the user; 401 on protected routes.", "dependsOn": ["auth-config"], "files": ["src/mw/session.ts"], "agent": "claude", "effort": "hard" }
+  { "id": "session-mw", "title": "Add session middleware", "body": "Verify the session cookie and attach the user; 401 on protected routes.", "dependsOn": ["auth-config"], "files": ["src/mw/session.ts"], "agent": "claude", "effort": "lead" }
 ]
 ```
 

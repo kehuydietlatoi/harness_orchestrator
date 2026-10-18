@@ -1,3 +1,4 @@
+import type { TierAliases } from "../config.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
@@ -47,6 +48,7 @@ export interface PlanCreateOptions {
   brief?: string;
   /** Configured agents: a ticket routed to any other agent is created unrouted. */
   agents?: readonly string[];
+  tierAliases?: TierAliases;
 }
 
 const defaultDeps: PlanCreateDeps = { listIssues, createIssue, ensureLabels };
@@ -184,7 +186,7 @@ export async function createFromPlan(
   deps: PlanCreateDeps = defaultDeps,
   opts: PlanCreateOptions = {},
 ): Promise<PlanCreateResult> {
-  const plan = resolvePlan(tickets, { agents: opts.agents, brief: opts.brief });
+  const plan = resolvePlan(tickets, opts);
   if (plan.errors.length) throw new Error(`invalid tickets: ${plan.errors.join("; ")}`);
 
   const result: PlanCreateResult = { created: [], reused: [], failed: [] };

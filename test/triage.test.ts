@@ -22,7 +22,7 @@ const record = (over: Partial<TriageRecord> = {}): TriageRecord => ({
 describe("triage record", () => {
   it("round-trips through a PR comment, with guidance as the last section", () => {
     const body = formatTriageComment(record({ effort: "hard" }), { issue: 38, reason: "CI is still failing", text: "Fix the flaky test --> properly." });
-    expect(body).toContain("Decision: one more fix round, on the hard model tier.");
+    expect(body).toContain("Decision: one more fix round, on the lead model tier.");
     const parsed = parseTriageComment({ body });
     expect(parsed?.record).toEqual(record({ effort: "hard" }));
     expect(triageFacts([{ id: 1, body }], 62, 1)).toEqual({ triages: 1, extraRounds: 1, guidance: "Fix the flaky test --> properly." });
@@ -78,13 +78,13 @@ describe("triage and fix prompts", () => {
     const prompt = formatTriagePrompt({
       issue: { number: 38, title: "Add SSO", body: "Spec body\n\n<details><summary>Plan context</summary>why</details>" },
       pr: { number: 62, headSha: HEAD, headRefName: "task/38-sso" },
-      author: "codex", effort: "easy", reason: "review feedback is still unresolved after 3 fix rounds (limit 3)",
+      author: "codex", effort: "standard", reason: "review feedback is still unresolved after 3 fix rounds (limit 3)",
       checks: "pass", mergeable: "clean",
       reviews: [{ id: 1, state: "COMMENTED", commit_id: HEAD, body: formatReview({ reviewer: "claude", pr: 62, head: HEAD, timestamp: "2026-10-07T00:00:00Z", decision: "request-changes" }, "rename the module") }],
       files: [{ path: "src/sso.ts", status: "added", binary: false, additions: 40, deletions: 0 }],
     });
     for (const part of ["after 3 fix rounds", "claude requested changes on aaaaaaaa", "rename the module", "src/sso.ts (added, +40/-0)",
-      "Plan context", "on the easy tier", "spawn sub-agents", '"decision": "retry"', '"decision": "escalate"']) {
+      "Plan context", "on the standard tier", "spawn sub-agents", '"decision": "retry"', '"decision": "escalate"']) {
       expect(prompt, part).toContain(part);
     }
   });
@@ -153,7 +153,7 @@ describe("executeTriage", () => {
       changedFiles: async () => [],
       headOf: async () => HEAD,
       comment: async (_pr, body) => { comments.push(body); },
-      setHardEffort: async (issue, from) => { calls.push(`effort:${issue}:${from}`); },
+      setEffort: async (issue, tier) => { calls.push(`effort:${issue}:${tier}`); },
       escalate: async (_obs, reason): Promise<StepResult> => { calls.push(`escalate:${reason}`); return { signal: "task.escalated", detail: reason }; },
       // The real clock: cooldowns are capped relative to `now` and read back against Date.now(), so a fixed
       // fake time would make the "paused lead" test pass or fail depending on when it runs.
@@ -163,13 +163,29 @@ describe("executeTriage", () => {
     return { e, calls, comments };
   }
 
+  it.each([
+    ["free", "cheap"], ["cheap", "standard"], ["standard", "lead"], ["lead", null],
+    ["easy", "lead"], ["hard", null], [null, "cheap"],
+  ])("raises %s by one tier, capped at lead", async (from, expected) => {
+    const { e, calls, comments } = env({ text: '```json\n{"decision":"retry","guidance":"g","effort":"raise"}\n```' });
+    let removed: string[] = [];
+    const original = e.setEffort;
+    e.setEffort = async (issue, tier, remove) => { removed = remove; await original(issue, tier, remove); };
+    const labels = from ? ["effort:" + from] : [];
+    const result = await executeTriage(obs(labels), "stuck", { ...cfg, defaultEffort: "free" }, cwd, e);
+    expect(result.signal).toBe("triage.retry");
+    expect(calls.filter(c => c.startsWith("effort:"))).toEqual(expected ? ["effort:38:" + expected] : []);
+    expect(parseTriageComment({ body: comments[0] })?.record.effort).toBe(expected ?? undefined);
+    expect(removed).toEqual(expected ? labels : []);
+  });
+
   it("grants one more round on a retry, records it, and moves an easy task to the hard tier when asked", async () => {
     const { e, calls, comments } = env({ text: '```json\n{"decision":"retry","guidance":"Decline the rename.","effort":"hard"}\n```' });
     const result = await executeTriage(obs(), "stuck", cfg, cwd, e);
 
-    expect(result).toEqual({ signal: "triage.retry", detail: "one more round on the hard tier" });
-    expect(calls).toEqual(["lead:claude-opus-5-5:aaaa", "effort:38:easy"]);
-    expect(parseTriageComment({ body: comments[0] })?.record).toMatchObject({ decision: "retry", extraRounds: 1, effort: "hard", head: HEAD });
+    expect(result).toEqual({ signal: "triage.retry", detail: "one more round on the lead tier" });
+    expect(calls).toEqual(["lead:claude-opus-5-5:aaaa", "effort:38:lead"]);
+    expect(parseTriageComment({ body: comments[0] })?.record).toMatchObject({ decision: "retry", extraRounds: 1, effort: "lead", head: HEAD });
     expect(readRuns(cwd).at(-1)).toMatchObject({ phase: "triage", agent: "claude", outcome: "triage-retry", issue: 38 });
   });
 

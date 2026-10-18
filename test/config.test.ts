@@ -17,26 +17,63 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("preserves legacy config specs for every adapter", () => {
+    const config = loadConfig(writeConfig({
+      defaultEffort: "hard",
+      adapters: Object.fromEntries(["claude", "codex", "custom"].map(agent => [agent, {
+        cmd: agent, models: {
+          easy: { model: agent + "-small", effort: "low" },
+          hard: { model: agent + "-large", effort: "high" },
+        },
+      }])),
+    }));
+    expect(config.defaultEffort).toBe("lead");
+    for (const agent of ["claude", "codex", "custom"]) {
+      expect(config.adapters[agent].models?.standard).toEqual({ model: agent + "-small", effort: "low" });
+      expect(config.adapters[agent].models?.lead).toEqual({ model: agent + "-large", effort: "high" });
+    }
+  });
+
+  it("applies tierAliases to legacy config keys and defaults; canonical keys win", () => {
+    const config = loadConfig(writeConfig({
+      defaultEffort: "easy", tierAliases: { easy: "cheap", hard: "standard" },
+      adapters: { codex: { models: {
+        easy: { model: "legacy", effort: "low" }, cheap: { model: "explicit" }, hard: { effort: "high" },
+      } } },
+    }));
+    expect(config.defaultEffort).toBe("cheap");
+    expect(config.adapters.codex.models?.cheap).toEqual({ model: "explicit", effort: "low" });
+    expect(config.adapters.codex.models?.standard).toEqual({ model: "gpt-6.1-sol", effort: "high" });
+  });
+
+  it.each([{ easy: "unknown" }, { standard: "free" }, []])("rejects invalid tierAliases: %j", (tierAliases) => {
+    expect(() => loadConfig(writeConfig({ tierAliases }))).toThrow(/tierAliases/);
+  });
+
   it("fills effort and model defaults for an older config", () => {
     const config = loadConfig(writeConfig({
       agents: ["claude", "codex"],
       adapters: { claude: { cmd: "custom-claude" } },
     }));
 
-    expect(config.defaultEffort).toBe("hard");
+    expect(config.defaultEffort).toBe("lead");
     expect(config.adapters.claude).toEqual({
       cmd: "custom-claude",
       models: {
-        easy: { model: "claude-sonnet-5-5", effort: "medium" },
-        hard: { model: "claude-sonnet-5-5", effort: "medium" },
+        free: { model: "claude-sonnet-5-5", effort: "medium" },
+        cheap: { model: "claude-sonnet-5-5", effort: "medium" },
+        standard: { model: "claude-sonnet-5-5", effort: "medium" },
+        lead: { model: "claude-sonnet-5-5", effort: "medium" },
       },
       leadModel: { model: "claude-opus-5-5", effort: "high" },
     });
     expect(config.adapters.codex).toEqual({
       cmd: "codex",
       models: {
-        easy: { model: "gpt-6.1-sol", effort: "medium" },
-        hard: { model: "gpt-6.1-sol", effort: "medium" },
+        free: { model: "gpt-6.1-sol", effort: "medium" },
+        cheap: { model: "gpt-6.1-sol", effort: "medium" },
+        standard: { model: "gpt-6.1-sol", effort: "medium" },
+        lead: { model: "gpt-6.1-sol", effort: "medium" },
       },
     });
   });
@@ -50,12 +87,16 @@ describe("loadConfig", () => {
     }));
 
     expect(config.adapters.claude.models).toEqual({
-      easy: { model: "sonnet", effort: "medium" },
-      hard: { model: "opus", effort: "medium" },
+      free: { model: "claude-sonnet-5-5", effort: "medium" },
+      cheap: { model: "claude-sonnet-5-5", effort: "medium" },
+      standard: { model: "sonnet", effort: "medium" },
+      lead: { model: "opus", effort: "medium" },
     });
     expect(config.adapters.codex.models).toEqual({
-      easy: { model: "gpt-6.1-sol", effort: "low" },
-      hard: { model: "gpt-6.1-sol", effort: "high" },
+      free: { model: "gpt-6.1-sol", effort: "medium" },
+      cheap: { model: "gpt-6.1-sol", effort: "medium" },
+      standard: { model: "gpt-6.1-sol", effort: "low" },
+      lead: { model: "gpt-6.1-sol", effort: "high" },
     });
   });
 
@@ -64,8 +105,8 @@ describe("loadConfig", () => {
       adapters: { claude: { models: { hard: { effort: "high" } } } },
     }));
 
-    expect(config.adapters.claude.models?.hard).toEqual({ model: "claude-sonnet-5-5", effort: "high" });
-    expect(config.adapters.claude.models?.easy).toEqual({ model: "claude-sonnet-5-5", effort: "medium" });
+    expect(config.adapters.claude.models?.lead).toEqual({ model: "claude-sonnet-5-5", effort: "high" });
+    expect(config.adapters.claude.models?.standard).toEqual({ model: "claude-sonnet-5-5", effort: "medium" });
   });
 
   it("lets a config override the pinned Codex model without losing its effort default", () => {
@@ -73,7 +114,7 @@ describe("loadConfig", () => {
       adapters: { codex: { models: { easy: { model: "my-model" }, hard: { model: "my-model" } } } },
     }));
 
-    expect(config.adapters.codex.models?.hard).toEqual({ model: "my-model", effort: "medium" });
+    expect(config.adapters.codex.models?.lead).toEqual({ model: "my-model", effort: "medium" });
   });
 
   it("formats a spec as model@effort for telemetry", () => {
@@ -91,8 +132,10 @@ describe("loadConfig", () => {
     expect(config.adapters.claude).toEqual({
       cmd: "claude",
       models: {
-        easy: { model: "haiku", effort: "medium" },
-        hard: { model: "claude-sonnet-5-5", effort: "medium" },
+        free: { model: "claude-sonnet-5-5", effort: "medium" },
+        cheap: { model: "claude-sonnet-5-5", effort: "medium" },
+        standard: { model: "haiku", effort: "medium" },
+        lead: { model: "claude-sonnet-5-5", effort: "medium" },
       },
       leadModel: { model: "claude-opus-5-5", effort: "high" },
     });
