@@ -17,6 +17,14 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("loads additive per-tier budgets", () => {
+    const budgets = { default: { minutes: 30, requests: 60 }, byTier: { easy: { usd: 2 } } };
+    expect(loadConfig(writeConfig({ budgets })).budgets).toEqual(budgets);
+  });
+  it.each([{ default: { usd: -1 } }, { byTier: { easy: { requests: 0.5 } } }, { byTier: [] }])("rejects invalid budgets %j", (budgets) => {
+    expect(() => loadConfig(writeConfig({ budgets }))).toThrow();
+  });
+
   it("fills effort and model defaults for an older config", () => {
     const config = loadConfig(writeConfig({
       agents: ["claude", "codex"],

@@ -1,3 +1,5 @@
+import { BudgetSpentError, issueBudgetStatus } from "./budget-runtime.js";
+import { AGENT_STEPS, applyBudget } from "./steps.js";
 import { eligibleIssues, issueAgent } from "../board/board.js";
 import { listIssues, type Issue } from "../github/github.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
@@ -66,6 +68,7 @@ export interface CoordinatorDeps {
    * (review, fix, merge) until the implementation has finished and finalised.
    */
   implement(agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null>;
+  budgetSpent?(issue: Issue): boolean;
   availableAgents(): string[];
   /** Issues that are routed and ready but belong to a harness that is currently paused. */
   blockedBacklog(): Promise<number[]>;
@@ -112,15 +115,21 @@ export function planOutcome(remaining: number[] | null): "plan-complete" | "drai
 export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<number>): CoordinatorDeps {
   const inScope = (n: number): boolean => !scope || scope.has(n);
   return {
+    budgetSpent: (issue) => issueBudgetStatus(issue, cfg, cwd).spent,
     observe: () => observeTasks(cfg, cwd, { issues: scope }),
-    execute: (obs, step) => {
-      switch (step.kind) {
-        case "review": return executeReview(obs, cfg, cwd);
-        case "fix": return executeFix(obs, step.reason, cfg, cwd);
-        case "resolve-conflict": return executeResolveConflict(obs, cfg, cwd);
-        case "merge": return executeMerge(obs, cfg, cwd);
-        case "triage": return executeTriage(obs, step.reason, cfg, cwd);
-        case "escalate": return executeEscalate(obs, step.reason, cwd);
+    execute: async (obs, step) => {
+      try {
+        switch (step.kind) {
+          case "review": return await executeReview(obs, cfg, cwd);
+          case "fix": return await executeFix(obs, step.reason, cfg, cwd);
+          case "resolve-conflict": return await executeResolveConflict(obs, cfg, cwd);
+          case "merge": return executeMerge(obs, cfg, cwd);
+          case "triage": return await executeTriage(obs, step.reason, cfg, cwd);
+          case "escalate": return executeEscalate(obs, step.reason, cwd);
+        }
+      } catch (error) {
+        if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
+        throw error;
       }
     },
     // Unrouted backlog is never started by a loop that merges on its own.
@@ -313,17 +322,19 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         return;
       }
       const requeued = result.outcome === "requeued";
+      const budgetEscalated = result.reason === "budget spent";
       // A requeue is the harness running dry, not a failure and not progress: the task is back in the queue and
       // the pause (not the task) decides when it runs again, so it neither counts against us nor resets the idle clock.
       if (!requeued) lastProgress = deps.now();
       const ok = result.outcome === "submitted";
       if (ok) summary.submitted.push(result.issue);
+      else if (budgetEscalated) summary.escalated.push(result.issue);
       else if (!requeued) summary.failures += 1;
       else drained.add(agent);
       deps.record({
         type: "step.finished", issue: result.issue, step: "implement", agent,
-        signal: ok ? "task.submitted" : requeued ? "agent.unavailable" : "step.failed",
-        detail: result.outcome, durationMs: deps.now() - startedAt,
+        signal: ok ? "task.submitted" : budgetEscalated ? "task.escalated" : requeued ? "agent.unavailable" : "step.failed",
+        detail: result.reason ?? result.outcome, durationMs: deps.now() - startedAt,
       });
       deps.say(`  #${result.issue} implement (${agent}) -> ${result.outcome}${result.prUrl ? ` ${result.prUrl}` : ""}`);
     })().finally(() => {
@@ -397,6 +408,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (ambiguousPrs.has(n)) continue;
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
+      if (AGENT_STEPS.has(step.kind)) step = applyBudget(step, deps.budgetSpent?.(obs.issue) ?? false);
       const fails = failing.get(n);
       if (fails && isActionable(step) && step.kind !== "escalate" && fails.step === describe(step) && fails.count >= MAX_STEP_FAILURES) {
         step = { kind: "escalate", reason: `${describe(step)} failed ${fails.count} times in a row (${fails.detail})` };

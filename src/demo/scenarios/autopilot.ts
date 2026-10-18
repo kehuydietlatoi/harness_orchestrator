@@ -40,7 +40,7 @@ class Walk {
     this.to("auto.decide", "Re-observe the current head, review, CI and budgets; signals alone never authorize work.", observation);
     const result = decide("decideStep", decideStep, input);
     this.to(`step.${result.output.kind}`, `decideStep chooses ${JSON.stringify(result.output)}.`, result.decision,
-      result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
+      result.output.kind === "escalate" ? input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
     return result.output;
   }
   review(changes: boolean): void {
@@ -154,11 +154,17 @@ human.step(facts({ requireHumanMerge: true, review: { approved: true, changesReq
 const ambiguous = new ScenarioBuilder({ id: "autopilot-ambiguous", title: "Ambiguous twin PRs", flows: ["autopilot-fix"], summary: "Twin PRs are reported and neither is driven." }, [{ ...baseTask(ISSUE), status: "status:in-review", agent: "codex" }])
   .add({ node: "auto.observe", narration: "Observation reports issue #93 with open PRs #193 and #194 as ambiguous before per-PR reads. Neither gets a decideStep call; a human must choose." }).build();
 
+const capped = new Walk("autopilot-budget-spent", "Ticket budget spent", ["escalation"],
+  "Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.");
+const cappedFacts = facts({ budgetSpent: true });
+capped.step(cappedFacts);
+capped.handoff(cappedFacts);
+
 export const AUTOPILOT_SCENARIOS: readonly Scenario[] = [
   fixScenario("autopilot-review-fix", "Changes, resumed fix, re-review, merge", "review"),
   fixScenario("autopilot-ci-fix", "Fix failing CI", "ci"),
   fixScenario("autopilot-conflict", "Merge the base to resolve conflict", "conflict"),
   waitScenario("autopilot-wait-ci", false), waitScenario("autopilot-wait-mergeability", true),
-  human.b.build(), triageScenario("autopilot-triage-retry", true),
+  capped.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
   triageScenario("autopilot-triage-escalate", false), triageScenario("autopilot-triage-disabled", false, true), ambiguous,
 ];

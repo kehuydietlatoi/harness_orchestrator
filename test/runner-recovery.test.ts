@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   lockRelease: vi.fn(),
   removeWorktree: vi.fn(),
   discardWorktree: vi.fn(),
+  readRuns: vi.fn(() => []),
   appendRun: vi.fn(),
   parseUsage: vi.fn(() => ({
     tokensIn: null,
@@ -48,6 +49,7 @@ vi.mock("../src/git/worktree.js", () => ({
   discardWorktree: mocks.discardWorktree,
 }));
 vi.mock("../src/board/telemetry.js", () => ({
+  readRuns: mocks.readRuns,
   appendRun: mocks.appendRun,
   parseUsage: mocks.parseUsage,
   projectId: mocks.projectId,
@@ -94,6 +96,14 @@ describe("processNext recovery", () => {
   afterEach(() => {
     expect(mocks.discardWorktree).not.toHaveBeenCalled();
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("hands an exhausted budget to a human without a harness invocation or run record", async () => {
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { requests: 0 } } }, cwd);
+    expect(result).toMatchObject({ issue: 35, outcome: "needs-attention", reason: "budget spent" });
+    expect(mocks.runTask).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
   it("passes the routing requirement through to the claim", async () => {

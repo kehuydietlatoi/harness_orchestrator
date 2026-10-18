@@ -286,6 +286,18 @@ In ticket plans, `dependsOn` and optional `after` contain earlier ticket IDs.
 Both appear separately in plan previews; created bodies render `Depends-on:` and
 `After:` references. File ownership remains a hint, not proof of independence.
 
+Optional per-ticket caps use `"budgets": { "default": { "minutes": 30, "usd": 2, "requests": 60 }, "byTier": { "easy": { "usd": 1 } } }`.
+An issue can override individual dimensions with a line such as `Budget: 30m $2 60req`.
+Values merge per dimension: default, then effort tier, then issue. Zero stops runs immediately;
+negative or malformed caps are rejected. Without caps, execution is unchanged.
+All phases and agents on an issue share its cumulative duration, cost and request allowance.
+Requests count harness invocations (including retries); older run records imply one request.
+A run with unknown cost keeps total cost unknown and blocks further runs under a USD cap,
+including subscription Codex runs. Exhaustion hands the task to a human with reason
+`budget spent`, bypassing lead triage. Remaining minutes shorten each run's timeout;
+Claude also receives `--max-budget-usd` with the remaining USD. Other harnesses' USD
+usage is checked between runs. Raise the relevant cap before clearing `needs-attention`.
+
 Completed runs append best-effort telemetry to `~/.orch/<project>/runs.jsonl`.
 Cost uses harness-reported data or configured per-million-token `pricing` rates;
 Codex cost remains null by default because this project treats it as subscription

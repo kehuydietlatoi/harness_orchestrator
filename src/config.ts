@@ -1,3 +1,5 @@
+import { validateBudget, type Budget } from "./tasks/budget.js";
+export type { Budget } from "./tasks/budget.js";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
@@ -83,6 +85,7 @@ export interface OrchConfig {
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
+  budgets?: { default?: Budget; byTier?: Partial<Record<EffortTier, Budget>> };
   /**
    * How long one automated review may run. Much shorter than a task: reading a diff takes minutes, and a
    * review that has not answered in this long is stuck (for instance waiting on sub-agents it spawned itself),
@@ -198,6 +201,17 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     (!Number.isInteger(raw.reviewTimeoutMs) || (raw.reviewTimeoutMs as number) < 1)
   ) {
     throw new Error("reviewTimeoutMs must be a positive integer (milliseconds)");
+  }
+  if (raw.budgets !== undefined) {
+    if (!raw.budgets || typeof raw.budgets !== "object" || Array.isArray(raw.budgets)) throw new Error("budgets must be an object");
+    if (raw.budgets.default !== undefined) validateBudget(raw.budgets.default);
+    if (raw.budgets.byTier !== undefined) {
+      if (!raw.budgets.byTier || typeof raw.budgets.byTier !== "object" || Array.isArray(raw.budgets.byTier)) throw new Error("budgets.byTier must be an object");
+      for (const [tier, budget] of Object.entries(raw.budgets.byTier)) {
+        if (!["easy", "hard"].includes(tier)) throw new Error("Invalid budget tier: " + tier);
+        validateBudget(budget);
+      }
+    }
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
