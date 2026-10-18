@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
   getIssue: vi.fn(),
   editIssue: vi.fn(),
+  ensureLabels: vi.fn(),
   listOpenPrs: vi.fn(),
   lockRelease: vi.fn(),
   removeWorktree: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("../src/adapters/index.js", () => ({
 vi.mock("../src/github/github.js", () => ({
   getIssue: mocks.getIssue,
   editIssue: mocks.editIssue,
+  ensureLabels: mocks.ensureLabels,
   listOpenPrs: mocks.listOpenPrs,
 }));
 vi.mock("../src/git/lock.js", () => ({ release: mocks.lockRelease }));
@@ -104,6 +106,55 @@ describe("processNext recovery", () => {
 
     await processNext("codex", DEFAULT_CONFIG, cwd);
     expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, {});
+  });
+
+  it.each(["endpoint-unavailable", "quota"] as const)("cascades %s to a projected member and records one hop", async (outcome) => {
+    const from = { agent: "opencode", tier: "free" as const, model: "zen/free", family: "openai" };
+    const to = { agent: "opencode", tier: "cheap" as const, model: "zen/cheap", family: "openai", effort: "high" };
+    const cfg = {
+      ...DEFAULT_CONFIG, agents: [...DEFAULT_CONFIG.agents, "opencode"],
+      adapters: { ...DEFAULT_CONFIG.adapters, opencode: { cmd: "opencode" } },
+      tierMembers: { free: [from], cheap: [to], standard: [], lead: [] },
+    };
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, labels: ["agent:opencode", "effort:free", "status:claimed"] }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, outcome, code: 1, durationMs: 1, timedOut: false });
+    const result = await processNext("opencode", cfg, cwd);
+    expect(result?.outcome).toBe("requeued");
+    expect(mocks.editIssue).toHaveBeenLastCalledWith(35, {
+      cwd, addLabels: ["status:todo", "agent:opencode", "effort:cheap", "model:zen/cheap"],
+      removeLabels: ["status:claimed", "status:in-progress", "effort:free", "needs-attention"],
+    });
+    expect(mocks.ensureLabels).toHaveBeenCalledOnce();
+    expect(mocks.appendRun).toHaveBeenCalledOnce();
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ cascadeFrom: from, cascadeTo: to, outcome: "usage-limited" }), cwd);
+    const { readEvents } = await import("../src/tasks/events.js");
+    expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([
+      expect.objectContaining({ issue: 35, cascadeFrom: from, cascadeTo: to }),
+    ]);
+    // The relabelled task selects the new model rather than its old adapter default.
+    const { resolveTaskModel } = await import("../src/tasks/runner.js");
+    expect(resolveTaskModel("opencode", { ...issue, labels: ["effort:cheap", "model:zen/cheap"] }, cfg)).toMatchObject({ model: "zen/cheap", effort: "high" });
+  });
+
+  it.each(["commits", "retained", "lock", "labels"])("does not record a hop when cascade requeue fails at %s", async (failure) => {
+    const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }, { agent: "claude" }] } };
+    mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
+    if (failure === "commits") mocks.countCommitsAhead.mockResolvedValue(1);
+    if (failure === "retained") mocks.removeWorktree.mockResolvedValue(false);
+    if (failure === "lock") mocks.lockRelease.mockResolvedValue(false);
+    if (failure === "labels") mocks.ensureLabels.mockRejectedValueOnce(new Error("labels unavailable"));
+    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("failed");
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.not.objectContaining({ cascadeTo: expect.anything() }), cwd);
+    const { readEvents } = await import("../src/tasks/events.js");
+    expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([]);
+  });
+
+  it("keeps today's requeue/wait behavior when the ladder is exhausted", async () => {
+    const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }] } };
+    mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
+    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("requeued");
+    expect(mocks.editIssue).toHaveBeenLastCalledWith(35, { cwd, addLabels: ["status:todo"], removeLabels: ["status:claimed", "status:in-progress"] });
+    expect(mocks.ensureLabels).not.toHaveBeenCalled();
   });
 
   describe("judging a failed run by its own log (the issue log is shared by every retry)", () => {

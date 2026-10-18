@@ -88,7 +88,7 @@ export class OpencodeAdapter implements HarnessAdapter {
   async runTask(ctx: RunContext): Promise<RunResult> {
     const { result, reduced } = await this.run({ ...ctx, cwd: ctx.worktree });
     return {
-      ...result, ok: reduced.outcome === "completed", logFile: ctx.logFile,
+      ...result, ok: reduced.outcome === "completed", outcome: reduced.outcome, logFile: ctx.logFile,
       sessionId: reduced.sessionId ?? ctx.resumeSession,
     };
   }

@@ -6,6 +6,8 @@
 
 ## Conventions
 
+- **Implementation cascade (#124)**: optional `tierMembers` enables an ordered fallback ladder; absent config keeps existing retry/wait behavior. `nextHop` moves forward through members and tiers, applying `validateRoute` to the resolved model/family. A hop requires the runner's no-commits/no-PR/safe-cleanup/lock-release proofs. `model:<id>` selects a configured member (including effort/family) on the next claim; abandon and tier-raising triage clear it. Independent reviewers keep their own premium model. Successful relabels emit one `cascade.hop` event and `cascadeFrom`/`cascadeTo` on the implement run; failed requeues emit neither.
+
 - **Review identity (#121, ADR-0011)**: `orch-review:v1` records carry reviewer `tier`/`family`; legacy missing fields mean premium/harness-default family. `acceptedReviewers` consumes current-head metadata and the implementation author family; keep it shared across gate, loop, queue, repair, and board. `review-identity.ts` resolves author identity at the implementation tier and review identity at least at `standard`, so free/cheap tasks still receive premium reviews. Self-review requires opt-in `cross-or-self`; the default is `cross`.
 
 - **Role routing (#120)**: `src/routing/route-policy.ts` is the pure authority for role tier/family allowances; no `role:` label is unrestricted, unknown roles fail closed. Assignment and execution share it. Provider family comes from the selected model override, then adapter default; OpenCode requires a family per configured model and never inherits its adapter family. Role constraints do not define approval policy.

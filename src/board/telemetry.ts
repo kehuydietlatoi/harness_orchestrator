@@ -3,6 +3,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { log } from "../util/log.js";
+import { EFFORT_TIERS, type CascadeRoute } from "../config.js";
 import { reduceOpencode } from "../adapters/opencode-events.js";
 
 /** Which part of the task loop produced a run record (absent on records written before the loop). */
@@ -12,6 +13,8 @@ export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "tr
 export const RUN_PHASES: readonly RunPhase[] = ["implement", "fix", "resolve-conflict", "review", "triage"];
 
 export interface RunRecord {
+  cascadeFrom?: CascadeRoute;
+  cascadeTo?: CascadeRoute;
   /** Loop phase and 1-based fix round, so cost and rounds-to-approval can be measured. */
   phase?: RunPhase;
   round?: number;
@@ -237,6 +240,8 @@ function parseRunRecord(value: unknown): RunRecord | null {
     ? (obj.phase as RunPhase)
     : undefined;
   return {
+    ...(parseCascadeRoute(obj.cascadeFrom) ? { cascadeFrom: parseCascadeRoute(obj.cascadeFrom)! } : {}),
+    ...(parseCascadeRoute(obj.cascadeTo) ? { cascadeTo: parseCascadeRoute(obj.cascadeTo)! } : {}),
     ...(phase ? { phase } : {}),
     ...(Number.isInteger(obj.round) ? { round: obj.round as number } : {}),
     ts: obj.ts,
@@ -253,6 +258,13 @@ function parseRunRecord(value: unknown): RunRecord | null {
     costUsd: nullableNumber(obj.costUsd),
     ...(nullableNumber(obj.requests) !== null ? { requests: obj.requests as number } : {}),
   };
+}
+
+function parseCascadeRoute(value: unknown): CascadeRoute | undefined {
+  const route = objectValue(value);
+  if (!route || typeof route.agent !== "string" || !EFFORT_TIERS.includes(route.tier as CascadeRoute["tier"])) return;
+  if (["model", "effort", "family"].some((key) => route[key] !== undefined && typeof route[key] !== "string")) return;
+  return route as unknown as CascadeRoute;
 }
 
 /** Read valid JSONL run records. Missing/malformed telemetry is always non-fatal. */

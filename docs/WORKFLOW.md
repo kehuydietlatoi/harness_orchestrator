@@ -40,9 +40,17 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 
 Legacy `effort:easy` / `effort:hard` labels and config model keys resolve as `standard` / `lead`. The optional `tierAliases: { "easy": "cheap", "hard": "lead" }` config overrides legacy mappings; canonical names always resolve directly and explicit canonical model keys win over aliases. All four tiers keep Sonnet 5.5 medium / gpt-6.1-sol medium by default.
 
-**Sticky** = set once at routing/claim time and honored on every future run; only
-`abandon` clears `agent:`, and triage alone replaces `effort:` to raise one tier. Re-routing an issue to a
-different agent/effort today means `abandon` then re-`assign`.
+**Sticky** = set at routing/claim time and honored on future runs. `abandon` clears
+`agent:`; triage can raise `effort:`. With an explicit `tierMembers` ladder, a failed
+implementation refused for quota or endpoint availability can replace `agent:` and
+`effort:` with the next allowed member and set `model:<id>` to select its configured
+model, reasoning effort, and family. Routing labels are ensured before writing.
+The runner first proves no commits ahead and no open PR, safely removes the worktree,
+and releases the lock; only then does it relabel `status:todo` without `needs-attention`.
+If the ladder is exhausted or absent, existing requeue/wait behavior applies.
+`model:` is cleared by abandon and tier-raising triage; independent review uses the
+reviewer's own premium model, while author identity uses the projected member.
+Each successful hop writes `cascade.hop` and run fields `cascadeFrom`/`cascadeTo`.
 
 A task without a `role:` label remains unrestricted. A named role must exist in
 `orch.config.json`; unknown roles, disallowed tiers, and disallowed provider families
@@ -128,9 +136,8 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
    *display* blocked-ness, but the label is not the source of that truth. Either wire it
    up or drop it — tracked as a hardening candidate.
 
-2. **`effort:` is never cleared.** Once routed, an issue keeps its effort tier forever
-   unless a human edits it. Intentional (sticky routing), but means re-routing effort
-   requires a manual label edit or `abandon`.
+2. **`effort:` persists across abandon.** Triage and implementation cascade can replace
+   it with a higher tier; other routing changes require a manual label edit.
 
 ## Where routing labels get honored
 

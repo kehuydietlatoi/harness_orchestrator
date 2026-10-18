@@ -14,6 +14,8 @@ export interface RunContext {
 }
 
 export interface RunResult {
+  /** Structured endpoint failure classification, when the adapter exposes one. */
+  outcome?: import("./opencode-events.js").OpencodeOutcome;
   ok: boolean;
   code: number;
   durationMs: number;

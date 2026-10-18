@@ -17,6 +17,21 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("loads ordered cascade members and leaves legacy configs without a ladder", () => {
+    expect(loadConfig(writeConfig({})).tierMembers).toBeUndefined();
+    const tierMembers = { free: [], cheap: [], standard: [{ agent: "codex", model: "a" }, { agent: "codex", model: "b", effort: "high" }], lead: [] };
+    expect(loadConfig(writeConfig({ tierMembers })).tierMembers).toEqual(tierMembers);
+  });
+
+  it.each([
+    { free: [], cheap: [], standard: [], lead: [{ agent: "missing" }] },
+    { free: [], cheap: [], standard: [], lead: [{ agent: "codex", model: "a" }, { agent: "codex", model: "a" }] },
+    { free: "bad", cheap: [], standard: [], lead: [] },
+    { easy: [], cheap: [], standard: [], lead: [] },
+  ])("rejects invalid cascade configuration %j", (tierMembers) => {
+    expect(() => loadConfig(writeConfig({ tierMembers }))).toThrow(/tierMembers/);
+  });
+
   it("validates role tiers and families", () => {
     expect(loadConfig(writeConfig({ roles: { coder: { tiers: ["hard"], families: ["openai"] } } })).roles)
       .toEqual({ coder: { tiers: ["lead"], families: ["openai"] } });
