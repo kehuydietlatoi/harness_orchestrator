@@ -90,7 +90,12 @@ describe("pre-claim endpoint health", () => {
       return;
     }
     if (mode === "targeted") await dispatchSpecific(123, cfg, cwd);
-    else await processNext("opencode", cfg, cwd);
+    else {
+      const onCascade = vi.fn();
+      await processNext("opencode", cfg, cwd, { onCascade });
+      expect(onCascade).toHaveBeenCalledOnce();
+      expect(onCascade).toHaveBeenCalledWith("opencode");
+    }
     expect(mocks.claim).not.toHaveBeenCalled();
     expect(mocks.edit).toHaveBeenCalledWith(123, { cwd,
       addLabels: ["agent:opencode", "effort:free", "model:zen/next"], removeLabels: [] });
@@ -111,7 +116,9 @@ describe("pre-claim endpoint health", () => {
       expect(await opts.canClaim(issue)).toBe(false);
       return null;
     });
-    expect(await processNext("opencode", cfg, cwd)).toBeNull();
+    const onCascade = vi.fn();
+    expect(await processNext("opencode", cfg, cwd, { onCascade })).toBeNull();
+    expect(onCascade).not.toHaveBeenCalled();
     expect(mocks.ping).toHaveBeenCalledTimes(1);
     expect(mocks.edit).not.toHaveBeenCalled();
     expect(issue.labels).toEqual(["agent:opencode", "status:todo", "effort:free"]);

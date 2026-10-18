@@ -199,6 +199,8 @@ export async function processNext(
      * to know which issue is still being implemented in order to leave it alone until we return.
      */
     onClaimed?: (issue: number) => void;
+    /** A successful cascade changed routing; wake the destination harness even if no task was claimed. */
+    onCascade?: (agent: string) => void;
   } = {},
 ): Promise<RunSummary | null> {
   const pausedUntil = unavailableUntil(agent, cwd);
@@ -209,13 +211,13 @@ export async function processNext(
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
     ...(agent === "opencode" ? {
-      canClaim: (issue: Issue) => preClaimHealthy(issue, agent, cfg, cwd),
+      canClaim: (issue: Issue) => preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade),
     } : {}),
   });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
 
-  return processClaimed(task, agent, cfg, cwd);
+  return processClaimed(task, agent, cfg, cwd, opts.onCascade);
 }
 
 /**
@@ -246,7 +248,7 @@ export async function dispatchSpecific(
 }
 
 /** No harness or claim resources have been created: only advance the todo's route. */
-async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd: string, onCascade?: (agent: string) => void): Promise<boolean> {
   const model = resolveTaskModel(agent, issue, cfg);
   if (await endpointHealthy(agent, model?.model, cwd, cfg.adapters[agent])) return true;
   const current: CascadeRoute = { agent, ...model, tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
@@ -257,6 +259,7 @@ async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd
     // no implementation harness ran and no ticket request budget was consumed.
     await cascadeRequeue(issue, hop, cwd);
     appendEvent({ type: "cascade.hop", issue: issue.number, agent, cascadeFrom: current, cascadeTo: hop }, cwd);
+    onCascade?.(hop.agent);
   }
   return false;
 }
@@ -267,6 +270,7 @@ async function processClaimed(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
+  onCascade?: (agent: string) => void,
 ): Promise<RunSummary> {
   const n = task.issue.number;
   let limits: ReturnType<typeof runBudget>;
@@ -376,6 +380,7 @@ async function processClaimed(
   }
 
   recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark, cascadeFrom, cascadeTo });
+  if (cascadeTo) onCascade?.(cascadeTo.agent);
   return summary;
 }
 

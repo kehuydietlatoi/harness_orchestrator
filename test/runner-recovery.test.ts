@@ -215,7 +215,10 @@ describe("processNext recovery", () => {
     mocks.claimNext.mockResolvedValue({ issue: { ...issue, labels: ["agent:opencode", "effort:free", "status:claimed"] }, worktree: { path: worktree, branch: "task/35" } });
     mocks.runTask.mockResolvedValue({ ok: false, outcome, code: 1, durationMs: 1, timedOut: false });
     const started = Date.now();
-    const result = await processNext("opencode", cfg, cwd);
+    const onCascade = vi.fn();
+    const result = await processNext("opencode", cfg, cwd, { onCascade });
+    expect(onCascade).toHaveBeenCalledOnce();
+    expect(onCascade).toHaveBeenCalledWith("opencode");
     const cooldownMs = outcome === "endpoint-unavailable" ? 10 * 60_000 : 60 * 60_000;
     const until = unavailableUntil("opencode:zen/free", cwd)!.getTime();
     expect(until).toBeGreaterThanOrEqual(started + cooldownMs);
@@ -244,7 +247,9 @@ describe("processNext recovery", () => {
     if (failure === "retained") mocks.removeWorktree.mockResolvedValue(false);
     if (failure === "lock") mocks.lockRelease.mockResolvedValue(false);
     if (failure === "labels") mocks.ensureLabels.mockRejectedValueOnce(new Error("labels unavailable"));
-    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("failed");
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("failed");
+    expect(onCascade).not.toHaveBeenCalled();
     expect(mocks.appendRun).toHaveBeenCalledWith(expect.not.objectContaining({ cascadeTo: expect.anything() }), cwd);
     const { readEvents } = await import("../src/tasks/events.js");
     expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([]);
@@ -253,7 +258,9 @@ describe("processNext recovery", () => {
   it("keeps today's requeue/wait behavior when the ladder is exhausted", async () => {
     const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }] } };
     mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
-    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("requeued");
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("requeued");
+    expect(onCascade).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenLastCalledWith(35, { cwd, addLabels: ["status:todo"], removeLabels: ["status:claimed", "status:in-progress"] });
     expect(mocks.ensureLabels).not.toHaveBeenCalled();
   });

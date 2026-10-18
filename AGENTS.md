@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Cascade wake-up (#151)**: `processNext` reports successful pre-claim and in-run hops through `onCascade(destinationAgent)`. The coordinator clears destination drain markers after the implement attempt settles, so healthy replacement endpoints are retried in the same run. Requeues without a hop retain cooldown polling and the existing idle deadline.
+
 - **Coordinator completion (#139)**: completed implementations with no commits and dirty task worktrees run trusted coordinator-loaded `verify` argv arrays (never issue text; `exec`, shell false, five minutes per command), then stage/commit with issue title/number and worker/model attribution and use normal `submit`. Failed checks retain worktree and lock, project needs-attention, and comment failing argv/output tail. Clean/no-commit runs retain the prior recovery path. OpenCode adds literal configured verify commands only to writable profiles; shell/glob syntax is not widened into permission patterns and push remains denied.
 
 - **Failed implement hold (#140)**: `needs-attention` blocks eligibility, direct claim setup, and targeted dispatch even with `status:todo` or no status label. Failed-run recovery clears `status:claimed`/`status:in-progress` and adds `needs-attention` before safe cleanup releases resources; absent status alone defaults to todo and must never bypass this hold. A human must clear the hold before another implement attempt.
