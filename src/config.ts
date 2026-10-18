@@ -13,7 +13,20 @@ export interface ModelSpec {
   effort?: string;
 }
 
-export type EffortTier = "easy" | "hard";
+export const EFFORT_TIERS = ["free", "cheap", "standard", "lead"] as const;
+export type EffortTier = typeof EFFORT_TIERS[number];
+export type TierAliases = Partial<Record<"easy" | "hard", EffortTier>>;
+export const DEFAULT_TIER_ALIASES = { easy: "standard", hard: "lead" } as const;
+
+/** Canonical names resolve directly; legacy aliases are configurable. */
+export function normalizeEffort(value: unknown, aliases: TierAliases = {}): EffortTier | undefined {
+  if (value === "easy" || value === "hard") return aliases[value] ?? DEFAULT_TIER_ALIASES[value];
+  return EFFORT_TIERS.includes(value as EffortTier) ? value as EffortTier : undefined;
+}
+
+export function raiseEffort(tier: EffortTier): EffortTier {
+  return EFFORT_TIERS[Math.min(EFFORT_TIERS.indexOf(tier) + 1, EFFORT_TIERS.length - 1)];
+}
 
 /** Who may review a PR: `cross` = only the other harness; `cross-or-self` additionally
  * lets the author's harness review in a fresh session while every other harness is
@@ -28,7 +41,7 @@ export interface AdapterConfig {
    * What this adapter runs when it acts as the configured `lead`: the decision points
    * (interactive/draft planning, the routing judge, escalation triage). These calls are
    * rare and judgment-heavy, so they may use a stronger model than the task tiers.
-   * When omitted, the lead falls back to its `hard` tier.
+   * When omitted, the lead falls back to its `lead` tier.
    */
   leadModel?: ModelSpec;
 }
@@ -63,11 +76,11 @@ function normalizeModelSpec(agent: string, value: unknown, field = "models entri
 
 /**
  * The model the configured lead runs at a decision point (planning, routing, triage):
- * its `leadModel`, else its `hard` tier. Undefined defers to the harness default.
+ * its `leadModel`, else its `lead` tier. Undefined defers to the harness default.
  */
 export function resolveLeadModel(cfg: Pick<OrchConfig, "lead" | "adapters">): ModelSpec | undefined {
   const adapter = cfg.adapters[cfg.lead];
-  return adapter?.leadModel ?? adapter?.models?.hard;
+  return adapter?.leadModel ?? adapter?.models?.lead;
 }
 
 /** Resolve provider identity independently of model names and harness commands. */
@@ -95,7 +108,7 @@ export interface OrchConfig {
   maxReviewRounds: number;
   /**
    * Lead triages per task before a stuck task goes to a human (ADR-0010). When the round budget
-   * is spent, the lead may grant one more guided round (optionally on the hard tier) or escalate
+   * is spent, the lead may grant one more guided round (optionally on a higher tier) or escalate
    * with a diagnosis. `0` escalates straight to a human, as before.
    */
   maxLeadTriage: number;
@@ -108,7 +121,9 @@ export interface OrchConfig {
    * which is better failed and retried than waited on for the full task budget.
    */
   reviewTimeoutMs: number;
-  defaultEffort?: "easy" | "hard";
+  defaultEffort?: EffortTier;
+  /** Override legacy easy/hard names; canonical tier names always resolve directly. */
+  tierAliases?: TierAliases;
   adapters: Record<string, AdapterConfig>;
   /** Per-million-token USD rates keyed by resolved model string, for computing a
    * cost fallback when a harness log reports none. Subscription-billed agents
@@ -139,19 +154,21 @@ export const DEFAULT_CONFIG: OrchConfig = {
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
   reviewTimeoutMs: 900_000, // 15 minutes
-  defaultEffort: "hard",
-  // Both tiers default to the same capable model at medium effort; set `models.hard`
+  defaultEffort: "lead",
+  // All tiers default to the same capable model at medium effort; set `models.lead`
   // (and `effort:` labels) to opt individual tasks into something stronger. Codex pins
   // its model explicitly so a user's ~/.codex/config.toml default never changes cost.
   // Claude as lead uses Opus at the few decision points (plan, route, triage); Codex as
-  // lead has no separate lead model and uses its `hard` tier.
+  // lead has no separate lead model and uses its `lead` tier.
   adapters: {
     claude: {
       cmd: "claude",
       family: "anthropic",
       models: {
-        easy: { model: "claude-sonnet-5-5", effort: "medium" },
-        hard: { model: "claude-sonnet-5-5", effort: "medium" },
+        free: { model: "claude-sonnet-5-5", effort: "medium" },
+        cheap: { model: "claude-sonnet-5-5", effort: "medium" },
+        standard: { model: "claude-sonnet-5-5", effort: "medium" },
+        lead: { model: "claude-sonnet-5-5", effort: "medium" },
       },
       leadModel: { model: "claude-opus-5-5", effort: "high" },
     },
@@ -159,8 +176,10 @@ export const DEFAULT_CONFIG: OrchConfig = {
       cmd: "codex",
       family: "openai",
       models: {
-        easy: { model: "gpt-6.1-sol", effort: "medium" },
-        hard: { model: "gpt-6.1-sol", effort: "medium" },
+        free: { model: "gpt-6.1-sol", effort: "medium" },
+        cheap: { model: "gpt-6.1-sol", effort: "medium" },
+        standard: { model: "gpt-6.1-sol", effort: "medium" },
+        lead: { model: "gpt-6.1-sol", effort: "medium" },
       },
     },
   },
@@ -221,19 +240,31 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   ) {
     throw new Error("reviewTimeoutMs must be a positive integer (milliseconds)");
   }
+  const aliases = raw.tierAliases ?? {};
+  if (typeof aliases !== "object" || Array.isArray(aliases) ||
+      Object.entries(aliases).some(([key, value]) =>
+        !["easy", "hard"].includes(key) || !EFFORT_TIERS.includes(value))) {
+    throw new Error("tierAliases must map easy/hard to free, cheap, standard, or lead");
+  }
+  const defaultEffort = raw.defaultEffort === undefined
+    ? DEFAULT_CONFIG.defaultEffort : normalizeEffort(raw.defaultEffort, aliases);
+  if (!defaultEffort) throw new Error("defaultEffort must be free, cheap, standard, lead, easy, or hard");
+  const roles: OrchConfig["roles"] = {};
   if (raw.roles !== undefined) {
     if (!raw.roles || typeof raw.roles !== "object" || Array.isArray(raw.roles)) {
       throw new Error("roles must be an object of { tiers, families } allowances");
     }
     for (const [role, allowance] of Object.entries(raw.roles)) {
-      if (!allowance || !Array.isArray(allowance.tiers) ||
-          !allowance.tiers.every((tier) => tier === "easy" || tier === "hard")) {
-        throw new Error(`roles.${role}.tiers must contain only known tiers: easy, hard`);
+      const tiers = Array.isArray(allowance?.tiers)
+        ? (allowance.tiers as unknown[]).map((tier) => normalizeEffort(tier, aliases)) : undefined;
+      if (!tiers || tiers.some((tier) => !tier)) {
+        throw new Error(`roles.${role}.tiers must contain only known tiers: ${EFFORT_TIERS.join(", ")}, easy, hard`);
       }
       if (!Array.isArray(allowance.families) ||
           !allowance.families.every((family) => typeof family === "string" && family.trim().length > 0)) {
         throw new Error(`roles.${role}.families must be an array of non-empty strings`);
       }
+      roles[role] = { tiers: tiers as EffortTier[], families: allowance.families };
     }
   }
   const adapters = { ...DEFAULT_CONFIG.adapters };
@@ -241,11 +272,17 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     const defaults = DEFAULT_CONFIG.adapters[agent];
     const merged = { ...defaults, ...override };
     if (defaults?.models || override.models) {
-      // Merge per tier so `{ hard: { effort: "high" } }` keeps the default model.
+      // Merge defaults, aliased legacy keys, then canonical keys per field.
       const models: Partial<Record<EffortTier, ModelSpec>> = {};
-      for (const tier of ["easy", "hard"] as const) {
+      for (const tier of EFFORT_TIERS) {
+        const legacy = Object.keys(DEFAULT_TIER_ALIASES)
+          .filter((key) => normalizeEffort(key, aliases) === tier)
+          .reduce<ModelSpec>((acc, key) => ({
+            ...acc, ...normalizeModelSpec(agent, (override.models as Record<string, unknown> | undefined)?.[key]),
+          }), {});
         const spec = {
           ...defaults?.models?.[tier],
+          ...legacy,
           ...normalizeModelSpec(agent, (override.models as Record<string, unknown> | undefined)?.[tier]),
         };
         if (Object.keys(spec).length > 0) models[tier] = spec;
@@ -278,6 +315,9 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     ...DEFAULT_CONFIG,
     ...raw,
     adapters,
+    roles,
+    defaultEffort,
+    tierAliases: aliases,
     pricing,
   };
 }

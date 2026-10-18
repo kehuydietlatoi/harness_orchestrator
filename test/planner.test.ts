@@ -83,7 +83,7 @@ describe("interactive planning builders", () => {
     const seed = formatInteractiveSeed("/abs/tickets.json", "/abs/plan-brief.md", ["claude", "codex"]);
     expect(seed).toContain("/abs/plan-brief.md");
     expect(seed).toContain("one of claude, codex");
-    expect(seed).toContain("effort (easy or hard)");
+    expect(seed).toContain("effort (free, cheap, standard, or lead)");
     expect(seed).not.toContain("\n");
     expect(seed).not.toContain('"');
     expect(seed).not.toContain("`");
@@ -158,7 +158,7 @@ describe("runPlanner (fail-closed)", () => {
     };
     await runPlanner(goal, skill, "", fixtureCfg, ".", runner);
     const adapter = fixtureCfg.adapters[fixtureCfg.lead];
-    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.hard);
+    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.lead);
     expect(seenModel).toBeDefined();
   });
 });

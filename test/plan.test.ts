@@ -141,9 +141,9 @@ describe("resolvePlan", () => {
 
 describe("plan routing and brief", () => {
   it("parses agent/effort and rejects non-string routing", () => {
-    const [t] = parseTickets('[{"title":"x","agent":"codex","effort":"hard"}]');
-    expect(t).toMatchObject({ agent: "codex", effort: "hard" });
-    expect(() => parseTickets('[{"title":"x","agent":1,"effort":["hard"]}]')).toThrow(
+    const [t] = parseTickets('[{"title":"x","agent":"codex","effort":"lead"}]');
+    expect(t).toMatchObject({ agent: "codex", effort: "lead" });
+    expect(() => parseTickets('[{"title":"x","agent":1,"effort":["lead"]}]')).toThrow(
       /ticket 1: agent must be a string; ticket 1: effort must be a string/,
     );
   });
@@ -151,16 +151,16 @@ describe("plan routing and brief", () => {
   it("keeps valid routing and drops unknown agents, unknown efforts, and an effort without an agent", () => {
     const plan = resolvePlan(
       [
-        { title: "ok", agent: "codex", effort: "hard" },
+        { title: "ok", agent: "codex", effort: "lead" },
         { title: "agent only", agent: "claude" },
-        { title: "stranger", agent: "gemini", effort: "easy" },
+        { title: "stranger", agent: "gemini", effort: "standard" },
         { title: "bad tier", agent: "claude", effort: "medium" },
-        { title: "orphan effort", effort: "easy" },
+        { title: "orphan effort", effort: "standard" },
       ],
       { agents: ["claude", "codex"] },
     );
     expect(plan.tickets.map((t) => [t.agent, t.effort])).toEqual([
-      ["codex", "hard"],
+      ["codex", "lead"],
       ["claude", undefined],
       [undefined, undefined],
       ["claude", undefined],
@@ -221,4 +221,18 @@ describe("definition of done", () => {
   it("does not flag ordinary wording", () => {
     expect(resolvePlan([{ title: "Add a flag", body: "Parse --yes.", acceptance: ["`--yes` skips the prompt (test)"] }]).warnings).toEqual([]);
   });
+});
+
+it.each([
+  ["free", "free"], ["cheap", "cheap"], ["standard", "standard"], ["lead", "lead"],
+  ["easy", "standard"], ["hard", "lead"],
+])("accepts and normalizes plan effort %s to %s", (effort, expected) => {
+  const plan = resolvePlan([{ title: "tier", agent: "codex", effort, acceptance: ["npm test passes"] }]);
+  expect(plan.tickets[0].effort).toBe(expected);
+  expect(plan.warnings).toEqual([]);
+});
+
+it("uses configured tier aliases for legacy plan effort", () => {
+  const plan = resolvePlan([{ title: "tier", agent: "codex", effort: "easy" }], { tierAliases: { easy: "free" } });
+  expect(plan.tickets[0].effort).toBe("free");
 });

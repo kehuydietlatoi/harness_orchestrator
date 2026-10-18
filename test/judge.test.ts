@@ -24,8 +24,8 @@ describe("formatJudgePrompt", () => {
     expect(prompt).toContain("BRIEF-BODY");
     expect(prompt).toContain("```json");
     expect(prompt).toContain('"rationale"');
-    expect(prompt).toContain("easy =");
-    expect(prompt).toContain("hard =");
+    expect(prompt).toContain("standard =");
+    expect(prompt).toContain("lead =");
     expect(prompt).toContain("break ties toward load balancing");
   });
 });
@@ -112,7 +112,7 @@ describe("runJudge (fail-closed)", () => {
     };
     await runJudge(brief, fixtureCfg, ".", runner);
     const adapter = fixtureCfg.adapters[fixtureCfg.lead];
-    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.hard);
+    expect(seenModel).toEqual(adapter.leadModel ?? adapter.models?.lead);
     expect(seenModel).toBeDefined();
   });
 });

@@ -40,21 +40,21 @@ interface Suggestion {
 const JUDGE: Record<number, Suggestion> = {
   107: {
     agent: "claude",
-    effort: "hard",
+    effort: "lead",
     rationale:
-      "UI + accessibility work is design-heavy and cross-cutting; claude's recent hard-tier runs landed green (#103), so route the stronger tier to it.",
+      "UI + accessibility work is design-heavy and cross-cutting; claude's recent lead-tier runs landed green (#103), so route the stronger tier to it.",
   },
   108: {
     agent: "codex",
-    effort: "easy",
+    effort: "standard",
     rationale:
-      "A localized read projection over existing snapshot data; codex's lower median cost ($0.31 vs $0.95) makes it the economical pick at the easy tier.",
+      "A localized read projection over existing snapshot data; codex's lower median cost ($0.31 vs $0.95) makes it the economical pick at the standard tier.",
   },
   109: {
     agent: "codex",
-    effort: "hard",
+    effort: "lead",
     rationale:
-      "Scoring logic threads through the telemetry + dashboard modules codex already owns (#104); route hard to match the ambiguity.",
+      "Scoring logic threads through the telemetry + dashboard modules codex already owns (#104); route lead to match the ambiguity.",
   },
 };
 
@@ -214,7 +214,7 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
         .filter((task) => !task.agent && task.status === "status:todo")
         .map<PlanEntry>((task) => ({
           issue: task.number,
-          ...(JUDGE[task.number] ?? { agent: "codex", effort: "easy", rationale: "routed by the judge" }),
+          ...(JUDGE[task.number] ?? { agent: "codex", effort: "standard", rationale: "routed by the judge" }),
         })),
     editIssue: async (n, labels) => {
       const agent = labels.map((l) => /^agent:(.+)$/.exec(l)?.[1]).find(Boolean);

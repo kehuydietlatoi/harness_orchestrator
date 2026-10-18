@@ -314,7 +314,7 @@ export async function claimSpecific(
   decideClaim(number, observation);
   const route = validateRoute({
     role: issueRole(observation.issue), agent,
-    tier: issueEffort(observation.issue) ?? cfg.defaultEffort ?? "hard",
+    tier: issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
   }, cfg);
   if (!route.ok) throw new Error(`#${number}: disallowed route: ${route.reason}`);
   const base = await deps.resolveBaseBranch(cfg.baseBranch, cwd);
@@ -366,7 +366,7 @@ export async function claimNext(
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
     const route = validateRoute({
-      role: issueRole(candidate), agent, tier: issueEffort(candidate) ?? cfg.defaultEffort ?? "hard",
+      role: issueRole(candidate), agent, tier: issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
     }, cfg);
     if (!route.ok) {
       log.warn(`#${candidate.number}: disallowed route: ${route.reason}`);

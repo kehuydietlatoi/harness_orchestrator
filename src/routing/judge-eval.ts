@@ -1,6 +1,6 @@
 import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
 import { selectUnassigned, type PlanEntry } from "./assign.js";
-import type { OrchConfig } from "../config.js";
+import { normalizeEffort, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
 
 /**
@@ -29,7 +29,7 @@ export type ViolationKind =
   | "coverage-extra" // a routed issue that is not open + unassigned (closed, unknown, or already pinned)
   | "duplicate" // the same issue routed more than once
   | "invalid-agent" // agent is not one of the configured agents
-  | "invalid-effort" // effort is neither "easy" nor "hard"
+  | "invalid-effort" // effort is not a recognized tier
   | "disallowed-route"
   | "missing-rationale"; // the contract requires one grounded sentence
 
@@ -49,7 +49,6 @@ export interface EvalReport {
   ok: boolean;
 }
 
-const VALID_EFFORTS = new Set(["easy", "hard"]);
 
 /**
  * Score a judge plan against the issues it was asked to route. Pure and offline —
@@ -59,7 +58,7 @@ const VALID_EFFORTS = new Set(["easy", "hard"]);
 export function evaluatePlan(
   plan: readonly PlanEntry[],
   issues: readonly Issue[],
-  cfg: Pick<OrchConfig, "agents"> & RoutePolicyConfig,
+  cfg: Pick<OrchConfig, "agents" | "tierAliases"> & RoutePolicyConfig,
 ): EvalReport {
   const expectedNumbers = selectUnassigned(issues)
     .map((issue) => issue.number)
@@ -90,16 +89,17 @@ export function evaluatePlan(
         detail: `agent '${entry.agent}' is not configured (expected one of: ${cfg.agents.join(", ")})`,
       });
     }
-    if (!VALID_EFFORTS.has(entry.effort)) {
+    if (!normalizeEffort(entry.effort, cfg.tierAliases)) {
       violations.push({
         kind: "invalid-effort",
         issue: entry.issue,
-        detail: `effort '${entry.effort}' is neither easy nor hard`,
+        detail: `effort '${entry.effort}' must be free, cheap, standard, or lead`,
       });
     }
     const issue = issues.find((issue) => issue.number === entry.issue);
-    if (issue && agents.has(entry.agent) && (entry.effort === "easy" || entry.effort === "hard")) {
-      const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: entry.effort }, cfg);
+    const tier = normalizeEffort(entry.effort, cfg.tierAliases);
+    if (issue && agents.has(entry.agent) && tier) {
+      const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier }, cfg);
       if (!route.ok) violations.push({ kind: "disallowed-route", issue: entry.issue, detail: route.reason });
     }
     if (!(entry.rationale ?? "").trim()) {
