@@ -85,7 +85,7 @@ describe("assembleFacts", () => {
 
   it("counts a marked self-review only under cross-or-self", () => {
     const reviews = [review("claude", "approve", { mode: "self" })];
-    expect(assembleFacts({ ...base, reviews }).review.approved).toBe(true);
+    expect(assembleFacts({ ...base, reviews, cfg: { ...DEFAULT_CONFIG, reviewPolicy: "cross-or-self" } }).review.approved).toBe(true);
     const strict: OrchConfig = { ...DEFAULT_CONFIG, reviewPolicy: "cross" };
     expect(assembleFacts({ ...base, reviews, cfg: strict }).review.approved).toBe(false);
   });

@@ -280,7 +280,8 @@ export function makeDemoDeps(opts: { lifecycleStepMs?: number } = {}): ServerDep
             body: formatReview({ reviewer, pr: t.prNumber!, head: DEMO_HEAD,
               timestamp: "2026-01-01T00:00:00.000Z", decision: "approve",
               ...(reviewer === t.agent ? { mode: "self" as const } : {}) }, "Demo approval") }))])),
-        config.reviewPolicy,
+        // Scripted scenarios include the opt-in self-review fallback.
+        scenario ? "cross-or-self" : config.reviewPolicy,
       );
       if (scenario) {
         // Frame boards are scripted projections, not complete lifecycle observations

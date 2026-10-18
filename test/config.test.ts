@@ -199,8 +199,17 @@ describe("loadConfig", () => {
     expect(resolveLeadModel({ lead: "missing", adapters: {} })).toBeUndefined();
   });
 
-  it("defaults to cross-or-self review and validates the configured policy", () => {
-    expect(loadConfig(writeConfig({})).reviewPolicy).toBe("cross-or-self");
+  it("defaults and validates conflict resolver order", () => {
+    expect(loadConfig(writeConfig({})).conflictResolvers).toEqual(["claude", "<author>"]);
+    expect(loadConfig(writeConfig({ conflictResolvers: ["codex", "<author>"] })).conflictResolvers).toEqual(["codex", "<author>"]);
+    expect(loadConfig(writeConfig({ conflictResolvers: [] })).conflictResolvers).toEqual([]);
+    for (const conflictResolvers of [null, "claude", [""], [7]]) {
+      expect(() => loadConfig(writeConfig({ conflictResolvers }))).toThrow(/conflictResolvers/);
+    }
+  });
+
+  it("defaults to cross review and validates the configured policy", () => {
+    expect(loadConfig(writeConfig({})).reviewPolicy).toBe("cross");
     expect(loadConfig(writeConfig({ reviewPolicy: "cross" })).reviewPolicy).toBe("cross");
     for (const reviewPolicy of ["self", "", null, 1]) {
       expect(() => loadConfig(writeConfig({ reviewPolicy }))).toThrow(/reviewPolicy/);

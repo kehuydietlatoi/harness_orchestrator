@@ -278,9 +278,9 @@ export async function executeFix(
   return result;
 }
 
-/** Prefer an allowed Claude for conflict resolution, else the allowed author, else wait. */
+/** First configured, allowed, available resolver; <author> expands per task. */
 export function pickResolver(author: string, cfg: OrchConfig, cwd: string, issue?: Issue): string | null {
-  const preferred = ["claude", author].filter((a, i, all) => cfg.agents.includes(a) && all.indexOf(a) === i);
+  const preferred = cfg.conflictResolvers.map((a) => a === "<author>" ? author : a).filter((a, i, all) => cfg.agents.includes(a) && all.indexOf(a) === i);
   return preferred.find((agent) => unavailableUntil(agent, cwd) === null && (!issue || validateRoute({
     role: issueRole(issue), agent,
     tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",

@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/github/github.js", () => ({ listIssues: vi.fn(), listPrs: vi.fn(), listPrReviews: vi.fn(), getIssue: vi.fn(), getBranchPrs: vi.fn(), getIssueReferencedPrs: vi.fn(), getRepoUrl: vi.fn(), prChecksState: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ listLocks: vi.fn() }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn(), compareBranchToBase: vi.fn() }));
-vi.mock("../src/config.js", () => ({ loadConfig: () => ({ baseBranch: "main" }) }));
+vi.mock("../src/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/config.js")>();
+  return { ...actual, loadConfig: () => ({ ...actual.DEFAULT_CONFIG, baseBranch: "main" }) };
+});
 vi.mock("../src/board/telemetry.js", () => ({ readRuns: () => [] }));
 vi.mock("../src/util/exec.js", () => ({ exec: vi.fn() }));
 import * as gh from "../src/github/github.js";

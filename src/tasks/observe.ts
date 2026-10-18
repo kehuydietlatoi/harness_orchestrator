@@ -1,3 +1,4 @@
+import { reviewIdentity } from "../board/review-identity.js";
 import type { Issue, Pr, PrReview } from "../github/github.js";
 import { ghBoard, type Board } from "../github/board.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
@@ -49,6 +50,8 @@ export function assembleFacts(params: {
       author,
       reviewers: rs.reviewers,
       selfReviewers: rs.selfReviewers,
+      reviewMetadata: rs.reviewMetadata,
+      authorFamily: reviewIdentity(author, issue, cfg, "author").family,
       reviewPolicy: cfg.reviewPolicy,
       agents: cfg.agents,
     });

@@ -1,10 +1,12 @@
-import type { ReviewPolicy } from "../config.js";
+import { EFFORT_TIERS, resolveFamily, type EffortTier, type ReviewPolicy } from "../config.js";
 import type { PrReview } from "../github/github.js";
 
 export type ReviewMode = "cross" | "self";
 
 export interface ReviewRecord {
   reviewer: string;
+  tier?: EffortTier;
+  family?: string;
   pr: number;
   head: string;
   timestamp: string;
@@ -29,6 +31,8 @@ export function parseReview(review: PrReview): ReviewRecord | null {
       /^[a-f0-9]{40,64}$/.test(r.head) && r.head === review.commit_id &&
       typeof r.timestamp === "string" && Number.isFinite(Date.parse(r.timestamp)) &&
       (r.decision === "approve" || r.decision === "request-changes") &&
+      (r.tier === undefined || EFFORT_TIERS.includes(r.tier)) &&
+      (r.family === undefined || (typeof r.family === "string" && r.family.trim().length > 0)) &&
       (r.mode === undefined || r.mode === "cross" || r.mode === "self") ? r : null;
   } catch { return null; }
 }
@@ -41,22 +45,24 @@ export function currentReviewers(reviews: readonly PrReview[], pr: number, head:
 /** Shared head-bound review facts for the gate, queue, repair, and board. */
 export function reviewState(reviews: readonly PrReview[], pr: number, head: string): {
   reviewers: string[];
+  reviewMetadata: Record<string, ReviewIdentity>;
   /** Subset of `reviewers` whose current approval was a fallback self-review. */
   selfReviewers: string[];
   changesRequested: boolean;
   staleApproval: boolean;
 } {
-  const approved = new Map<string, { head: string; mode?: ReviewMode }>();
+  const approved = new Map<string, ReviewRecord>();
   let latest: ReviewRecord | null = null;
   for (const review of [...reviews].sort((a, b) => a.id - b.id)) {
     const r = parseReview(review);
     if (!r || r.pr !== pr) continue;
     latest = r;
     if (r.decision === "request-changes") approved.clear();
-    else approved.set(r.reviewer, { head: r.head, mode: r.mode });
+    else approved.set(r.reviewer, r);
   }
   const current = [...approved].filter(([, a]) => a.head === head);
   return {
+    reviewMetadata: Object.fromEntries(current.map(([name, r]) => [name, { tier: r.tier, family: r.family }])),
     reviewers: current.map(([reviewer]) => reviewer),
     selfReviewers: current.filter(([, a]) => a.mode === "self").map(([reviewer]) => reviewer),
     changesRequested: latest?.decision === "request-changes" && latest.head === head,
@@ -134,19 +140,29 @@ export function latestChangeRequestNotes(reviews: readonly PrReview[], pr: numbe
   return latest && latest.decision === "request-changes" && latest.head === head ? latest.notes : null;
 }
 
-/**
- * Which of a head's current approvers actually count, under `policy`. The one definition shared by the merge
- * gate's view of "approved", the review queue, `repair`'s label projection, and the board, so they cannot
- * disagree about the same PR. Another harness always counts. The author counts only as a *marked* fallback
- * self-review (`mode: "self"`) and only under `cross-or-self`; an unmarked author approval never does. With no
- * policy given, only cross-review counts (the original, strict behaviour).
- */
+/** Metadata is bound to the reviewed head, independent of later config edits. */
+export interface ReviewIdentity { tier?: EffortTier; family?: string }
+
+export function premiumTier(tier: EffortTier | undefined): boolean {
+  return tier === undefined || tier === "standard" || tier === "lead";
+}
+
+/** Legacy records retain their premium tier and harness-default family. */
+export function defaultFamily(agent: string | null): string | undefined {
+  return agent ? resolveFamily(agent, undefined, {}) ?? agent : undefined;
+}
+
+/** One approval policy for gate, loop, queue, repair, and board. */
 export function acceptedReviewers(
-  state: { reviewers: readonly string[]; selfReviewers: readonly string[] },
+  state: { reviewers: readonly string[]; selfReviewers: readonly string[]; reviewMetadata?: Readonly<Record<string, ReviewIdentity>> },
   author: string | null,
   policy?: ReviewPolicy,
+  authorFamily: string | undefined = defaultFamily(author),
 ): string[] {
-  return state.reviewers.filter(
-    (reviewer) => reviewer !== author || (policy === "cross-or-self" && state.selfReviewers.includes(reviewer)),
-  );
+  return state.reviewers.filter((reviewer) => {
+    const identity = state.reviewMetadata?.[reviewer];
+    if (!premiumTier(identity?.tier)) return false;
+    if (reviewer === author) return policy === "cross-or-self" && state.selfReviewers.includes(reviewer);
+    return (identity?.family ?? defaultFamily(reviewer)) !== authorFamily;
+  });
 }

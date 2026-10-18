@@ -166,9 +166,12 @@ A failed harness run whose log shows a usage-limit refusal puts that agent on co
 (`src/board/availability.ts`, `~/.orch/<project>/availability.json`, clamped to 1 minute..12 hours;
 default 1 hour when no reset time is given). `processNext` / `dispatchSpecific` will not claim work for
 an agent on cooldown. This is runtime state, not an issue label, and never affects lifecycle derivation.
-Review records carry an optional `mode: "self"`; the gate accepts the author's own approval only when
+Review records carry reviewer `tier`/`family`; only `standard`/`lead` approvals from a different
+model family count. Legacy records retain premium/harness-default identity.
+The default `reviewPolicy` is `cross`. Records may carry `mode: "self"`; the gate accepts the author's own approval only when
 `reviewPolicy` is `cross-or-self` **and** that record is marked self. Writing a self record is itself
-guarded (`assertSelfReviewAllowed`: every other harness must currently be on cooldown).
+guarded (`assertSelfReviewAllowed`: every eligible different-family reviewer must be unavailable),
+and self approvals must also be premium. See [ADR-0011](adr/0011-premium-family-review-and-conflict-resolvers.md).
 
 ## Observed health in operator views
 
