@@ -145,6 +145,11 @@ describe("step executors", () => {
   });
 
   describe("executeFix", () => {
+    it("passes the remaining minutes and USD caps to the harness", async () => {
+      const { env, agentCalls } = fakeEnv({});
+      await executeFix(obs(), "review", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 1, usd: 0.75 } } }, cwd, env);
+      expect(agentCalls[0]).toMatchObject({ timeoutMs: 60_000, maxBudgetUsd: 0.75 });
+    });
     it("resumes the author's own session, pushes without force, and requeues the review", async () => {
       writeSession(38, { agent: "codex", sessionId: "old-thread" }, cwd);
       const { env, agentCalls, gitCalls } = fakeEnv({ runs: [{ ok: true, sessionId: "old-thread" }] });

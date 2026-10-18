@@ -17,6 +17,13 @@ import { DEFAULT_CONFIG } from "../src/config.js";
 import { configuredAdapterCommands } from "../src/commands/doctor.js";
 
 describe("task adapter arguments", () => {
+  it("sets a remaining USD cap for Claude task and review argv only when supplied", () => {
+    expect(buildClaudeTaskArgs(undefined, undefined, 1.25)).toContain("--max-budget-usd");
+    expect(buildClaudeTaskArgs(undefined, undefined, 1.25).slice(-2)).toEqual(["--max-budget-usd", "1.25"]);
+    expect(buildClaudeReviewArgs(undefined, 0.75).slice(-2)).toEqual(["--max-budget-usd", "0.75"]);
+    expect(buildClaudeTaskArgs()).not.toContain("--max-budget-usd");
+    expect(buildClaudeReviewArgs()).not.toContain("--max-budget-usd");
+  });
   it("leaves Claude task arguments unchanged without a model", () => {
     expect(buildClaudeTaskArgs()).toEqual([
       "-p",

@@ -170,6 +170,7 @@ flowchart LR
   n53 -->|"retry: guidance recorded, re-observe"| n42
   n53 -->|"escalate, paused, failed or unparseable"| n54
   n43 -->|"budget spent, no triage left (spent or off)"| n54
+  n43 -->|"ticket budget spent"| n54
   n54 -->|"label + PR comment"| n55
   n55 -->|"loop ignores the task until handed back"| n44
   n43 -->|"drained or plan-complete"| n56
@@ -553,6 +554,7 @@ flowchart LR
     n55(["Human handoff"])
   n53 -->|"escalate, paused, failed or unparseable"| n54
   n43 -->|"budget spent, no triage left (spent or off)"| n54
+  n43 -->|"ticket budget spent"| n54
   n54 -->|"label + PR comment"| n55
   n55 -->|"loop ignores the task until handed back"| n44
 ```
@@ -565,6 +567,7 @@ Code references:
 
 Scenarios:
 
+- **Ticket budget spent** (`autopilot-budget-spent`): Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.
 - **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Lead escalates** (`autopilot-triage-escalate`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
 - **Triage disabled** (`autopilot-triage-disabled`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.

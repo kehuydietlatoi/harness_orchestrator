@@ -244,6 +244,16 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
   },
   {
     "frames": [
+      "autopilot-budget-spent:01 auto.observe <- cut",
+      "autopilot-budget-spent:02 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-budget-spent:03 step.escalate <- auto.decide>step.escalate:ticket-budget-spent",
+      "autopilot-budget-spent:04 auto.handoff <- step.escalate>auto.handoff:label-pr-comment",
+      "autopilot-budget-spent:05 step.none <- auto.handoff>step.none:loop-ignores-the-task-until-handed-back",
+    ],
+    "id": "autopilot-budget-spent",
+  },
+  {
+    "frames": [
       "autopilot-cascade:01 auto.observe <- cut",
       "autopilot-cascade:02 auto.decide <- auto.observe>auto.decide:observed-facts",
       "autopilot-cascade:03 step.cascade <- auto.decide>step.cascade:failed-fix-next-member-available",

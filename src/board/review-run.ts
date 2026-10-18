@@ -1,3 +1,4 @@
+import { runBudget } from "../tasks/budget-runtime.js";
 import { reviewIdentity } from "./review-identity.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -269,6 +270,7 @@ export interface ReviewRunDeps {
     runCwd: string;
     logName: string;
     timeoutMs: number;
+    maxBudgetUsd?: number;
   }): Promise<HeadlessResult>;
   /** An exact checkout of the PR head for the reviewer to read. */
   checkout(pr: Pick<Pr, "number" | "headSha">): Promise<ReviewCheckout>;
@@ -291,9 +293,10 @@ export interface ReviewOutcome {
 
 function defaultDeps(cfg: OrchConfig, cwd: string): ReviewRunDeps {
   return {
-    runner: ({ reviewer, prompt, model, runCwd, logName, timeoutMs }) =>
+    runner: ({ reviewer, prompt, model, runCwd, logName, timeoutMs, maxBudgetUsd }) =>
       runHeadlessAgent(makeAdapter(reviewer, cfg), prompt, model, cwd, logName, timeoutMs, {
         readOnly: true,
+        ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
         runCwd,
       }),
     checkout: (pr) => prepareReviewCheckout(pr, cwd),
@@ -369,6 +372,7 @@ export async function runAutomatedReview(
       throw new Error(`'${key}' is paused (endpoint cooldown)`);
     }
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
+    const limits = runBudget(issue, cfg, cwd, cfg.reviewTimeoutMs);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
     const logName = `review-${prNum}-${pick.reviewer}`;
     const logFile = headlessLogFile(cwd, logName);
@@ -385,7 +389,7 @@ export async function runAutomatedReview(
         model,
         runCwd: checkout.path,
         logName,
-        timeoutMs: cfg.reviewTimeoutMs,
+        ...limits,
       });
     } finally {
       await checkout.release().catch((error: unknown) =>

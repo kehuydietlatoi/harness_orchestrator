@@ -26,11 +26,12 @@ export interface RunRecord {
   model: string | null;
   outcome: string;
   durationMs: number;
+  /** Harness invocations; older records imply one. */
+  requests?: number;
   tokensIn: number | null;
   tokensOut: number | null;
   tokensTotal: number | null;
   costUsd: number | null;
-  requests?: number;
 }
 
 export interface RunUsage {
@@ -252,11 +253,11 @@ function parseRunRecord(value: unknown): RunRecord | null {
     model: typeof obj.model === "string" ? obj.model : null,
     outcome: obj.outcome,
     durationMs: obj.durationMs as number,
+    ...(Number.isInteger(obj.requests) && (obj.requests as number) >= 0 ? { requests: obj.requests as number } : {}),
     tokensIn: nullableNumber(obj.tokensIn),
     tokensOut: nullableNumber(obj.tokensOut),
     tokensTotal: nullableNumber(obj.tokensTotal),
     costUsd: nullableNumber(obj.costUsd),
-    ...(nullableNumber(obj.requests) !== null ? { requests: obj.requests as number } : {}),
   };
 }
 

@@ -17,6 +17,14 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("loads additive per-tier budgets", () => {
+    const budgets = { default: { minutes: 30, requests: 60 }, byTier: { standard: { usd: 2 } } };
+    expect(loadConfig(writeConfig({ budgets })).budgets).toEqual(budgets);
+  });
+  it.each([{ default: { usd: -1 } }, { byTier: { easy: { requests: 0.5 } } }, { byTier: [] }])("rejects invalid budgets %j", (budgets) => {
+    expect(() => loadConfig(writeConfig({ budgets }))).toThrow();
+  });
+
   it("loads ordered cascade members and leaves legacy configs without a ladder", () => {
     expect(loadConfig(writeConfig({})).tierMembers).toBeUndefined();
     const tierMembers = { free: [], cheap: [], standard: [{ agent: "codex", model: "a" }, { agent: "codex", model: "b", effort: "high" }], lead: [] };

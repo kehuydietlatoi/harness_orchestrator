@@ -4,6 +4,8 @@
 > **Work loop:** `orch next --agent <you>` → work in the printed worktree → `orch submit`.
 > **Review:** when `orch review-queue --agent <you>` is non-empty, review the other harness's PRs.
 
+- **Ticket budgets (#126)**: `src/tasks/budget.ts` owns pure budget parsing, precedence (default < effort tier < issue, per dimension), and aggregation over all issue run phases. Unknown cost blocks another run only when USD is capped. Requests count harness invocations; legacy records imply one. Recheck remaining limits before fallback attempts after recording their predecessor; ticket exhaustion bypasses triage.
+
 ## Conventions
 
 - **Implementation cascade (#124)**: optional `tierMembers` enables an ordered fallback ladder; absent config keeps existing retry/wait behavior. `nextHop` moves forward through members and tiers, applying `validateRoute` to the resolved model/family. A hop requires the runner's no-commits/no-PR/safe-cleanup/lock-release proofs. `model:<id>` selects a configured member (including effort/family) on the next claim; abandon and tier-raising triage clear it. Independent reviewers keep their own premium model. Successful relabels emit one `cascade.hop` event and `cascadeFrom`/`cascadeTo` on the implement run; failed requeues emit neither.

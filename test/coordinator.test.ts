@@ -176,6 +176,20 @@ async function drive(world: World, opts: Partial<AutopilotOptions> = {}) {
 }
 
 describe("runAutopilot", () => {
+  it("escalates a spent ticket budget without launching an agent step", async () => {
+    const w = new World();
+    w.add(pr(38));
+    const deps = w.deps();
+    deps.budgetSpent = () => true;
+    const executed = deps.execute;
+    deps.execute = async (obs, step) => {
+      expect(step).toEqual({ kind: "escalate", reason: "budget spent" });
+      return executed(obs, step);
+    };
+    const result = await runAutopilot({ ...OPTS, claim: "none" }, deps);
+    expect(result.escalated).toEqual([38]);
+    expect(w.calls).toEqual(["escalate:38"]);
+  });
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 

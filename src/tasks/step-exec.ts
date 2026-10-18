@@ -1,3 +1,4 @@
+import { BudgetSpentError, runBudget } from "./budget-runtime.js";
 import { cascadeRequeue } from "./cascade-requeue.js";
 import { appendEvent } from "./events.js";
 import { mkdirSync } from "node:fs";
@@ -98,6 +99,7 @@ export async function executeReview(obs: TaskObservation, cfg: OrchConfig, cwd: 
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
     return error instanceof NoReviewerError ? { signal: "agent.unavailable", detail } : failure(detail);
   }
 }
@@ -246,7 +248,7 @@ export async function executeFix(
   let started = Date.now();
   let attempt = await runTracked(env, {
     issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile: followUpLog(cwd, n, `fix${round}`),
-    timeoutMs: cfg.taskTimeoutMs, resumeSession: resume,
+    ...runBudget(obs.issue, cfg, cwd), resumeSession: resume,
   });
   if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(key, attempt.logText, cwd)) {
     // The harness could not resume (expired/foreign session): continue from durable facts instead.
@@ -260,9 +262,15 @@ export async function executeFix(
     const unsafe = await recheckWorktree(obs, cfg, cwd, env);
     if (unsafe) return failure(unsafe);
     started = Date.now();
+    let limits: ReturnType<typeof runBudget>;
+    try { limits = runBudget(obs.issue, cfg, cwd); }
+    catch (error) {
+      if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
+      throw error;
+    }
     attempt = await runTracked(env, {
       issue: n, agent, worktree, prompt: prompt(false), model, logFile: followUpLog(cwd, n, `fix${round}-cold`),
-      timeoutMs: cfg.taskTimeoutMs,
+      ...limits,
     });
   }
   const run = attempt.run;
@@ -316,7 +324,7 @@ export async function executeResolveConflict(
   const logFile = followUpLog(cwd, n, `resolve${round}`);
   const started = Date.now();
   const attempt = await runTracked(env, {
-    issue: n, agent, worktree, model, logFile, timeoutMs: cfg.taskTimeoutMs,
+    issue: n, agent, worktree, model, logFile, ...runBudget(obs.issue, cfg, cwd),
     prompt: formatConflictPrompt({ issue: obs.issue, pr: obs.pr, worktree, baseName: base.name }),
   });
   const run = attempt.run;
@@ -354,6 +362,8 @@ export interface TriageEnv {
     model: ModelSpec | undefined;
     pr: Pick<Pr, "number" | "headSha">;
     logName: string;
+    timeoutMs?: number;
+    maxBudgetUsd?: number;
   }): Promise<HeadlessResult>;
   /** Best-effort list of the PR's changed files for the prompt. */
   changedFiles(pr: number): Promise<ChangedFile[]>;
@@ -368,10 +378,11 @@ export interface TriageEnv {
 
 export function defaultTriageEnv(cfg: OrchConfig, cwd: string): TriageEnv {
   return {
-    runLead: async ({ prompt, model, pr, logName }) => {
+    runLead: async ({ prompt, model, pr, logName, timeoutMs, maxBudgetUsd }) => {
       const checkout = await prepareReviewCheckout(pr, cwd);
       try {
-        return await runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, logName, cfg.reviewTimeoutMs, {
+        return await runHeadlessAgent(makeAdapter(cfg.lead, cfg), prompt, model, cwd, logName, timeoutMs ?? cfg.reviewTimeoutMs, {
+          ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
           readOnly: true,
           runCwd: checkout.path,
         });
@@ -416,6 +427,7 @@ export async function executeTriage(
     return env.escalate(obs, `${reason}; lead triage was unavailable ('${lead}' is paused until ${pausedUntil.toISOString()})`);
   }
 
+  const limits = runBudget(obs.issue, cfg, cwd, cfg.reviewTimeoutMs);
   const effort = issueEffort(obs.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
   const logName = `triage-${n}-pr${obs.pr.number}`;
   const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
@@ -431,7 +443,7 @@ export async function executeTriage(
       checks: obs.facts.pr?.checks ?? "unknown", mergeable: obs.facts.pr?.mergeable ?? "unknown",
       reviews: obs.reviews, files,
     });
-    const run = await env.runLead({ prompt, model, pr: obs.pr, logName });
+    const run = await env.runLead({ prompt, model, pr: obs.pr, logName, ...limits });
     decision = run.code === 0 && !run.timedOut ? parseTriageDecision(run.text) : null;
     if (!decision) {
       const limit = detectUsageLimit(run.raw, env.now());

@@ -1,3 +1,4 @@
+import { BudgetSpentError, runBudget } from "./budget-runtime.js";
 import { cascadeLabels } from "./cascade-requeue.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
@@ -29,6 +30,7 @@ export interface RunSummary {
   issue: number;
   outcome: "submitted" | "needs-attention" | "failed" | "requeued";
   prUrl?: string;
+  reason?: "budget spent";
   durationMs: number;
 }
 
@@ -214,6 +216,14 @@ async function processClaimed(
   cwd: string,
 ): Promise<RunSummary> {
   const n = task.issue.number;
+  let limits: ReturnType<typeof runBudget>;
+  try { limits = runBudget(task.issue, cfg, cwd); }
+  catch (error) {
+    if (!(error instanceof BudgetSpentError)) throw error;
+    await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
+    log.warn("#" + n + ": budget spent; handing task to a human");
+    return { issue: n, outcome: "needs-attention", reason: "budget spent", durationMs: 0 };
+  }
   const model = resolveTaskModel(agent, task.issue, cfg);
   const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");
@@ -242,7 +252,7 @@ async function processClaimed(
       prompt,
       model,
       logFile,
-      timeoutMs: cfg.taskTimeoutMs,
+      ...limits,
     });
     harnessDurationMs = result.durationMs;
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
