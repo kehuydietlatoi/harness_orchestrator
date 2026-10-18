@@ -350,7 +350,7 @@ export async function runAutomatedReview(
     if (!cfg.agents.includes(pick.reviewer)) throw new Error(`'${pick.reviewer}' is not a configured agent.`);
     tried.add(pick.reviewer);
 
-    const model = resolveTaskModel(pick.reviewer, issue, cfg);
+    const model = resolveTaskModel(pick.reviewer, issue, cfg, { purpose: "review" });
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
     const logName = `review-${prNum}-${pick.reviewer}`;

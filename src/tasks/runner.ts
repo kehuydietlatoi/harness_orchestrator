@@ -32,10 +32,14 @@ export function resolveTaskModel(
   agent: string,
   issue: Issue,
   cfg: OrchConfig,
+  opts: { purpose?: "implementation" | "review" } = {},
 ): ModelSpec | undefined {
   const tier = issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
-  const route = validateRoute({ role: issueRole(issue), agent, tier }, cfg);
-  if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+  // Role allowances constrain writable implementation, not independent review.
+  if (opts.purpose !== "review") {
+    const route = validateRoute({ role: issueRole(issue), agent, tier }, cfg);
+    if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+  }
   return cfg.adapters[agent]?.models?.[tier];
 }
 
