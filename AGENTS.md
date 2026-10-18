@@ -10,6 +10,8 @@
 
 - **Claude 5.5 pricing (#163)**: model-specific defaults follow claude.com/pricing as verified 2026-10-19; generic `opus`/`sonnet` aliases retain older-model rates. Pricing models cache reads only (`input`, `cachedInput`, `output`); config overrides merge over defaults.
 
+- **OpenCode adapter reference (#161)**: `docs/opencode-adapter.md` owns the current adapter contract and dated 2026-10-18 spike evidence; fixtures remain in `test/fixtures/opencode-1.19.3/`. `test/opencode-doc.test.ts` checks repository links and named spike fixtures; the package e2e checks README-linked docs are shipped.
+
 - **Usage-limit reset dates (#152)**: `nextClockTime` parses explicit English month/day (optional ordinal)/year and AM/PM clocks as local dates without rolling them forward. Only bare clocks roll to their next occurrence. Invalid dates return null so availability retains its default cooldown.
 
 - **PR diff escapes (#146)**: `prDiff` passes `--allow-escape-sequences` to gh and replaces every ESC byte with `<ESC>` before returning a successful diff to prompts or terminals. Other gh output is unchanged.
