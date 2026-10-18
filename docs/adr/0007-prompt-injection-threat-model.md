@@ -69,3 +69,33 @@ The trust model:
   the risk materially.
 - No code change accompanies this ADR; it records the threat model and the
   boundary so future sandboxing/credential-scoping work has a shared reference.
+
+## OpenCode worker configuration (2026-10-18, #138 / #142)
+
+Live checks against OpenCode **1.19.3** confirmed that repository
+`permission.bash: "allow"` and `permission.edit: "allow"` override the corresponding
+denials in `OPENCODE_CONFIG`. The opt-in test uses `opencode debug config` in a
+real Git worktree, with permissive config in both checkouts and `.opencode`.
+Setting `OPENCODE_DISABLE_PROJECT_CONFIG=true` restores orch's permissions.
+This matches the upstream [config merge order](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/config/config.ts)
+and [project discovery guard](https://github.com/anomalyco/opencode/blob/v1.19.3/packages/opencode/src/config/paths.ts).
+
+Workers always set that flag, excluding repository JSON/JSONC config and
+`.opencode` agents, plugins, and commands. They also clear inherited
+`OPENCODE_CONFIG_CONTENT`, `OPENCODE_CONFIG_DIR`, and `OPENCODE_PERMISSION`
+overrides. Repository provider settings must move to trusted user configuration.
+This excludes project permission widening; it is not an OS filesystem sandbox,
+and user/global OpenCode configuration remains trusted operator input.
+
+The per-run file grants `external_directory` only for the canonical worktree's
+`<absolute-path>/*`, preceded by `"*": "deny"`. Paths containing `*` or `?` are
+rejected because OpenCode cannot escape them literally. A live model-backed
+check completed `git status --short` through bash with `workdir` explicitly set
+to a Git worktree, without an external-directory prompt or auto-rejection.
+
+Reproduce with `ORCH_OPENCODE_LIVE=1 npm run test -- test/opencode-adapter.test.ts`.
+On Windows set `ORCH_OPENCODE_CMD` to the native `opencode.exe` path when only an
+npm shell shim is on PATH. The precedence test pins version 1.19.3 and requires
+no model call; the bash and toy-edit checks use the configured free DeepSeek
+endpoint and require network access. Re-run these checks before upgrading
+OpenCode's permission contract.
