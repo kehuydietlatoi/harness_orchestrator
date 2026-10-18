@@ -1,0 +1,82 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`OpenCode 1.19.3 fixtures > reduces ask-auto-rejected-early-stop to incomplete 1`] = `
+{
+  "outcome": "incomplete",
+  "resultText": "I'll run the independent commands first.",
+  "sessionId": "ses_eb0ac745effeywr4diSb4jjtxU",
+  "usage": {
+    "cachedInputTokens": 8192,
+    "costUsd": 0,
+    "requests": 1,
+    "tokensIn": 3993,
+    "tokensOut": 107,
+  },
+}
+`;
+
+exports[`OpenCode 1.19.3 fixtures > reduces deny-then-stop to completed 1`] = `
+{
+  "outcome": "completed",
+  "resultText": "I can't run that — bash access is restricted to only \`node --version\`, so \`git log --oneline\` is blocked.",
+  "sessionId": "ses_eb0a99ff7ffeDrwtvvbieH4u5b",
+  "usage": {
+    "cachedInputTokens": 24320,
+    "costUsd": 0,
+    "requests": 2,
+    "tokensIn": 921,
+    "tokensOut": 70,
+  },
+}
+`;
+
+exports[`OpenCode 1.19.3 fixtures > reduces error-503-retryable to endpoint-unavailable 1`] = `
+{
+  "error": {
+    "isRetryable": true,
+    "statusCode": 503,
+  },
+  "outcome": "endpoint-unavailable",
+  "resultText": "",
+  "sessionId": "ses_eb0aebe2affeXcACnF1qMvj0MG",
+  "usage": {
+    "cachedInputTokens": 0,
+    "costUsd": 0,
+    "requests": 0,
+    "tokensIn": 0,
+    "tokensOut": 0,
+  },
+}
+`;
+
+exports[`OpenCode 1.19.3 fixtures > reduces resume-session to completed 1`] = `
+{
+  "outcome": "completed",
+  "resultText": "I changed the \`add\` function in math.js:2 from \`return a - b;\` to \`return a + b;\`.
+
+BANANA",
+  "sessionId": "ses_eb0ad63b3ffewudlTmT5A0FD6r",
+  "usage": {
+    "cachedInputTokens": 1792,
+    "costUsd": 0,
+    "requests": 1,
+    "tokensIn": 11673,
+    "tokensOut": 32,
+  },
+}
+`;
+
+exports[`OpenCode 1.19.3 fixtures > reduces success-edit to completed 1`] = `
+{
+  "outcome": "completed",
+  "resultText": "Done. \`math.js:2\` now returns \`a + b\`.",
+  "sessionId": "ses_eb0ad63b3ffewudlTmT5A0FD6r",
+  "usage": {
+    "cachedInputTokens": 29568,
+    "costUsd": 0,
+    "requests": 4,
+    "tokensIn": 23127,
+    "tokensOut": 209,
+  },
+}
+`;
