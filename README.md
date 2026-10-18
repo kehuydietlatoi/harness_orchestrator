@@ -271,7 +271,7 @@ commits and submits. A failed check retains the worktree and lock, flags
 to commit and submit without local checks; review and CI still gate merging.
 Commands never come from issue text. On Windows, use a native executable (for npm,
 use `node` with the path to `npm-cli.js`), because direct spawning cannot run `.cmd`
-shims. OpenCode implementation runs also allow literal configured commands for
+shims. [OpenCode implementation runs](docs/opencode-adapter.md) also allow literal configured commands for
 self-checks; commands needing shell quoting or containing glob syntax stay denied
 in the worker profile. Read-only runs receive no additional verify permissions,
 and `git push*` stays denied.
