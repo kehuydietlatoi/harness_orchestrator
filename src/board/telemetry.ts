@@ -27,9 +27,11 @@ export interface RunRecord {
   tokensOut: number | null;
   tokensTotal: number | null;
   costUsd: number | null;
+  requests?: number;
 }
 
 export interface RunUsage {
+  requests?: number;
   tokensIn: number | null;
   tokensOut: number | null;
   tokensTotal: number | null;
@@ -151,7 +153,8 @@ export function parseUsage(logText: string, agent: string): RunUsage {
       return {
         tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
         tokensTotal: usage.tokensIn + usage.tokensOut,
-        cachedInputTokens: usage.cachedInputTokens, costUsd: usage.costUsd,
+          cachedInputTokens: usage.cachedInputTokens, costUsd: usage.costUsd,
+          requests: usage.requests,
       };
     }
     let latest = emptyUsage();
@@ -248,6 +251,7 @@ function parseRunRecord(value: unknown): RunRecord | null {
     tokensOut: nullableNumber(obj.tokensOut),
     tokensTotal: nullableNumber(obj.tokensTotal),
     costUsd: nullableNumber(obj.costUsd),
+    ...(nullableNumber(obj.requests) !== null ? { requests: obj.requests as number } : {}),
   };
 }
 

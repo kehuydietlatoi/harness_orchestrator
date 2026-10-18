@@ -4,7 +4,7 @@ import type { RunContext, RunResult } from "../adapters/types.js";
 import { runHeadlessAgent, type HeadlessResult } from "../adapters/headless.js";
 import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
-import { markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { availabilityKey, markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
 import { issueEffort } from "../board/board.js";
 import { merge } from "../board/review.js";
 import {
@@ -78,8 +78,8 @@ async function runTracked(env: StepEnv, ctx: RunContext): Promise<TrackedRun> {
 }
 
 /** A harness failure that was really a usage limit pauses that harness instead of failing the task. */
-function afterAgentFailure(agent: string, attempt: TrackedRun, cwd: string): StepResult {
-  const until = noteUsageLimitFromLog(agent, attempt.logText, cwd);
+function afterAgentFailure(agent: string, attempt: TrackedRun, cwd: string, model?: ModelSpec): StepResult {
+  const until = noteUsageLimitFromLog(availabilityKey(agent, model?.model), attempt.logText, cwd);
   if (until) return { signal: "agent.unavailable", detail: `'${agent}' is out of usage until ${until.toISOString()}` };
   const { run } = attempt;
   return failure(run.timedOut ? `'${agent}' timed out` : `'${agent}' exited ${run.code}`);
@@ -221,7 +221,9 @@ export async function executeFix(
 ): Promise<StepResult> {
   const n = obs.issue.number;
   const agent = obs.author;
-  const pausedUntil = unavailableUntil(agent, cwd);
+  const model = resolveTaskModel(agent, obs.issue, cfg);
+  const key = availabilityKey(agent, model?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) return { signal: "agent.unavailable", detail: `'${agent}' is paused until ${pausedUntil.toISOString()}` };
   const found = await resolveWorktree(obs, cfg, cwd, env);
   if ("problem" in found) return failure(found.problem);
@@ -230,7 +232,6 @@ export async function executeFix(
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const failing = reason === "ci" ? await failingChecks(obs.pr.number, { cwd }) : [];
   const round = obs.facts.rounds + 1;
-  const model = resolveTaskModel(agent, obs.issue, cfg);
   const prompt = (resumed: boolean): string =>
     formatFixPrompt({
       issue: obs.issue, pr: obs.pr, worktree, reason, notes: obs.feedback, failingChecks: failing,
@@ -244,7 +245,7 @@ export async function executeFix(
     issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile: followUpLog(cwd, n, `fix${round}`),
     timeoutMs: cfg.taskTimeoutMs, resumeSession: resume,
   });
-  if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(agent, attempt.logText, cwd)) {
+  if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(key, attempt.logText, cwd)) {
     // The harness could not resume (expired/foreign session): continue from durable facts instead.
     log.warn(`#${n}: resuming '${agent}' session failed (exit ${attempt.run.code}); retrying with a fresh session`);
     resume = undefined;
@@ -263,7 +264,7 @@ export async function executeFix(
   }
   const run = attempt.run;
   const outcome = async (): Promise<StepResult> => {
-    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd, model);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
     // The harness ran with write access: prove again that this is still the right worktree before publishing.
     const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, () => recheckWorktree(obs, cfg, cwd, env));
@@ -296,6 +297,10 @@ export async function executeResolveConflict(
   const n = obs.issue.number;
   const agent = pickResolver(obs.author, cfg, cwd, obs.issue);
   if (!agent) return { signal: "agent.unavailable", detail: "no role-allowed harness is available to resolve the conflict" };
+  const model = resolveTaskModel(agent, obs.issue, cfg);
+  if (unavailableUntil(availabilityKey(agent, model?.model), cwd)) {
+    return { signal: "agent.unavailable", detail: "resolver endpoint is cooling down" };
+  }
   const found = await resolveWorktree(obs, cfg, cwd, env);
   if ("problem" in found) return failure(found.problem);
   const worktree = found.path;
@@ -305,7 +310,6 @@ export async function executeResolveConflict(
   if (fetch.code !== 0) return failure(`git fetch failed: ${fetch.stderr.trim()}`);
 
   const round = obs.facts.rounds + 1;
-  const model = resolveTaskModel(agent, obs.issue, cfg);
   const logFile = followUpLog(cwd, n, `resolve${round}`);
   const started = Date.now();
   const attempt = await runTracked(env, {
@@ -314,7 +318,7 @@ export async function executeResolveConflict(
   });
   const run = attempt.run;
   const result = await settled(async () => {
-    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd, model);
     const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
       const again = await recheckWorktree(obs, cfg, cwd, env); // the harness had write access: still the right worktree?
       if (again) return again;
@@ -402,12 +406,13 @@ export async function executeTriage(
 ): Promise<StepResult> {
   const n = obs.issue.number;
   const lead = cfg.lead;
-  const pausedUntil = unavailableUntil(lead, cwd);
+  const model = resolveLeadModel(cfg);
+  const key = availabilityKey(lead, model?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
     return env.escalate(obs, `${reason}; lead triage was unavailable ('${lead}' is paused until ${pausedUntil.toISOString()})`);
   }
 
-  const model = resolveLeadModel(cfg);
   const effort = issueEffort(obs.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
   const logName = `triage-${n}-pr${obs.pr.number}`;
   const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
@@ -428,7 +433,7 @@ export async function executeTriage(
     if (!decision) {
       const limit = detectUsageLimit(run.raw, env.now());
       if (limit) {
-        const until = markUnavailable(lead, { resetAt: limit.resetAt, reason: limit.message }, cwd, env.now());
+          const until = markUnavailable(key, { resetAt: limit.resetAt, reason: limit.message }, cwd, env.now());
         unavailable = `'${lead}' hit its usage limit (until ${until.toISOString()})`;
       } else {
         failed = run.aborted !== undefined ? `aborted: ${run.aborted}`

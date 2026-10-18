@@ -10,6 +10,8 @@
 
 _(add project-specific facts, gotchas, and architectural decisions below)_
 
+- **Quota billing and endpoint cooldowns (#122)**: `resolvePricingMode` defaults Claude to `api`, Codex to `subscription`, and OpenCode to `quota`. Quota telemetry overrides reported dollar costs to zero, preserves reducer `requests`, and increments `quota.json` as `{UTC-date: {"opencode:provider/model": requests}}` under the project state directory. Use `availabilityKey(agent, resolvedModel.model)` for cooldown reads/writes: OpenCode shares a budget only within an endpoint; Claude/Codex retain agent keys. Endpoint refusals reuse safe `requeueClaim` recovery, and the coordinator's blocked backlog keeps waiting for queued tasks on cooled endpoints.
+
 - **Autopilot Board seam (#118)**: `src/github/board.ts` defines `Board` and its production delegate `ghBoard`. `observeTasks(cfg, cwd, opts, board)` routes GitHub observations through the optional fourth argument (defaults to `ghBoard`); existing `github.ts` exports and other consumers retain their contracts.
 
 - **OpenCode permissions (#119)**: every run gets a unique `OPENCODE_CONFIG` under the project state directory, outside the worktree (an `ORCH_HOME` inside the checkout is rejected). The config is removed after the child exits. OpenCode needs an explicit provider/model and a native executable for direct `shell:false` spawning; implementation and read-only profiles use deterministic allow/deny rules because interactive permission prompts can silently end a run with exit 0. Success is the reducer's `completed` outcome, and only the current run's appended log is reduced.

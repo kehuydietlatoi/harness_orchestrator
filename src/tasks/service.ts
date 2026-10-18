@@ -352,7 +352,7 @@ export async function claimNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
-  opts: ClaimFilter = {},
+  opts: ClaimFilter & { canClaim?: (issue: Issue) => boolean } = {},
 ): Promise<ClaimedTask | null> {
   const candidates = await eligibleIssues(cwd, agent);
   if (candidates.length === 0) return null;
@@ -372,6 +372,7 @@ export async function claimNext(
       log.warn(`#${candidate.number}: disallowed route: ${route.reason}`);
       continue;
     }
+    if (opts.canClaim && !opts.canClaim(candidate)) continue;
     try {
       return await claimSpecific(candidate.number, agent, cfg, cwd, deps);
     } catch {

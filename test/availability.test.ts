@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   availabilityPath,
+  availabilityKey,
   DEFAULT_COOLDOWN_MS,
   markUnavailable,
   noteUsageLimitFromLog,
@@ -27,6 +28,16 @@ describe("harness availability store", () => {
   it("is available when nothing is recorded", () => {
     expect(unavailableUntil("codex", cwd, now)).toBeNull();
     expect(unavailableAgents(["claude", "codex"], cwd, now).size).toBe(0);
+  });
+
+  it("isolates OpenCode endpoint cooldowns from other models and harness budgets", () => {
+    const key = availabilityKey("opencode", "zen/free");
+    noteUsageLimitFromLog(key, '{"type":"error","error":{"data":{"statusCode":503}}}', cwd, now);
+    expect(unavailableUntil(key, cwd, now)?.toISOString()).toBe(minutes(10));
+    expect(unavailableUntil(availabilityKey("opencode", "zen/cheap"), cwd, now)).toBeNull();
+    expect(unavailableUntil("opencode", cwd, now)).toBeNull();
+    expect(availabilityKey("codex", "any")).toBe("codex");
+    expect(availabilityKey("claude", "any")).toBe("claude");
   });
 
   it("marks an agent unavailable until its reset and then lets it back in", () => {
