@@ -7,6 +7,7 @@ import type { Issue } from "../src/github/github.js";
 import { markUnavailable, unavailableUntil } from "../src/board/availability.js";
 import { readRuns } from "../src/board/telemetry.js";
 import { incrementQuota, quotaPath } from "../src/board/quota.js";
+vi.mock("../src/adapters/opencode.js", () => ({ OpencodeAdapter: class { async pingEndpoint() { return true; } } }));
 
 const mocks = vi.hoisted(() => ({
   claimNext: vi.fn(), claimSpecific: vi.fn(), listIssues: vi.fn(), editIssue: vi.fn(),
@@ -60,8 +61,8 @@ describe("OpenCode endpoint dispatch and quota telemetry", () => {
   it("filters next-task candidates by their resolved model before claiming", async () => {
     markUnavailable("opencode:zen/free", { resetAt: new Date(Date.now() + 600_000).toISOString(), reason: "503" }, cwd);
     mocks.claimNext.mockImplementation(async (_agent, _cfg, _cwd, opts) => {
-      expect(opts.canClaim(issue(1, "free"))).toBe(false);
-      expect(opts.canClaim(issue(2, "cheap"))).toBe(true);
+      expect(await opts.canClaim(issue(1, "free"))).toBe(false);
+      expect(await opts.canClaim(issue(2, "cheap"))).toBe(true);
       return null;
     });
     expect(await processNext("opencode", cfg, cwd)).toBeNull();

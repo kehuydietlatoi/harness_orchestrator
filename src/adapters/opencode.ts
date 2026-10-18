@@ -50,6 +50,14 @@ export class OpencodeAdapter implements HarnessAdapter {
     } catch { return false; }
   }
 
+  /** Probe the model, rather than just the local CLI, before claiming work. */
+  async pingEndpoint(slug: string, cwd: string): Promise<boolean> {
+    const { result, reduced } = await this.run({
+      cwd, prompt: "Reply OK", model: { model: slug }, timeoutMs: 60_000, readOnly: true,
+    });
+    return result.code === 0 && reduced.outcome === "completed" && reduced.resultText.trim() === "OK";
+  }
+
   private async run(ctx: {
     cwd: string; prompt: string; model?: ModelSpec; logFile?: string;
     timeoutMs?: number; resumeSession?: string; readOnly?: boolean;

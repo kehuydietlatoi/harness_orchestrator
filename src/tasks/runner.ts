@@ -21,6 +21,7 @@ import { estimateCost } from "../board/pricing.js";
 import { availabilityKey, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
 import { incrementQuota } from "../board/quota.js";
 import { writeSession } from "./sessions.js";
+import { endpointHealthy } from "../board/health.js";
 
 export interface RunSummary {
   issue: number;
@@ -164,7 +165,7 @@ export async function processNext(
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
     ...(agent === "opencode" ? {
-      canClaim: (issue: Issue) => !unavailableUntil(availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model), cwd),
+      canClaim: (issue: Issue) => endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]),
     } : {}),
   });
   if (!task) return null;
@@ -192,6 +193,9 @@ export async function dispatchSpecific(
   const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
     throw new Error(`'${key}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+  }
+  if (!(await endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]))) {
+    return { issue: number, outcome: "requeued", durationMs: 0 };
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);

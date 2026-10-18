@@ -6,6 +6,8 @@
 
 ## Conventions
 
+- **OpenCode dispatch health (#123)**: `src/board/health.ts` gates targeted dispatch and `claimNext`'s async `canClaim` predicate before any claim. Slug probe results persist in project `health.json` for 10 minutes; concurrent probes share one promise. `OpencodeAdapter.pingEndpoint` sends `Reply OK` on stdin with a 60-second timeout and requires a completed, exit-zero `OK` response. Failure cools `opencode:<slug>` in `availability.json` and leaves the todo untouched, with no run/failure telemetry. Claude/Codex bypass probes.
+
 - **Role routing (#120)**: `src/routing/route-policy.ts` is the pure authority for role tier/family allowances; no `role:` label is unrestricted, unknown roles fail closed. Assignment and execution share it. Provider family comes from the selected model override, then adapter default; OpenCode requires a family per configured model and never inherits its adapter family. Role constraints do not define approval policy.
 
 _(add project-specific facts, gotchas, and architectural decisions below)_
