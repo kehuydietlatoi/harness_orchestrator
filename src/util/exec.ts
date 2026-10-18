@@ -1,4 +1,7 @@
 import { spawn } from "node:child_process";
+import { constants } from "node:fs";
+import { access, stat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "./spawn.js";
 
@@ -98,8 +101,18 @@ export function exec(
   });
 }
 
-/** True if `cmd` is resolvable on PATH. */
+/** True if `cmd` is an executable absolute file path or resolvable on PATH. */
 export async function commandExists(cmd: string): Promise<boolean> {
+  // `where` rejects absolute paths. Check the exact file without executing it;
+  // X_OK also enforces execute permission on POSIX (existence on Windows).
+  if (isAbsolute(cmd)) {
+    try {
+      await access(cmd, constants.X_OK);
+      return (await stat(cmd)).isFile();
+    } catch {
+      return false;
+    }
+  }
   const isWin = process.platform === "win32";
   // Pass cmd as a positional arg ($1), never interpolated into the script, so a
   // command name can never break out of the `command -v` invocation.
