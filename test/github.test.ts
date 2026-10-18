@@ -9,10 +9,21 @@ const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff } = await 
 describe("prDiff", () => {
   beforeEach(() => execMock.mockReset());
 
-  it("returns the diff on success, strict or not", async () => {
+  it("returns a diff without escapes unchanged, strict or not", async () => {
     for (const strict of [false, true]) {
       execMock.mockResolvedValueOnce({ code: 0, stdout: "diff --git a/x b/x\n", stderr: "" });
       expect(await prDiff(7, { strict })).toBe("diff --git a/x b/x\n");
+    }
+  });
+
+  it("allows escape sequences and renders every ESC visibly, strict or not", async () => {
+    const diff = "diff --git a/stderr b/stderr\n+\u001b[31merror\u001b[0m\n+\u001b]0;title\u0007\n+\u001b";
+    for (const strict of [false, true]) {
+      execMock.mockResolvedValueOnce({ code: 0, stdout: diff, stderr: "" });
+      const result = await prDiff(7, { cwd: "/repo", strict });
+      expect(result).toBe("diff --git a/stderr b/stderr\n+<ESC>[31merror<ESC>[0m\n+<ESC>]0;title\u0007\n+<ESC>");
+      expect(result).not.toContain("\u001b");
+      expect(execMock).toHaveBeenLastCalledWith("gh", ["pr", "diff", "7", "--allow-escape-sequences"], { cwd: "/repo" });
     }
   });
 
