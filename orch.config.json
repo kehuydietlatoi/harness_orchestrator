@@ -16,5 +16,6 @@
     "codex": {
       "cmd": "codex"
     }
-  }
+  },
+  "baseBranch": "studio"
 }
