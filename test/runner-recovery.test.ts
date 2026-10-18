@@ -114,6 +114,36 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
+  it("reports a ticket time budget cutoff as budget-spent", async () => {
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: "Budget: 0.2m" }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 12_300 });
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention", reason: "budget spent" });
+      expect(mocks.runTask).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 12_000 }));
+      expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "budget-spent", requests: 1 }), cwd);
+      expect(output.mock.calls.flat().join("\n")).toContain("time budget spent");
+      expect(output.mock.calls.flat().join("\n")).not.toContain("timed out");
+    } finally { output.mockRestore(); }
+  });
+
+  it.each([undefined, 0, 3])("records at least one request per invocation (reported %s)", requests => {
+    mocks.parseUsage.mockReturnValueOnce({ tokensIn: null, tokensOut: null, tokensTotal: null, costUsd: null, ...{ requests } });
+    recordRun(35, "codex", undefined, "failed", 1, join(cwd, "missing.jsonl"), cwd, DEFAULT_CONFIG, { phase: "implement" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ requests: Math.max(1, requests ?? 1) }), cwd);
+  });
+
+  it("keeps an ordinary timeout when the harness deadline is shorter than the ticket budget", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 1000 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, taskTimeoutMs: 1000, budgets: { default: { minutes: 1 } } }, cwd)).toMatchObject({ outcome: "failed" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed", requests: 1 }), cwd);
+  });
+
+  it("does not call a non-timeout failure a budget stop", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: false, durationMs: 1 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 0.2 } } }, cwd)).toMatchObject({ outcome: "failed" });
+  });
+
   it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {
     mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
     mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
@@ -215,7 +245,10 @@ describe("processNext recovery", () => {
     mocks.claimNext.mockResolvedValue({ issue: { ...issue, labels: ["agent:opencode", "effort:free", "status:claimed"] }, worktree: { path: worktree, branch: "task/35" } });
     mocks.runTask.mockResolvedValue({ ok: false, outcome, code: 1, durationMs: 1, timedOut: false });
     const started = Date.now();
-    const result = await processNext("opencode", cfg, cwd);
+    const onCascade = vi.fn();
+    const result = await processNext("opencode", cfg, cwd, { onCascade });
+    expect(onCascade).toHaveBeenCalledOnce();
+    expect(onCascade).toHaveBeenCalledWith("opencode");
     const cooldownMs = outcome === "endpoint-unavailable" ? 10 * 60_000 : 60 * 60_000;
     const until = unavailableUntil("opencode:zen/free", cwd)!.getTime();
     expect(until).toBeGreaterThanOrEqual(started + cooldownMs);
@@ -244,7 +277,9 @@ describe("processNext recovery", () => {
     if (failure === "retained") mocks.removeWorktree.mockResolvedValue(false);
     if (failure === "lock") mocks.lockRelease.mockResolvedValue(false);
     if (failure === "labels") mocks.ensureLabels.mockRejectedValueOnce(new Error("labels unavailable"));
-    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("failed");
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("failed");
+    expect(onCascade).not.toHaveBeenCalled();
     expect(mocks.appendRun).toHaveBeenCalledWith(expect.not.objectContaining({ cascadeTo: expect.anything() }), cwd);
     const { readEvents } = await import("../src/tasks/events.js");
     expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([]);
@@ -253,7 +288,9 @@ describe("processNext recovery", () => {
   it("keeps today's requeue/wait behavior when the ladder is exhausted", async () => {
     const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }] } };
     mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
-    expect((await processNext("codex", cfg, cwd))?.outcome).toBe("requeued");
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("requeued");
+    expect(onCascade).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenLastCalledWith(35, { cwd, addLabels: ["status:todo"], removeLabels: ["status:claimed", "status:in-progress"] });
     expect(mocks.ensureLabels).not.toHaveBeenCalled();
   });

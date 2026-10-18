@@ -17,7 +17,7 @@ export function telemetryFact(records: readonly { issue: number; outcome?: strin
   const latest = records.filter((r) => r.issue === issue).at(-1);
   switch (latest?.outcome) {
     case "submitted": case "auto-submitted": return "submitted";
-    case "failed": return "failed";
+    case "failed": case "budget-spent": return "failed";
     case "needs-attention": case "no-commits": return "no-commits";
     default: return "none";
   }
