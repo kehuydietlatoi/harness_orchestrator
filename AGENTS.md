@@ -7,6 +7,8 @@
 ## Conventions
 _(add project-specific facts, gotchas, and architectural decisions below)_
 
+- **OpenCode JSONL (#116)**: `src/adapters/opencode-events.ts` owns the pure OpenCode 1.19.3 argv/reducer contract, pinned by copied fixture snapshots. Prompts go on stdin; resume alone adds `-s`. Tool errors can recover to a final `stop`, while stderr `auto-rejecting` or a missing final `stop` means incomplete even at exit 0. Usage sums step finishes; requests count step starts.
+
 - **Flow label visibility (#110)**: `public/index.html` keeps state-driven edge-label visibility in the extractable pure `flow-label-visibility` block; hover/focus visibility stays in CSS. Hit paths share the rendered edge geometry and must keep their transparent 10px stroke even on highlighted/active edges.
 
 - **Workflow graph and docs (#98)**: `src/demo/flow-graph.ts` is the single source for the graph and generated `docs/FLOWS.md`. New autopilot steps or lifecycle states must add nodes and a registered scenario; cover every new edge, then run `npm run docs:flows`. `test/flows-coverage.test.ts` enforces full edge/flow coverage and documentation drift.
