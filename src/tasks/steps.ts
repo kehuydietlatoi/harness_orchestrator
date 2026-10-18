@@ -5,6 +5,8 @@
  * every time, so a lost or duplicated signal can never put a task in the wrong place.
  */
 
+import type { CascadeRoute } from "../config.js";
+
 export type ChecksFact = "pass" | "fail" | "pending" | "none";
 export type MergeableFact = "clean" | "conflicting" | "unknown";
 
@@ -16,6 +18,10 @@ export interface PrStepFacts {
 }
 
 export interface StepFacts {
+  /** Failed fix-type attempts on this head and route, supplied by the coordinator. */
+  failedFixAttempts?: number;
+  /** Policy-validated next member; absent preserves the existing retry policy. */
+  nextCascade?: CascadeRoute | null;
   /** The issue carries `needs-attention`: a human owns it until they clear it. */
   attention: boolean;
   /** The task's open pull request, or null before submission / after merge. */
@@ -39,6 +45,8 @@ export interface StepFacts {
 }
 
 export type Step =
+  /** A failed fix switches to the next configured member before another writable run. */
+  | { kind: "cascade"; route: CascadeRoute }
   /** Nothing for orch to do (no PR yet, or a human owns it). */
   | { kind: "none"; reason: string }
   /** Run a read-only review of the current head. */
@@ -80,6 +88,11 @@ export function decideStep(f: StepFacts): Step {
     reason: `${what} after ${f.rounds} fix round${f.rounds === 1 ? "" : "s"} ` +
       `(limit ${f.maxRounds}${extra ? ` + ${extra} granted by triage` : ""})`,
   });
+
+  if ((f.failedFixAttempts ?? 0) >= 1 && f.nextCascade &&
+      (f.review.changesRequested || pr.checks === "fail" || pr.mergeable === "conflicting")) {
+    return { kind: "cascade", route: f.nextCascade };
+  }
 
   if (f.review.changesRequested) {
     return exhausted ? spent("review feedback is still unresolved") : { kind: "fix", reason: "review" };
