@@ -55,10 +55,14 @@ and releases the lock; only then does it relabel `status:todo` without `needs-at
 If the ladder is exhausted or absent, existing requeue/wait behavior applies.
 `model:` is cleared by abandon and tier-raising triage; independent review uses the
 reviewer's own premium model, while author identity uses the projected member.
-Autopilot also cascades a fix or conflict-resolution step after one failed attempt
+Autopilot also cascades a review fix or conflict-resolution step after one failed attempt
 on the current PR head when a next member exists. It replaces routing labels while
 retaining the PR, claim and worktree, then re-observes before retrying with a fresh
 session. With no next member the existing retry, triage and escalation policy applies.
+A failed CI fix instead escalates directly to a human, without changing tier or model
+labels or requesting lead triage. A fix must change files relative to the observed PR
+head: empty commits and commits with no net file changes fail before pushing and do
+not count as progress.
 Each successful hop writes `cascade.hop`; implementation runs also carry
 `cascadeFrom`/`cascadeTo` in their run record.
 Cascade selection skips members whose resolved endpoint (or harness for Claude/Codex)

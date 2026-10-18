@@ -100,6 +100,12 @@ function decidePrStep(f: StepFacts): Step {
       `(limit ${f.maxRounds}${extra ? ` + ${extra} granted by triage` : ""})`,
   });
 
+  // A CI fix that could not change the failing head needs a human, not a pricier run.
+  // Review feedback retains its precedence when both gates are red.
+  if ((f.failedFixAttempts ?? 0) >= 1 && !f.review.changesRequested && pr.checks === "fail") {
+    return { kind: "escalate", reason: "CI is still failing after a failed fix attempt; a human needs to investigate" };
+  }
+
   if ((f.failedFixAttempts ?? 0) >= 1 && f.nextCascade &&
       (f.review.changesRequested || pr.checks === "fail" || pr.mergeable === "conflicting")) {
     return { kind: "cascade", route: f.nextCascade };

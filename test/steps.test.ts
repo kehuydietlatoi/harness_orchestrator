@@ -158,9 +158,13 @@ describe("fix cascade", () => {
   const route = { agent: "claude", tier: "lead" } as const;
   const gates: Partial<StepFacts>[] = [
     { review: { approved: false, changesRequested: true } },
-    { pr: { number: 9, head: "h", checks: "fail", mergeable: "clean" } },
     { pr: { number: 9, head: "h", checks: "pass", mergeable: "conflicting" } },
   ];
+  it.each([undefined, route])("escalates a failed CI fix without cascading or spending triage: %j", (nextCascade) => {
+    expect(decideStep({
+      ...facts({ pr: { checks: "fail" } }), failedFixAttempts: 1, nextCascade, maxTriages: 1,
+    })).toMatchObject({ kind: "escalate", reason: expect.stringContaining("CI") });
+  });
   it.each(gates)("cascades a failed fix-type attempt before budget triage: %j", (gate) => {
     const f = { ...facts(), ...gate, nextCascade: route };
     expect(decideStep(f).kind).not.toBe("cascade");
