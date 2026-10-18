@@ -32,6 +32,11 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open task PR without current approval or current-head changes requested | `approve`; `requestChanges`; `repair` after current approval, current-head changes requested, or PR closure |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve`; `repair` from current review records | `requestChanges`; `repair` removes stale or revoked approvals |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
+
+`needs-attention` blocks automatic selection, direct claims, and targeted dispatch,
+including issues with `status:todo` or no `status:` label. Failed-run recovery removes
+`status:claimed` and `status:in-progress` while setting this hold. Clear the hold
+explicitly after recovery before retrying implementation.
 | `effort:free` | `c2e0c6` | Use the agent's *free* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
 | `effort:cheap` | `c2e0c6` | Use the agent's *cheap* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
 | `effort:standard` | `c2e0c6` | Use the agent's *standard* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
@@ -103,7 +108,9 @@ Each row is one atomic `editIssue`. `+` = add label, `−` = remove label.
 | Run fails / times out | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Run exception / submit uncertainty | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | preserve worktree and lock after a successful harness result; otherwise use the same conditional safe cleanup |
 | Run dies on a usage limit | `processClaimed` | `status:todo` | `status:claimed`, `status:in-progress` | only if safe cleanup removes the worktree (nothing left behind): remove it, release the lock, *then* relabel; telemetry `usage-limited` (not a failed run). Otherwise falls through to the "Run fails" row |
-| Run, no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
+| Completed run, uncommitted changes and no commits | `processClaimed` | `status:in-review`, `review:needed` | `status:claimed`, `status:in-progress` | coordinator runs configured `verify`, stages and commits output, then uses normal submit |
+| Coordinator verification fails | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | retain worktree and lock; comment failing argv and output tail; no commit or submit |
+| Run, clean and no commits | `processClaimed` | `needs-attention` | `status:claimed`, `status:in-progress` | safely prune only if clean, attached, and preserved; release lock only when removed |
 | Approve | `approve` | `reviewed-by:X` | `review:needed` | structured COMMENT review bound to the reviewed head |
 | Review (automated) | `runAutomatedReview` (`orch review-run`) | via `approve` / `requestChanges` | via `approve` / `requestChanges` | read-only headless session by the other harness (or a fresh self-review fallback), strict JSON verdict, recorded only if the PR head is unchanged |
 | Request changes | `requestChanges` | `status:in-progress` | `review:needed`, `status:in-review` | structured revocation; clears `reviewed-by:*` |

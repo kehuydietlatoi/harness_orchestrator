@@ -8,6 +8,10 @@
 
 ## Conventions
 
+- **Coordinator completion (#139)**: completed implementations with no commits and dirty task worktrees run trusted coordinator-loaded `verify` argv arrays (never issue text; `exec`, shell false, five minutes per command), then stage/commit with issue title/number and worker/model attribution and use normal `submit`. Failed checks retain worktree and lock, project needs-attention, and comment failing argv/output tail. Clean/no-commit runs retain the prior recovery path. OpenCode adds literal configured verify commands only to writable profiles; shell/glob syntax is not widened into permission patterns and push remains denied.
+
+- **Failed implement hold (#140)**: `needs-attention` blocks eligibility, direct claim setup, and targeted dispatch even with `status:todo` or no status label. Failed-run recovery clears `status:claimed`/`status:in-progress` and adds `needs-attention` before safe cleanup releases resources; absent status alone defaults to todo and must never bypass this hold. A human must clear the hold before another implement attempt.
+
 - **Implementation cascade (#124)**: optional `tierMembers` enables an ordered fallback ladder; absent config keeps existing retry/wait behavior. `nextHop` moves forward through members and tiers, applying `validateRoute` to the resolved model/family. A hop requires the runner's no-commits/no-PR/safe-cleanup/lock-release proofs. `model:<id>` selects a configured member (including effort/family) on the next claim; abandon and tier-raising triage clear it. Independent reviewers keep their own premium model. Successful relabels emit one `cascade.hop` event and `cascadeFrom`/`cascadeTo` on the implement run; failed requeues emit neither.
 
 
@@ -23,6 +27,7 @@ _(add project-specific facts, gotchas, and architectural decisions below)_
 - **Autopilot Board seam (#118)**: `src/github/board.ts` defines `Board` and its production delegate `ghBoard`. `observeTasks(cfg, cwd, opts, board)` routes GitHub observations through the optional fourth argument (defaults to `ghBoard`); existing `github.ts` exports and other consumers retain their contracts.
 
 - **OpenCode permissions (#119)**: every run gets a unique `OPENCODE_CONFIG` under the project state directory, outside the worktree (an `ORCH_HOME` inside the checkout is rejected). The config is removed after the child exits. OpenCode needs an explicit provider/model and a native executable for direct `shell:false` spawning; implementation and read-only profiles use deterministic allow/deny rules because interactive permission prompts can silently end a run with exit 0. Success is the reducer's `completed` outcome, and only the current run's appended log is reduced.
+- **OpenCode worktree/config isolation (#138, #142)**: `external_directory` denies `*` and allows only the canonical run worktree's `/*` pattern. OpenCode 1.19.3 merges project permissions after `OPENCODE_CONFIG`; workers set `OPENCODE_DISABLE_PROJECT_CONFIG=true` and clear inherited config-content/directory/permission overrides. Repository `opencode.json`, `opencode.jsonc`, and `.opencode` settings are unavailable to workers; configure providers globally. Live precedence and worktree-bash checks are opt-in in `test/opencode-adapter.test.ts`; see ADR-0007.
 
 - **OpenCode JSONL (#116)**: `src/adapters/opencode-events.ts` owns the pure OpenCode 1.19.3 argv/reducer contract, pinned by copied fixture snapshots. Prompts go on stdin; resume alone adds `-s`. Tool errors can recover to a final `stop`, while stderr `auto-rejecting` or a missing final `stop` means incomplete even at exit 0. Usage sums step finishes; requests count step starts.
 

@@ -127,6 +127,8 @@ export interface OrchConfig {
   worktreeRoot: string;
   maxConcurrent: number;
   taskTimeoutMs: number;
+  /** Trusted local checks, executed directly in the task worktree before auto-commit. */
+  verify?: string[][];
   budgets?: { default?: Budget; byTier?: Partial<Record<EffortTier, Budget>> };
   /**
    * How long one automated review may run. Much shorter than a task: reading a diff takes minutes, and a
@@ -218,6 +220,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  if (Object.prototype.hasOwnProperty.call(raw, "verify") &&
+      (!Array.isArray(raw.verify) || !raw.verify.every((argv) =>
+        Array.isArray(argv) && argv.length > 0 && argv.every((arg) =>
+          typeof arg === "string" && arg.trim().length > 0 && !arg.includes("\0"))))) {
+    throw new Error("verify must be a list of non-empty argv arrays of non-empty strings");
+  }
   if (
     Object.prototype.hasOwnProperty.call(raw, "baseBranch") &&
     (typeof raw.baseBranch !== "string" || raw.baseBranch.trim().length === 0)

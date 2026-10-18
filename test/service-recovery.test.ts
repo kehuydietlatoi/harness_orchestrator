@@ -126,6 +126,15 @@ function expectReadyProjection(h: Harness): void {
 beforeEach(() => vi.restoreAllMocks());
 
 describe("recoverable claim setup saga", () => {
+  it.each([false, true])("refuses needs-attention before claiming resources (todo=%s)", async (todo) => {
+    const h = harness();
+    h.state.issue.labels = ["agent:codex", "needs-attention", ...(todo ? [STATUS.todo] : [])];
+    await expect(claim(h)).rejects.toThrow(/needs-attention/);
+    expect(h.deps.acquireLock).not.toHaveBeenCalled();
+    expect(h.deps.editIssue).not.toHaveBeenCalled();
+    expect(h.deps.addWorktree).not.toHaveBeenCalled();
+  });
+
   it("does not mutate when initial observation finds an unowned worktree", async () => {
     const h = harness({
       initialWorktree: { outcome: "usable", worktree: taskWorktree },

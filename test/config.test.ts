@@ -17,6 +17,15 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("loads trusted verification argv arrays", () => {
+    expect(loadConfig(writeConfig({ verify: [["node", "--test"], ["npm", "test"]] })).verify)
+      .toEqual([["node", "--test"], ["npm", "test"]]);
+  });
+
+  it.each([null, "npm test", ["node --test"], [[]], [[""]], [["node", 1]], [["node", "\0"]]])("rejects invalid verify %j", verify => {
+    expect(() => loadConfig(writeConfig({ verify }))).toThrow(/verify/);
+  });
+
   it("loads additive per-tier budgets", () => {
     const budgets = { default: { minutes: 30, requests: 60 }, byTier: { standard: { usd: 2 } } };
     expect(loadConfig(writeConfig({ budgets })).budgets).toEqual(budgets);
