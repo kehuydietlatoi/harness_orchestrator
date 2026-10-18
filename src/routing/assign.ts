@@ -1,3 +1,4 @@
+import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
 import { parseDeps } from "../board/board.js";
 import { normalizeEffort, type EffortTier, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
@@ -148,7 +149,7 @@ export function formatBrief(issues: readonly Issue[], rollup: readonly AgentRoll
 export function applyPlan(
   plan: readonly PlanEntry[],
   issues: readonly Issue[],
-  cfg: Pick<OrchConfig, "agents" | "tierAliases">,
+  cfg: Pick<OrchConfig, "agents" | "tierAliases"> & RoutePolicyConfig,
 ): PlannedAssignments {
   const issueByNumber = new Map(
     issues.filter((issue) => issue.state.toUpperCase() === "OPEN").map((issue) => [issue.number, issue]),
@@ -177,6 +178,11 @@ export function applyPlan(
     const effort = normalizeEffort(entry.effort, cfg.tierAliases);
     if (!effort) {
       skips.push({ issue: entry.issue, reason: `invalid effort '${entry.effort}' (expected free, cheap, standard, or lead)` });
+      continue;
+    }
+    const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: effort }, cfg);
+    if (!route.ok) {
+      skips.push({ issue: entry.issue, reason: `disallowed route: ${route.reason}` });
       continue;
     }
     if (planned.has(entry.issue)) {

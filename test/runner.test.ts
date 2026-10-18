@@ -15,6 +15,14 @@ function issue(labels: string[] = []): Issue {
 }
 
 describe("resolveTaskModel", () => {
+  it("refuses a disallowed role route before dispatch", () => {
+    const cfg: OrchConfig = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead"], families: ["openai"] } } };
+    const task = issue(["role:coder", "agent:claude", "effort:lead"]);
+    expect(() => resolveTaskModel("claude", task, cfg)).toThrow(/disallowed route.*anthropic/);
+    expect(() => resolveDispatchAgent(task, new Map([[task.number, task]]), cfg)).toThrow(/disallowed route.*anthropic/);
+    expect(resolveTaskModel("codex", task, cfg)).toEqual(cfg.adapters.codex.models?.lead);
+  });
+
   it("resolves four tiers directly and legacy labels through aliases", () => {
     const models = { free: { model: "f" }, cheap: { model: "c" }, standard: { model: "s" }, lead: { model: "l" } };
     const cfg = { ...DEFAULT_CONFIG, adapters: { custom: { cmd: "custom", models } } };

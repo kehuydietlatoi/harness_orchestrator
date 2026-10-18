@@ -14,7 +14,8 @@ import type { RunPhase } from "../board/telemetry.js";
 import { raiseEffort, type EffortTier, resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
 import { observeWorktree } from "../git/worktree.js";
-import { commentOnPr, ensureLabels, editIssue, failingChecks, getPr, prDiff, type Pr } from "../github/github.js";
+import { commentOnPr, ensureLabels, editIssue, failingChecks, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
+import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS, labelDefs, effortLabel } from "../github/labels.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
@@ -276,10 +277,13 @@ export async function executeFix(
   return result;
 }
 
-/** Prefer Claude for conflict resolution (per project policy), else the author, else wait. */
-export function pickResolver(author: string, cfg: OrchConfig, cwd: string): string | null {
+/** Prefer an allowed Claude for conflict resolution, else the allowed author, else wait. */
+export function pickResolver(author: string, cfg: OrchConfig, cwd: string, issue?: Issue): string | null {
   const preferred = ["claude", author].filter((a, i, all) => cfg.agents.includes(a) && all.indexOf(a) === i);
-  return preferred.find((a) => unavailableUntil(a, cwd) === null) ?? null;
+  return preferred.find((agent) => unavailableUntil(agent, cwd) === null && (!issue || validateRoute({
+    role: issueRole(issue), agent,
+    tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+  }, cfg).ok)) ?? null;
 }
 
 /** Merge the moved base into a conflicting PR branch with an agent, then push and re-review. */
@@ -290,8 +294,8 @@ export async function executeResolveConflict(
   env: StepEnv = defaultEnv(cfg),
 ): Promise<StepResult> {
   const n = obs.issue.number;
-  const agent = pickResolver(obs.author, cfg, cwd);
-  if (!agent) return { signal: "agent.unavailable", detail: "no harness is available to resolve the conflict" };
+  const agent = pickResolver(obs.author, cfg, cwd, obs.issue);
+  if (!agent) return { signal: "agent.unavailable", detail: "no role-allowed harness is available to resolve the conflict" };
   const found = await resolveWorktree(obs, cfg, cwd, env);
   if ("problem" in found) return failure(found.problem);
   const worktree = found.path;

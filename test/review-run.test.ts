@@ -11,7 +11,10 @@ vi.mock("../src/github/github.js", () => ({
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/no/such/worktree", removeWorktree: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
-vi.mock("../src/tasks/runner.js", () => ({ resolveTaskModel: () => ({ model: "m", effort: "medium" }), recordRun: vi.fn() }));
+vi.mock("../src/tasks/runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tasks/runner.js")>()),
+  recordRun: vi.fn(),
+}));
 
 import * as gh from "../src/github/github.js";
 import { recordRun } from "../src/tasks/runner.js";
@@ -30,10 +33,10 @@ const limitRaw =
   '{"type":"turn.failed","error":{"message":"You hit your usage limit. try again at 11:59 PM."}}';
 
 function runner(results: Array<{ code?: number; text?: string; raw?: string; timedOut?: boolean }>) {
-  const calls: Array<{ reviewer: string; prompt: string; runCwd: string; timeoutMs: number }> = [];
+  const calls: Array<{ reviewer: string; prompt: string; runCwd: string; timeoutMs: number; model: Parameters<ReviewRunDeps["runner"]>[0]["model"] }> = [];
   const checkouts: Array<{ path: string; released: boolean }> = [];
   const fn: ReviewRunDeps["runner"] = async (args) => {
-    calls.push({ reviewer: args.reviewer, prompt: args.prompt, runCwd: args.runCwd, timeoutMs: args.timeoutMs });
+    calls.push({ reviewer: args.reviewer, prompt: args.prompt, runCwd: args.runCwd, timeoutMs: args.timeoutMs, model: args.model });
     const r = results[calls.length - 1] ?? {};
     return { code: r.code ?? 0, timedOut: r.timedOut ?? false, text: r.text ?? "", raw: r.raw ?? "" };
   };
@@ -211,6 +214,20 @@ describe("runAutomatedReview", () => {
   afterEach(() => {
     rmSync(dirname(availabilityPath(cwd)), { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("reviews an OpenAI-only implementation role with an Anthropic reviewer", async () => {
+    const cfg: OrchConfig = {
+      ...DEFAULT_CONFIG,
+      roles: { coder: { tiers: ["lead"], families: ["openai"] } },
+    };
+    vi.mocked(gh.getIssue).mockResolvedValue({ ...issue, labels: ["agent:codex", "effort:lead", "role:coder"] });
+    const { deps, calls } = runner([{ text: approveText }]);
+
+    const result = await runAutomatedReview(62, cfg, cwd, {}, deps);
+
+    expect(result).toMatchObject({ decision: "approve", reviewer: "claude", mode: "cross" });
+    expect(calls[0].model).toEqual(cfg.adapters.claude.models?.lead);
   });
 
   it("cross-reviews with the other harness and records an unmarked approval", async () => {

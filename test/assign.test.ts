@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned } from "../src/routing/assign.js";
-import type { OrchConfig } from "../src/config.js";
+import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
 import type { Issue } from "../src/github/github.js";
 import type { RunRecord } from "../src/board/telemetry.js";
 
@@ -156,3 +156,18 @@ describe("applyPlan", () => {
     ]);
   });
 });
+
+ it("skips disallowed role routes while retaining unrestricted issues", () => {
+   const cfg = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead" as const], families: ["openai"] } } };
+   const result = applyPlan([
+     { issue: 1, agent: "claude", effort: "hard" },
+     { issue: 2, agent: "codex", effort: "easy" },
+     { issue: 3, agent: "claude", effort: "easy" },
+     { issue: 4, agent: "codex", effort: "hard" },
+   ], [issue(1, ["role:coder"]), issue(2, ["role:coder"]), issue(3), issue(4, ["role:coder"])], cfg);
+   expect(result.writes.map((w) => w.issue)).toEqual([3, 4]);
+   expect(result.skips).toEqual([
+     { issue: 1, reason: expect.stringContaining("family 'anthropic'") },
+     { issue: 2, reason: expect.stringContaining("tier 'standard'") },
+   ]);
+ });

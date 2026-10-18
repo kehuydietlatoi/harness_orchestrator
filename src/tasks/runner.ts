@@ -1,3 +1,4 @@
+import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
@@ -31,8 +32,14 @@ export function resolveTaskModel(
   agent: string,
   issue: Issue,
   cfg: OrchConfig,
+  opts: { purpose?: "implementation" | "review" } = {},
 ): ModelSpec | undefined {
   const tier = issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
+  // Role allowances constrain writable implementation, not independent review.
+  if (opts.purpose !== "review") {
+    const route = validateRoute({ role: issueRole(issue), agent, tier }, cfg);
+    if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+  }
   return cfg.adapters[agent]?.models?.[tier];
 }
 
@@ -75,6 +82,7 @@ export function resolveDispatchAgent(
   if (blockers.length > 0) {
     throw new Error(`#${issue.number} is blocked by open issue(s): ${blockers.map((n) => `#${n}`).join(", ")}.`);
   }
+  resolveTaskModel(agent, issue, cfg); // refuse before claiming resources
   return agent;
 }
 

@@ -7,6 +7,8 @@ import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
 export interface ModelSpec {
   /** Harness-specific model id or alias (`claude-sonnet-5-5`, a Codex model id). */
   model?: string;
+  /** Provider identity, overriding the adapter default. Required for OpenCode. */
+  family?: string;
   /** Reasoning/thinking effort handed to the harness (`low|medium|high|xhigh|max`). */
   effort?: string;
 }
@@ -33,6 +35,7 @@ export type ReviewPolicy = "cross" | "cross-or-self";
 
 export interface AdapterConfig {
   cmd: string;
+  family?: string;
   models?: Record<EffortTier, ModelSpec>;
   /**
    * What this adapter runs when it acts as the configured `lead`: the decision points
@@ -58,8 +61,12 @@ function normalizeModelSpec(agent: string, value: unknown, field = "models entri
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return agent === "codex" ? { effort: value } : { model: value };
   if (typeof value === "object") {
-    const { model, effort } = value as ModelSpec;
+    const { model, effort, family } = value as ModelSpec;
+    if (family !== undefined && (typeof family !== "string" || !family.trim())) {
+      throw new Error(`adapters.${agent}.${field}.family must be a non-empty string`);
+    }
     return {
+      ...(family !== undefined ? { family } : {}),
       ...(typeof model === "string" ? { model } : {}),
       ...(typeof effort === "string" ? { effort } : {}),
     };
@@ -76,7 +83,19 @@ export function resolveLeadModel(cfg: Pick<OrchConfig, "lead" | "adapters">): Mo
   return adapter?.leadModel ?? adapter?.models?.lead;
 }
 
+/** Resolve provider identity independently of model names and harness commands. */
+export function resolveFamily(
+  agent: string,
+  spec: ModelSpec | undefined,
+  cfg: Partial<Pick<OrchConfig, "adapters">>,
+): string | undefined {
+  if (agent === "opencode") return spec?.family;
+  return spec?.family ?? cfg.adapters?.[agent]?.family ??
+    ({ claude: "anthropic", codex: "openai" } as Record<string, string>)[agent];
+}
+
 export interface OrchConfig {
+  roles: Record<string, { tiers: EffortTier[]; families: string[] }>;
   agents: string[];
   lead: string;
   /** GitHub branch name used as the base for task branches and pull requests.
@@ -123,6 +142,7 @@ export const CONFIG_FILE = "orch.config.json";
 export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/"];
 
 export const DEFAULT_CONFIG: OrchConfig = {
+  roles: {},
   agents: ["claude", "codex"],
   lead: "claude",
   requireCrossReview: true,
@@ -143,6 +163,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
   adapters: {
     claude: {
       cmd: "claude",
+      family: "anthropic",
       models: {
         free: { model: "claude-sonnet-5-5", effort: "medium" },
         cheap: { model: "claude-sonnet-5-5", effort: "medium" },
@@ -153,6 +174,7 @@ export const DEFAULT_CONFIG: OrchConfig = {
     },
     codex: {
       cmd: "codex",
+      family: "openai",
       models: {
         free: { model: "gpt-6.1-sol", effort: "medium" },
         cheap: { model: "gpt-6.1-sol", effort: "medium" },
@@ -227,6 +249,24 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   const defaultEffort = raw.defaultEffort === undefined
     ? DEFAULT_CONFIG.defaultEffort : normalizeEffort(raw.defaultEffort, aliases);
   if (!defaultEffort) throw new Error("defaultEffort must be free, cheap, standard, lead, easy, or hard");
+  const roles: OrchConfig["roles"] = {};
+  if (raw.roles !== undefined) {
+    if (!raw.roles || typeof raw.roles !== "object" || Array.isArray(raw.roles)) {
+      throw new Error("roles must be an object of { tiers, families } allowances");
+    }
+    for (const [role, allowance] of Object.entries(raw.roles)) {
+      const tiers = Array.isArray(allowance?.tiers)
+        ? (allowance.tiers as unknown[]).map((tier) => normalizeEffort(tier, aliases)) : undefined;
+      if (!tiers || tiers.some((tier) => !tier)) {
+        throw new Error(`roles.${role}.tiers must contain only known tiers: ${EFFORT_TIERS.join(", ")}, easy, hard`);
+      }
+      if (!Array.isArray(allowance.families) ||
+          !allowance.families.every((family) => typeof family === "string" && family.trim().length > 0)) {
+        throw new Error(`roles.${role}.families must be an array of non-empty strings`);
+      }
+      roles[role] = { tiers: tiers as EffortTier[], families: allowance.families };
+    }
+  }
   const adapters = { ...DEFAULT_CONFIG.adapters };
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
     const defaults = DEFAULT_CONFIG.adapters[agent];
@@ -258,6 +298,14 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
       if (Object.keys(lead).length > 0) merged.leadModel = lead;
       else delete merged.leadModel;
     }
+    if (merged.family !== undefined && (typeof merged.family !== "string" || !merged.family.trim())) {
+      throw new Error(`adapters.${agent}.family must be a non-empty string`);
+    }
+    if (agent === "opencode") {
+      for (const [field, spec] of Object.entries({ ...merged.models, leadModel: merged.leadModel })) {
+        if (spec && !spec.family) throw new Error(`adapters.opencode.${field}.family is required per model`);
+      }
+    }
     adapters[agent] = merged;
   }
   // Merge pricing so a config that sets only some models keeps the built-in
@@ -267,6 +315,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     ...DEFAULT_CONFIG,
     ...raw,
     adapters,
+    roles,
     defaultEffort,
     tierAliases: aliases,
     pricing,
