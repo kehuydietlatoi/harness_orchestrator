@@ -283,6 +283,26 @@ Optional role allowances constrain issues carrying a `role:<name>` label:
 ```
 
 Issues without a role label remain unrestricted. Unknown roles are rejected.
+
+Optional `tierMembers` config enables implementation fallback after quota or endpoint
+errors. Members are tried in order, then at higher tiers, subject to role allowances:
+
+```json
+"tierMembers": {
+  "free": [{ "agent": "opencode", "model": "opencode/free-model", "family": "openai" }],
+  "cheap": [{ "agent": "opencode", "model": "provider/cheap-model", "family": "openai" }],
+  "standard": [{ "agent": "codex" }, { "agent": "claude" }],
+  "lead": []
+}
+```
+
+Each member inherits omitted model/effort/family fields from its adapter tier.
+Agents must be configured; each agent/model pair within a tier must be unique.
+A `model:<id>` label selects the member on the next run (model labels must fit
+GitHub's 50-character limit). Without this config, existing single-member retries
+and cooldown waits are unchanged. Hops require safe cleanup with no commits or PR
+and are recorded in both `events.jsonl` and `runs.jsonl`.
+
 `adapters.<agent>.family` defaults to `anthropic` for Claude and `openai` for
 Codex; a model spec's `family` overrides it. OpenCode requires a family on each
 configured model, including `leadModel`. Role tiers must be valid effort tiers.

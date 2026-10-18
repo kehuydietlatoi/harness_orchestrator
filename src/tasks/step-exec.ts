@@ -466,7 +466,7 @@ export async function executeTriage(
     let warning = "";
     if (upgrade) {
       try {
-        await env.setEffort(n, nextTier, obs.issue.labels.filter((label) => label.startsWith("effort:") && label !== effortLabel(nextTier)));
+        await env.setEffort(n, nextTier, obs.issue.labels.filter((label) => label.startsWith("model:") || (label.startsWith("effort:") && label !== effortLabel(nextTier))));
       } catch (error) {
         warning = `; could not move #${n} to the ${nextTier} tier (${error instanceof Error ? error.message : String(error)})`;
         log.warn(`#${n}: triage granted a round on the ${nextTier} tier, but the effort label was not updated${warning}`);

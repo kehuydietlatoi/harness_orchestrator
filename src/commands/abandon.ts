@@ -43,6 +43,7 @@ export async function abandonCommand(
 
   const removeLabels = [STATUS.claimed, STATUS.inProgress, STATUS.inReview, NEEDS_ATTENTION];
   if (owner) removeLabels.push(agentLabel(owner));
+  removeLabels.push(...issue.labels.filter((label) => label.startsWith("model:")));
   await editIssue(number, {
     cwd,
     addLabels: [STATUS.todo],

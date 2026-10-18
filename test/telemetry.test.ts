@@ -1,5 +1,27 @@
 import { describe, expect, it } from "vitest";
 import { parseUsage } from "../src/board/telemetry.js";
+import { appendRun, readRuns, type RunRecord } from "../src/board/telemetry.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
+it("round-trips cascade identities while retaining legacy run records", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "orch-cascade-telemetry-"));
+  const record: RunRecord = {
+    ts: new Date().toISOString(), project: "test", issue: 124, agent: "opencode",
+    model: "zen/free", outcome: "usage-limited", phase: "implement", durationMs: 1,
+    tokensIn: null, tokensOut: null, tokensTotal: null, costUsd: 0,
+  };
+  const cascadeFrom = { agent: "opencode", tier: "free" as const, model: "zen/free", family: "openai" };
+  const cascadeTo = { agent: "codex", tier: "standard" as const, model: "gpt-6.1-sol", effort: "medium" };
+  try {
+    appendRun(record, cwd);
+    appendRun({ ...record, cascadeFrom, cascadeTo }, cwd);
+    expect(readRuns(cwd)).toEqual([record, { ...record, cascadeFrom, cascadeTo }]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
 
 describe("parseUsage", () => {
   it("extracts Claude result usage, cache input, and cost", () => {

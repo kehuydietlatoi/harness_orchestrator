@@ -15,6 +15,8 @@ export interface ModelSpec {
 
 export const EFFORT_TIERS = ["free", "cheap", "standard", "lead"] as const;
 export type EffortTier = typeof EFFORT_TIERS[number];
+export interface TierMember extends ModelSpec { agent: string }
+export interface CascadeRoute extends TierMember { tier: EffortTier }
 export type TierAliases = Partial<Record<"easy" | "hard", EffortTier>>;
 export const DEFAULT_TIER_ALIASES = { easy: "standard", hard: "lead" } as const;
 
@@ -99,6 +101,8 @@ export function resolveFamily(
 }
 
 export interface OrchConfig {
+  /** Ordered implementation fallback ladder. Omitted preserves single-member retries. */
+  tierMembers?: Record<EffortTier, TierMember[]>;
   roles: Record<string, { tiers: EffortTier[]; families: string[] }>;
   agents: string[];
   lead: string;
@@ -329,6 +333,35 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   // Merge pricing so a config that sets only some models keeps the built-in
   // defaults for the rest (self-heals like the label set does).
   const pricing = { ...DEFAULT_CONFIG.pricing, ...raw.pricing };
+  if (raw.tierMembers !== undefined) {
+    if (!raw.tierMembers || typeof raw.tierMembers !== "object" || Array.isArray(raw.tierMembers) ||
+        Object.keys(raw.tierMembers).some((tier) => !EFFORT_TIERS.includes(tier as EffortTier))) {
+      throw new Error("tierMembers must map canonical tiers to ordered member arrays");
+    }
+    for (const tier of EFFORT_TIERS) {
+      const members = raw.tierMembers[tier];
+      if (!Array.isArray(members)) throw new Error(`tierMembers.${tier} must be an array`);
+      const seen = new Set<string>();
+      for (const member of members) {
+        if (!member || !(raw.agents ?? DEFAULT_CONFIG.agents).includes(member.agent) || !adapters[member.agent]) {
+          throw new Error(`tierMembers.${tier} requires a configured agent`);
+        }
+        for (const field of ["model", "effort", "family"] as const) {
+          if (member[field] !== undefined && (typeof member[field] !== "string" || !member[field]!.trim())) {
+            throw new Error(`tierMembers.${tier}.${field} must be a non-empty string`);
+          }
+        }
+        const spec = { ...adapters[member.agent]?.models?.[tier], ...member };
+        if (member.agent === "opencode" && (!spec.model || !spec.family)) {
+          throw new Error(`tierMembers.${tier}: OpenCode requires model and family`);
+        }
+        const key = `${member.agent}:${spec.model ?? ""}`;
+        if (seen.has(key)) throw new Error(`tierMembers.${tier} has duplicate agent/model members`);
+        seen.add(key);
+        if (spec.model && `model:${spec.model}`.length > 50) throw new Error("tierMembers model label exceeds 50 characters");
+      }
+    }
+  }
   return {
     ...DEFAULT_CONFIG,
     ...raw,
@@ -337,5 +370,21 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     defaultEffort,
     tierAliases: aliases,
     pricing,
+  };
+}
+
+/** Resolve a projected member on the next claim, including its reasoning effort and family. */
+export function resolveTierModel(agent: string, tier: EffortTier, cfg: OrchConfig, labels: readonly string[] = []): ModelSpec | undefined {
+  const base = cfg.adapters[agent]?.models?.[tier];
+  const projection = labels.find((label) => label.startsWith("model:"))?.slice(6);
+  const members = cfg.tierMembers?.[tier].filter((member) => member.agent === agent);
+  const member = projection === undefined ? members?.[0] : members?.find((m) => (m.model ?? base?.model) === projection);
+  if (projection !== undefined && !member) throw new Error(`Unknown model projection '${projection}' for '${agent}' at '${tier}'`);
+  if (!member) return base;
+  return {
+    ...base,
+    ...(member.model !== undefined ? { model: member.model } : {}),
+    ...(member.effort !== undefined ? { effort: member.effort } : {}),
+    ...(member.family !== undefined ? { family: member.family } : {}),
   };
 }

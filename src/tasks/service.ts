@@ -29,7 +29,7 @@ import {
   type RepositoryBase,
 } from "../git/git.js";
 import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
-import type { OrchConfig } from "../config.js";
+import { resolveTierModel, type OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
 
 export interface ClaimedTask {
@@ -315,6 +315,7 @@ export async function claimSpecific(
   const route = validateRoute({
     role: issueRole(observation.issue), agent,
     tier: issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    model: resolveTierModel(agent, issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, observation.issue.labels),
   }, cfg);
   if (!route.ok) throw new Error(`#${number}: disallowed route: ${route.reason}`);
   const base = await deps.resolveBaseBranch(cfg.baseBranch, cwd);
@@ -367,6 +368,7 @@ export async function claimNext(
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
     const route = validateRoute({
       role: issueRole(candidate), agent, tier: issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+      model: resolveTierModel(agent, issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, candidate.labels),
     }, cfg);
     if (!route.ok) {
       log.warn(`#${candidate.number}: disallowed route: ${route.reason}`);

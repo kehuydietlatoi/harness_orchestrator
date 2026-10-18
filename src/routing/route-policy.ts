@@ -1,6 +1,6 @@
-import { resolveFamily, type EffortTier, type OrchConfig } from "../config.js";
+import { resolveFamily, type EffortTier, type ModelSpec, type OrchConfig } from "../config.js";
 
-export type RoutePolicyConfig = Partial<Pick<OrchConfig, "roles" | "adapters">>;
+export type RoutePolicyConfig = Partial<Pick<OrchConfig, "roles" | "adapters" | "tierMembers">>;
 export type RouteResult = { ok: true } | { ok: false; reason: string };
 
 /** No role label preserves existing unrestricted routing. */
@@ -10,7 +10,7 @@ export function issueRole(issue: { labels: readonly string[] }): string | undefi
 
 /** Pure policy check shared by routing proposals, assignment, and execution. */
 export function validateRoute(
-  { role, agent, tier }: { role?: string; agent: string; tier: EffortTier },
+  { role, agent, tier, model }: { role?: string; agent: string; tier: EffortTier; model?: ModelSpec },
   cfg: RoutePolicyConfig,
 ): RouteResult {
   if (role === undefined) return { ok: true };
@@ -19,7 +19,8 @@ export function validateRoute(
   if (!allowance.tiers.includes(tier)) {
     return { ok: false, reason: `role '${role}' does not allow tier '${tier}'` };
   }
-  const family = resolveFamily(agent, cfg.adapters?.[agent]?.models?.[tier], cfg);
+  const first = cfg.tierMembers?.[tier].find((member) => member.agent === agent);
+  const family = resolveFamily(agent, model ?? { ...cfg.adapters?.[agent]?.models?.[tier], ...first }, cfg);
   if (!family || !allowance.families.includes(family)) {
     return { ok: false, reason: `role '${role}' does not allow family '${family ?? "unknown"}' for '${agent}'` };
   }

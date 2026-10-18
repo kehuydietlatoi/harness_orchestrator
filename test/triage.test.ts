@@ -171,7 +171,7 @@ describe("executeTriage", () => {
     let removed: string[] = [];
     const original = e.setEffort;
     e.setEffort = async (issue, tier, remove) => { removed = remove; await original(issue, tier, remove); };
-    const labels = from ? ["effort:" + from] : [];
+    const labels = [...(from ? ["effort:" + from] : []), "model:old-model"];
     const result = await executeTriage(obs(labels), "stuck", { ...cfg, defaultEffort: "free" }, cwd, e);
     expect(result.signal).toBe("triage.retry");
     expect(calls.filter(c => c.startsWith("effort:"))).toEqual(expected ? ["effort:38:" + expected] : []);

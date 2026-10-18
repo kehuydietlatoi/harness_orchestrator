@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { projectStateDir } from "../board/telemetry.js";
 import { log } from "../util/log.js";
+import type { CascadeRoute } from "../config.js";
 
 /**
  * The loop's append-only signal log (`~/.orch/<project>/events.jsonl`). Every step the
@@ -12,6 +13,8 @@ import { log } from "../util/log.js";
  * corrupt a task.
  */
 export interface OrchEvent {
+  cascadeFrom?: CascadeRoute;
+  cascadeTo?: CascadeRoute;
   ts: string;
   issue: number;
   /** `task.started`, `step.started`, `step.finished`, `task.merged`, `task.escalated`, ... */
