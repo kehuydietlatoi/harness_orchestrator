@@ -169,7 +169,7 @@ export function recordRun(
       tokensOut: usage.tokensOut,
       tokensTotal: usage.tokensTotal,
       costUsd,
-      ...(usage.requests !== undefined ? { requests: usage.requests } : {}),
+      requests: Math.max(1, usage.requests ?? 1),
     };
     appendRun(rec, cwd);
     if (mode === "quota" && model?.model && usage.requests !== undefined) {
@@ -310,7 +310,14 @@ async function processClaimed(
     harnessDurationMs = result.durationMs;
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
-    if (!result.ok) {
+    // A ticket time cap shortens the ordinary harness timeout. Preserve that cause
+    // before generic failure/usage-limit handling loses it.
+    if (result.timedOut && limits.timeoutMs < cfg.taskTimeoutMs) {
+      await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+      console.log(pc.yellow(`⚠ #${n} time budget spent (${limits.timeoutMs / 60_000}m remaining at start) — see ${logFile}`));
+      summary = { issue: n, outcome: "needs-attention", reason: "budget spent", durationMs: result.durationMs };
+      telemetryOutcome = "budget-spent";
+    } else if (!result.ok) {
       const key = availabilityKey(agent, model?.model);
       const limitedUntil = noteUsageLimit(key, logFile, cwd, logMark) ??
         (result.outcome === "quota" || result.outcome === "endpoint-unavailable"

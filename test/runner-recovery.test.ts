@@ -114,6 +114,36 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
+  it("reports a ticket time budget cutoff as budget-spent", async () => {
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: "Budget: 0.2m" }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 12_300 });
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention", reason: "budget spent" });
+      expect(mocks.runTask).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 12_000 }));
+      expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "budget-spent", requests: 1 }), cwd);
+      expect(output.mock.calls.flat().join("\n")).toContain("time budget spent");
+      expect(output.mock.calls.flat().join("\n")).not.toContain("timed out");
+    } finally { output.mockRestore(); }
+  });
+
+  it.each([undefined, 0, 3])("records at least one request per invocation (reported %s)", requests => {
+    mocks.parseUsage.mockReturnValueOnce({ tokensIn: null, tokensOut: null, tokensTotal: null, costUsd: null, ...{ requests } });
+    recordRun(35, "codex", undefined, "failed", 1, join(cwd, "missing.jsonl"), cwd, DEFAULT_CONFIG, { phase: "implement" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ requests: Math.max(1, requests ?? 1) }), cwd);
+  });
+
+  it("keeps an ordinary timeout when the harness deadline is shorter than the ticket budget", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 1000 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, taskTimeoutMs: 1000, budgets: { default: { minutes: 1 } } }, cwd)).toMatchObject({ outcome: "failed" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed", requests: 1 }), cwd);
+  });
+
+  it("does not call a non-timeout failure a budget stop", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: false, durationMs: 1 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 0.2 } } }, cwd)).toMatchObject({ outcome: "failed" });
+  });
+
   it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {
     mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
     mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
