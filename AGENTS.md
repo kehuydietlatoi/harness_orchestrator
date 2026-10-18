@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Absolute adapter commands (#145)**: `commandExists` checks absolute paths directly with filesystem access and a regular-file check (POSIX execute permission required); command names keep the existing PATH lookup. Windows `where` rejects absolute paths, including native adapter executables.
+
 - **Budget-stop reporting (#143)**: a ticket-shortened implement timeout records `budget-spent`, retains the existing failed-run recovery hold, and returns `needs-attention` with reason `budget spent`. `telemetryFact` maps that outcome to unresolved failure; the run report shows `budget-stopped` separately from open tasks, superseded by later runs or terminal loop events. `recordRun` always writes at least one request per invocation while preserving larger reducer counts.
 - **Cascade wake-up (#151)**: `processNext` reports successful pre-claim and in-run hops through `onCascade(destinationAgent)`. The coordinator clears destination drain markers after the implement attempt settles, so healthy replacement endpoints are retried in the same run. Requeues without a hop retain cooldown polling and the existing idle deadline.
 
