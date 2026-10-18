@@ -6,10 +6,11 @@ import type { OrchEvent } from "../src/tasks/events.js";
 import type { Observation, TaskObservation } from "../src/tasks/observe.js";
 import type { RunSummary } from "../src/tasks/runner.js";
 import type { StepResult } from "../src/tasks/step-exec.js";
-import { decideStep, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
+import { decideStep, type StepFacts, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
 
 /** A tiny fake GitHub: PR state that the fake executors mutate and `observe` reads back. */
 interface SimPr {
+  nextCascade?: StepFacts["nextCascade"];
   issue: number;
   author: string;
   version: number;
@@ -74,6 +75,7 @@ class World {
     }
     const tasks = open.map((p) => {
       const facts = {
+        nextCascade: p.nextCascade,
         attention: p.attention,
         pr: { number: 1000 + p.issue, head: `h${p.version}`, checks: p.checks, mergeable: p.mergeable },
         review: { approved: p.approved, changesRequested: p.changes },
@@ -100,6 +102,7 @@ class World {
     const scripted = p.overrides[step.kind]?.shift();
     if (scripted) return scripted;
     switch (step.kind) {
+      case "cascade": p.nextCascade = null; return { signal: "cascade.hop" };
       case "review": {
         if ((p.verdicts.shift() ?? "approve") === "approve") { p.approved = true; return { signal: "review.approved" }; }
         p.changes = true;
@@ -1278,5 +1281,37 @@ describe("runAutopilot with lead triage", () => {
     expect(w.calls.filter((c) => c === "triage:38")).toHaveLength(MAX_STEP_FAILURES);
     expect(w.calls.at(-1)).toBe("escalate:38");
     expect(summary.escalated).toEqual([38]);
+  });
+});
+
+describe("cascade scheduling", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("switches members after one failed fix, then retries on the preserved PR", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: { fix: [{ signal: "step.failed", detail: "no commits" }] } }));
+    await drive(w);
+    expect(w.calls.slice(0, 3)).toEqual(["fix:review:38", "cascade:38", "fix:review:38"]);
+  });
+  it("retries a failed cascade write and escalates repeated failures", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: {
+      fix: [{ signal: "step.failed" }], cascade: [{ signal: "step.failed" }, { signal: "step.failed" }],
+    } }));
+    await drive(w);
+    expect(w.calls).toEqual(["fix:review:38", "cascade:38", "cascade:38", "escalate:38"]);
+  });
+  it("does not cascade a failure from a previous head", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: { fix: [{ signal: "step.failed" }] } }));
+    const inner = w.execute;
+    w.execute = async (obs, step) => {
+      const result = await inner(obs, step);
+      if (result.signal === "step.failed") w.prs.get(38)!.version += 1;
+      return result;
+    };
+    await drive(w);
+    expect(w.calls).not.toContain("cascade:38");
+    expect(w.calls.slice(0, 2)).toEqual(["fix:review:38", "fix:review:38"]);
   });
 });

@@ -23,22 +23,31 @@ const ISSUES: Issue[] = [
   mkIssue(107, "dashboard-routing-ui"),
   mkIssue(108, "cross-review-backlog-view"),
   mkIssue(109, "telemetry-judge-scoring"),
-  mkIssue(103, "already-routed", { labels: ["agent:claude", "effort:hard"] }),
+  mkIssue(103, "already-routed", { labels: ["agent:claude", "effort:lead"] }),
   mkIssue(90, "shipped", { state: "CLOSED" }),
 ];
 
 const EXPECTED = [107, 108, 109];
 
 function entry(issue: number, over: Partial<PlanEntry> = {}): PlanEntry {
-  return { issue, agent: "codex", effort: "easy", rationale: "grounded in telemetry", ...over };
+  return { issue, agent: "codex", effort: "standard", rationale: "grounded in telemetry", ...over };
 }
 
 describe("evaluatePlan — validity invariants", () => {
+  it("reports disallowed role routes", () => {
+    const issues = [mkIssue(1, "restricted", { labels: ["role:coder"] })];
+    const policy = { ...cfg, roles: { coder: { tiers: ["lead" as const], families: ["openai"] } } };
+    expect(evaluatePlan([entry(1)], issues, policy).violations).toEqual([
+      { kind: "disallowed-route", issue: 1, detail: expect.stringContaining("tier 'standard'") },
+    ]);
+    expect(evaluatePlan([entry(1, { effort: "hard" })], issues, policy).ok).toBe(true);
+  });
+
   it("passes a complete, well-formed plan and reports the covered set", () => {
     const plan: PlanEntry[] = [
-      entry(107, { agent: "claude", effort: "hard" }),
-      entry(108, { agent: "codex", effort: "easy" }),
-      entry(109, { agent: "codex", effort: "hard" }),
+      entry(107, { agent: "claude", effort: "lead" }),
+      entry(108, { agent: "codex", effort: "standard" }),
+      entry(109, { agent: "codex", effort: "lead" }),
     ];
     const report = evaluatePlan(plan, ISSUES, cfg);
 
@@ -50,7 +59,7 @@ describe("evaluatePlan — validity invariants", () => {
   });
 
   it("flags an unassigned issue the plan forgot (the gap applyPlan cannot see)", () => {
-    const plan = [entry(107, { agent: "claude", effort: "hard" }), entry(108)];
+    const plan = [entry(107, { agent: "claude", effort: "lead" }), entry(108)];
     const report = evaluatePlan(plan, ISSUES, cfg);
 
     expect(report.ok).toBe(false);
@@ -61,9 +70,9 @@ describe("evaluatePlan — validity invariants", () => {
 
   it("flags entries for issues that are closed, unknown, or already pinned", () => {
     const plan = [
-      entry(107, { agent: "claude", effort: "hard" }),
+      entry(107, { agent: "claude", effort: "lead" }),
       entry(108),
-      entry(109, { effort: "hard" }),
+      entry(109, { effort: "lead" }),
       entry(103), // already has agent:/effort:
       entry(90), // closed
       entry(555), // unknown
@@ -74,10 +83,10 @@ describe("evaluatePlan — validity invariants", () => {
 
   it("flags a bad agent, a bad effort tier, a blank rationale, and a duplicate", () => {
     const plan = [
-      entry(107, { agent: "gpt-5", effort: "hard" }), // invalid-agent
+      entry(107, { agent: "gpt-5", effort: "lead" }), // invalid-agent
       entry(108, { effort: "medium" }), // invalid-effort
       entry(109, { rationale: "   " }), // missing-rationale
-      entry(107, { agent: "claude", effort: "hard" }), // duplicate of 107
+      entry(107, { agent: "claude", effort: "lead" }), // duplicate of 107
     ];
     const byKind = new Map<string, number[]>();
     for (const v of evaluatePlan(plan, ISSUES, cfg).violations) {
@@ -114,4 +123,9 @@ describe.skipIf(!process.env.ORCH_JUDGE_LIVE)("evaluatePlan — live judge", () 
     },
     120_000,
   );
+});
+
+it.each(["free", "cheap", "standard", "lead", "easy", "hard"])("accepts effort %s in the judge contract", (effort) => {
+  const issue = mkIssue(1, "tier");
+  expect(evaluatePlan([entry(1, { effort })], [issue], cfg).ok).toBe(true);
 });

@@ -170,11 +170,11 @@ the gate applies to merges through `orch`, not direct GitHub merges.
 **Usage limits and self-review.** When a harness runs out of usage (Codex's "You've hit your
 usage limit", Claude's rejected rate-limit event), orch records a cooldown in
 `~/.orch/<project>/availability.json` and stops dispatching to it. `orch review-run` then
-reviews with the other harness when it is available; if every other harness is on cooldown and
-`reviewPolicy` is `"cross-or-self"` (the default), the author's own harness reviews in a
+reviews at tier `standard` or `lead` with a different model family. The default policy is
+`"cross"`. If every eligible cross reviewer is unavailable and `reviewPolicy` is explicitly `"cross-or-self"`, the author's own harness reviews in a
 **fresh read-only session** and the record is marked `mode: "self"`. Self-review is a
-fallback only: it is refused while another harness is available, and `reviewPolicy: "cross"`
-turns it off. See [ADR-0008](docs/adr/0008-self-review-fallback.md).
+premium fallback only: it is refused while an eligible cross reviewer is available.
+Free/cheap approvals never count. See [ADR-0011](docs/adr/0011-premium-family-review-and-conflict-resolvers.md).
 
 Reported CI checks must pass or be skipped; **no configured checks also passes**.
 The gate does not establish review quality or prove that distinct underlying
@@ -226,7 +226,8 @@ diagnostics on stderr; `ORCH_LOG_LEVEL` sets the default logging level.
   "agents": ["claude", "codex"],
   "lead": "claude",
   "requireCrossReview": true,
-  "reviewPolicy": "cross-or-self",
+  "reviewPolicy": "cross",
+  "conflictResolvers": ["claude", "<author>"],
   "requireHumanMerge": false,
   "maxReviewRounds": 3,
   "maxLeadTriage": 1,
@@ -273,6 +274,39 @@ without an effort label use `defaultEffort`. The lead's decision points (plannin
 the routing judge) use its `leadModel`, falling back to its `hard` tier when unset: by
 default a Claude lead plans on Opus at `high` effort while task runs stay on the tiers.
 
+Optional role allowances constrain issues carrying a `role:<name>` label:
+
+```json
+"roles": {
+  "coder": { "tiers": ["hard"], "families": ["openai", "anthropic"] }
+}
+```
+
+Issues without a role label remain unrestricted. Unknown roles are rejected.
+
+Optional `tierMembers` config enables implementation fallback after quota or endpoint
+errors. Members are tried in order, then at higher tiers, subject to role allowances:
+
+```json
+"tierMembers": {
+  "free": [{ "agent": "opencode", "model": "opencode/free-model", "family": "openai" }],
+  "cheap": [{ "agent": "opencode", "model": "provider/cheap-model", "family": "openai" }],
+  "standard": [{ "agent": "codex" }, { "agent": "claude" }],
+  "lead": []
+}
+```
+
+Each member inherits omitted model/effort/family fields from its adapter tier.
+Agents must be configured; each agent/model pair within a tier must be unique.
+A `model:<id>` label selects the member on the next run (model labels must fit
+GitHub's 50-character limit). Without this config, existing single-member retries
+and cooldown waits are unchanged. Hops require safe cleanup with no commits or PR
+and are recorded in both `events.jsonl` and `runs.jsonl`.
+
+`adapters.<agent>.family` defaults to `anthropic` for Claude and `openai` for
+Codex; a model spec's `family` overrides it. OpenCode requires a family on each
+configured model, including `leadModel`. Role tiers must be valid effort tiers.
+
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
 are `Depends-on: #n` references in issue bodies; open prerequisites block dispatch.
@@ -299,9 +333,18 @@ Claude also receives `--max-budget-usd` with the remaining USD. Other harnesses'
 usage is checked between runs. Raise the relevant cap before clearing `needs-attention`.
 
 Completed runs append best-effort telemetry to `~/.orch/<project>/runs.jsonl`.
-Cost uses harness-reported data or configured per-million-token `pricing` rates;
-Codex cost remains null by default because this project treats it as subscription
-usage. Telemetry informs routing, but routing quality optimization is not yet
+Each adapter accepts `pricingMode`: `api` (Claude's default) uses reported costs
+or configured per-million-token `pricing` rates; `subscription` (Codex's default)
+leaves unreported costs unknown; `quota` (OpenCode's default) records zero dollar
+cost and the reducer's request count. Quota requests also accumulate by UTC date
+and endpoint in `~/.orch/<project>/quota.json`.
+
+OpenCode 429 and retryable/server errors cool down only the resolved
+`provider/model`, so other models remain available. A 429 uses `retry-after`
+(seconds or HTTP date), then `x-ratelimit-reset` (Unix seconds), with a ten-minute
+fallback. Server/retryable errors use ten minutes. Cooldowns live under
+`opencode:<provider/model>` keys in `availability.json`; safely recoverable tasks
+return to the queue. Telemetry informs routing, but routing quality optimization is not yet
 implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 
 ## Design

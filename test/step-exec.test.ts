@@ -5,15 +5,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
 vi.mock("../src/github/github.js", () => ({
-  editIssue: vi.fn(), commentOnPr: vi.fn(), failingChecks: vi.fn(), getPr: vi.fn(), getIssue: vi.fn(),
+  ensureLabels: vi.fn(), editIssue: vi.fn(), commentOnPr: vi.fn(), failingChecks: vi.fn(), getPr: vi.fn(), getIssue: vi.fn(),
   prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(),
 }));
 vi.mock("../src/git/git.js", () => ({ resolveBaseBranch: vi.fn() }));
 vi.mock("../src/git/worktree.js", () => ({ observeWorktree: vi.fn(), worktreePath: vi.fn(), removeWorktree: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
-vi.mock("../src/tasks/runner.js", () => ({
+vi.mock("../src/tasks/runner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/tasks/runner.js")>()),
   recordRun: vi.fn(),
-  resolveTaskModel: () => ({ model: "m", effort: "medium" }),
 }));
 vi.mock("../src/board/review.js", () => ({ merge: vi.fn(), approve: vi.fn(), requestChanges: vi.fn(), prIssueNumber: () => 38 }));
 vi.mock("../src/board/review-run.js", async (importOriginal) => ({
@@ -29,9 +29,10 @@ import { observeWorktree } from "../src/git/worktree.js";
 import * as gh from "../src/github/github.js";
 import type { TaskObservation } from "../src/tasks/observe.js";
 import { recordRun } from "../src/tasks/runner.js";
+import { readEvents } from "../src/tasks/events.js";
 import { readSession, writeSession } from "../src/tasks/sessions.js";
 import {
-  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, pickResolver,
+  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, pickResolver,
   type StepEnv,
 } from "../src/tasks/step-exec.js";
 import type { StepFacts } from "../src/tasks/steps.js";
@@ -105,6 +106,27 @@ function fakeEnv(opts: {
 describe("step executors", () => {
   let cwd = "";
   let wt = "";
+  it("cascade relabels, clears the old session and records the hop while preserving PR resources", async () => {
+    vi.mocked(gh.getPr).mockResolvedValue(pr);
+    const task = obs();
+    task.issue = { ...issue, labels: ["agent:codex", "effort:standard", "model:gpt-6.1-sol", "status:in-review"] };
+    writeSession(38, { agent: "codex", sessionId: "old" }, cwd);
+    const route = { agent: "claude", tier: "lead", model: "new" } as const;
+    expect(await executeCascade(task, route, { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [{ agent: "codex", model: "gpt-6.1-sol" }], lead: [{ agent: "claude", model: "new" }] } }, cwd)).toEqual({ signal: "cascade.hop" });
+    expect(gh.editIssue).toHaveBeenCalledWith(38, { cwd, addLabels: ["agent:claude", "effort:lead", "model:new"], removeLabels: ["agent:codex", "effort:standard", "model:gpt-6.1-sol"] });
+    expect(readEvents(cwd)).toContainEqual(expect.objectContaining({ type: "cascade.hop", cascadeTo: route, cascadeFrom: expect.objectContaining({ agent: "codex", tier: "standard" }) }));
+    expect(readSession(38, cwd)).toBeNull();
+  });
+  it("does not record a hop when relabelling fails or the head changed", async () => {
+    vi.mocked(gh.getPr).mockResolvedValue(pr);
+    vi.mocked(gh.editIssue).mockRejectedValueOnce(new Error("write failed"));
+    expect((await executeCascade(obs(), { agent: "claude", tier: "lead" }, DEFAULT_CONFIG, cwd)).signal).toBe("step.failed");
+    expect(readEvents(cwd)).toEqual([]);
+    vi.mocked(gh.getPr).mockResolvedValue({ ...pr, headSha: NEW_HEAD });
+    vi.mocked(gh.editIssue).mockClear();
+    expect((await executeCascade(obs(), { agent: "claude", tier: "lead" }, DEFAULT_CONFIG, cwd)).signal).toBe("step.failed");
+    expect(gh.editIssue).not.toHaveBeenCalled();
+  });
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "orch-step-"));
     wt = mkdtempSync(join(tmpdir(), "orch-step-wt-"));
@@ -577,6 +599,12 @@ describe("step executors", () => {
   });
 
   describe("pickResolver", () => {
+    it("follows the configured order, skips unconfigured names and respects an empty list", () => {
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: ["missing", "<author>", "claude"] }, cwd)).toBe("codex");
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: [] }, cwd)).toBeNull();
+      markUnavailable("codex", { resetAt: null, reason: "x" }, cwd);
+      expect(pickResolver("codex", { ...DEFAULT_CONFIG, conflictResolvers: ["codex", "claude"] }, cwd)).toBe("claude");
+    });
     it("prefers claude, then the author, then nobody", () => {
       expect(pickResolver("codex", DEFAULT_CONFIG, cwd)).toBe("claude");
       markUnavailable("claude", { resetAt: null, reason: "x" }, cwd);
@@ -587,6 +615,29 @@ describe("step executors", () => {
   });
 
   describe("executeResolveConflict", () => {
+    it("falls back to the allowed author when preferred Claude cannot implement the role", async () => {
+      const cfg = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead" as const], families: ["openai"] } } };
+      const task = { ...obs(), issue: { ...issue, labels: ["agent:codex", "effort:lead", "role:coder"] } };
+      const { env, agentCalls } = fakeEnv({});
+
+      const result = await executeResolveConflict(task, cfg, cwd, env);
+
+      expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'codex'" });
+      expect(agentCalls).toHaveLength(1);
+      expect(agentCalls[0]).toMatchObject({ agent: "codex", model: cfg.adapters.codex.models?.lead });
+    });
+
+    it("does not run a disallowed resolver when the allowed author is paused", async () => {
+      const cfg = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead" as const], families: ["openai"] } } };
+      const task = { ...obs(), issue: { ...issue, labels: ["agent:codex", "effort:lead", "role:coder"] } };
+      markUnavailable("codex", { resetAt: null, reason: "x" }, cwd);
+      const { env, agentCalls, gitCalls } = fakeEnv({});
+
+      expect((await executeResolveConflict(task, cfg, cwd, env)).signal).toBe("agent.unavailable");
+      expect(agentCalls).toHaveLength(0);
+      expect(gitCalls).toHaveLength(0);
+    });
+
     it("fetches the base, has claude merge it, and pushes the result", async () => {
       const { env, agentCalls, gitCalls } = fakeEnv({});
       const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);

@@ -32,6 +32,39 @@ function limitFrom(message: string, now: Date, epochSeconds?: number): UsageLimi
   return { resetAt, message };
 }
 
+function opencodeLimit(event: Record<string, unknown>, now: Date): UsageLimit | null {
+  if (event.type !== "error") return null;
+  const data = (event.error as { data?: Record<string, unknown> } | undefined)?.data;
+  if (!data) return null;
+  const status = data.statusCode;
+  if (status !== 429 && !(typeof status === "number" && status >= 500) && data.isRetryable !== true) return null;
+  let reset = now.getTime() + 10 * 60_000;
+  if (status === 429) {
+    const headers = data.responseHeaders;
+    if (headers && typeof headers === "object" && !Array.isArray(headers)) {
+      const normalized = Object.fromEntries(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
+      const retry = normalized["retry-after"];
+      const epoch = normalized["x-ratelimit-reset"];
+      const retryText = typeof retry === "string" || typeof retry === "number" ? String(retry).trim() : "";
+      const epochText = typeof epoch === "string" || typeof epoch === "number" ? String(epoch).trim() : "";
+      const seconds = retryText ? Number(retryText) : NaN;
+      const date = retryText && !Number.isFinite(seconds) ? Date.parse(retryText) : NaN;
+      const resetSeconds = epochText ? Number(epochText) : NaN;
+      if (Number.isFinite(seconds) && seconds >= 0) reset = now.getTime() + seconds * 1000;
+      else if (Number.isFinite(date)) reset = date;
+      else if (Number.isFinite(resetSeconds) && resetSeconds >= 0 && Number.isFinite(new Date(resetSeconds * 1000).getTime())) {
+        reset = resetSeconds * 1000;
+      }
+    }
+  }
+  // Invalid/overflowing headers must fall back to the endpoint default.
+  if (!Number.isFinite(new Date(reset).getTime())) reset = now.getTime() + 10 * 60_000;
+  return {
+    resetAt: new Date(reset).toISOString(),
+    message: typeof data.message === "string" ? data.message : `OpenCode endpoint error (${String(status ?? "retryable")})`,
+  };
+}
+
 /**
  * Detect a usage/rate-limit refusal in a harness JSONL log. Pure.
  *
@@ -53,7 +86,10 @@ export function detectUsageLimit(logText: string, now: Date = new Date()): Usage
     } catch {
       continue;
     }
-    if (event.type === "error" && typeof event.message === "string" && LIMIT_RE.test(event.message)) {
+    const endpointLimit = opencodeLimit(event, now);
+    if (endpointLimit) {
+      found = endpointLimit;
+    } else if (event.type === "error" && typeof event.message === "string" && LIMIT_RE.test(event.message)) {
       found = limitFrom(event.message, now);
     } else if (event.type === "turn.failed") {
       const message = (event.error as { message?: unknown } | undefined)?.message;

@@ -1,9 +1,10 @@
+import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
 import { parseDeps } from "../board/board.js";
-import type { OrchConfig } from "../config.js";
+import { normalizeEffort, type EffortTier, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
 import type { RunRecord } from "../board/telemetry.js";
 
-export type Effort = "easy" | "hard";
+export type Effort = EffortTier;
 
 export interface PlanEntry {
   issue: number;
@@ -148,7 +149,7 @@ export function formatBrief(issues: readonly Issue[], rollup: readonly AgentRoll
 export function applyPlan(
   plan: readonly PlanEntry[],
   issues: readonly Issue[],
-  cfg: Pick<OrchConfig, "agents">,
+  cfg: Pick<OrchConfig, "agents" | "tierAliases"> & RoutePolicyConfig,
 ): PlannedAssignments {
   const issueByNumber = new Map(
     issues.filter((issue) => issue.state.toUpperCase() === "OPEN").map((issue) => [issue.number, issue]),
@@ -174,8 +175,14 @@ export function applyPlan(
       });
       continue;
     }
-    if (entry.effort !== "easy" && entry.effort !== "hard") {
-      skips.push({ issue: entry.issue, reason: `invalid effort '${entry.effort}' (expected easy or hard)` });
+    const effort = normalizeEffort(entry.effort, cfg.tierAliases);
+    if (!effort) {
+      skips.push({ issue: entry.issue, reason: `invalid effort '${entry.effort}' (expected free, cheap, standard, or lead)` });
+      continue;
+    }
+    const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: effort }, cfg);
+    if (!route.ok) {
+      skips.push({ issue: entry.issue, reason: `disallowed route: ${route.reason}` });
       continue;
     }
     if (planned.has(entry.issue)) {
@@ -184,7 +191,7 @@ export function applyPlan(
     }
 
     planned.add(entry.issue);
-    writes.push({ ...entry, effort: entry.effort });
+    writes.push({ ...entry, effort });
   }
 
   return { writes, skips };

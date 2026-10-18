@@ -1,17 +1,12 @@
-import {
-  listIssues,
-  listOpenPrs,
-  listPrComments,
-  listPrReviews,
-  prChecksState,
-  prMergeability,
-  type Issue,
-  type Pr,
-  type PrReview,
-} from "../github/github.js";
+import { nextHop } from "./cascade.js";
+import { resolveTaskModel } from "./runner.js";
+import { issueRole } from "../routing/route-policy.js";
+import { reviewIdentity } from "../board/review-identity.js";
+import type { Issue, Pr, PrReview } from "../github/github.js";
+import { ghBoard, type Board } from "../github/board.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
 import { answeredChangeRequestRounds, latestChangeRequestNotes, reviewState } from "../board/approval.js";
-import { byNumber, issueAgent } from "../board/board.js";
+import { byNumber, issueAgent, issueEffort } from "../board/board.js";
 import { prIssueNumber, reviewSatisfied } from "../board/review.js";
 import type { OrchConfig } from "../config.js";
 import { log } from "../util/log.js";
@@ -58,10 +53,16 @@ export function assembleFacts(params: {
       author,
       reviewers: rs.reviewers,
       selfReviewers: rs.selfReviewers,
+      reviewMetadata: rs.reviewMetadata,
+      authorFamily: reviewIdentity(author, issue, cfg, "author").family,
       reviewPolicy: cfg.reviewPolicy,
       agents: cfg.agents,
     });
   return {
+    nextCascade: nextHop({
+      agent: author, ...resolveTaskModel(author, issue, cfg),
+      tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    }, [], issueRole(issue), cfg),
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },
@@ -101,8 +102,9 @@ export async function observeTasks(
   cfg: OrchConfig,
   cwd: string,
   opts: { issues?: ReadonlySet<number> } = {},
+  board: Board = ghBoard,
 ): Promise<Observation> {
-  const [issues, prs] = await Promise.all([listIssues({ cwd, state: "open" }), listOpenPrs({ cwd })]);
+  const [issues, prs] = await Promise.all([board.listIssues({ cwd, state: "open" }), board.listOpenPrs({ cwd })]);
   const open = byNumber(issues);
   const events = readEvents(cwd);
   const out: TaskObservation[] = [];
@@ -131,16 +133,16 @@ export async function observeTasks(
     const pr = candidates[0];
     try {
       const [reviews, checks, mergeable] = await Promise.all([
-        listPrReviews(pr.number, { cwd }),
-        prChecksState(pr.number, { cwd, strict: true }), // a failed lookup must be 'unobserved', never 'red'
-        prMergeability(pr.number, { cwd }),
+        board.listPrReviews(pr.number, { cwd }),
+        board.prChecksState(pr.number, { cwd, strict: true }), // a failed lookup must be 'unobserved', never 'red'
+        board.prMergeability(pr.number, { cwd }),
       ]);
       const base = { issue, author, pr, reviews, checks, mergeable, localRounds: fixRoundsFor(events, n), cfg };
       let facts = assembleFacts(base);
       // Triage records matter only once the round budget is reached, so the common path reads no comments.
       let triage: TriageFacts | undefined;
       if (cfg.maxLeadTriage > 0 && facts.rounds >= facts.maxRounds) {
-        triage = triageFacts(await listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
+        triage = triageFacts(await board.listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
         facts = assembleFacts({ ...base, triage });
       }
       out.push({

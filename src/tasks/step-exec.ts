@@ -1,28 +1,31 @@
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
+import { cascadeRequeue } from "./cascade-requeue.js";
+import { appendEvent } from "./events.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import type { RunContext, RunResult } from "../adapters/types.js";
 import { runHeadlessAgent, type HeadlessResult } from "../adapters/headless.js";
 import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
-import { markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { availabilityKey, markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
 import { issueEffort } from "../board/board.js";
 import { merge } from "../board/review.js";
 import {
   NoReviewerError, listChangedFiles, prepareReviewCheckout, runAutomatedReview, type ChangedFile,
 } from "../board/review-run.js";
 import type { RunPhase } from "../board/telemetry.js";
-import { resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
+import { raiseEffort, type EffortTier, type CascadeRoute, resolveLeadModel, type ModelSpec, type OrchConfig } from "../config.js";
 import { resolveBaseBranch } from "../git/git.js";
 import { observeWorktree } from "../git/worktree.js";
-import { commentOnPr, editIssue, failingChecks, getPr, prDiff, type Pr } from "../github/github.js";
-import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS, effortLabel } from "../github/labels.js";
+import { commentOnPr, ensureLabels, editIssue, failingChecks, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
+import { issueRole, validateRoute } from "../routing/route-policy.js";
+import { NEEDS_ATTENTION, REVIEWED_BY_PREFIX, REVIEW_NEEDED, STATUS, labelDefs, effortLabel } from "../github/labels.js";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize, readLogSince } from "../util/log-file.js";
 import type { TaskObservation } from "./observe.js";
 import { formatConflictPrompt, formatFixPrompt } from "./step-prompts.js";
-import { readSession, writeSession } from "./sessions.js";
+import { clearSession, readSession, writeSession } from "./sessions.js";
 import { recordRun, resolveTaskModel } from "./runner.js";
 import { formatTriageComment, formatTriagePrompt, parseTriageDecision, type TriageRecord } from "./triage.js";
 
@@ -34,6 +37,7 @@ export type Signal =
   | "conflict.resolved"
   | "task.merged"
   | "task.escalated"
+  | "cascade.hop"
   | "triage.retry"
   | "agent.unavailable"
   | "step.failed";
@@ -78,8 +82,8 @@ async function runTracked(env: StepEnv, ctx: RunContext): Promise<TrackedRun> {
 }
 
 /** A harness failure that was really a usage limit pauses that harness instead of failing the task. */
-function afterAgentFailure(agent: string, attempt: TrackedRun, cwd: string): StepResult {
-  const until = noteUsageLimitFromLog(agent, attempt.logText, cwd);
+function afterAgentFailure(agent: string, attempt: TrackedRun, cwd: string, model?: ModelSpec): StepResult {
+  const until = noteUsageLimitFromLog(availabilityKey(agent, model?.model), attempt.logText, cwd);
   if (until) return { signal: "agent.unavailable", detail: `'${agent}' is out of usage until ${until.toISOString()}` };
   const { run } = attempt;
   return failure(run.timedOut ? `'${agent}' timed out` : `'${agent}' exited ${run.code}`);
@@ -222,7 +226,9 @@ export async function executeFix(
 ): Promise<StepResult> {
   const n = obs.issue.number;
   const agent = obs.author;
-  const pausedUntil = unavailableUntil(agent, cwd);
+  const model = resolveTaskModel(agent, obs.issue, cfg);
+  const key = availabilityKey(agent, model?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) return { signal: "agent.unavailable", detail: `'${agent}' is paused until ${pausedUntil.toISOString()}` };
   const found = await resolveWorktree(obs, cfg, cwd, env);
   if ("problem" in found) return failure(found.problem);
@@ -231,7 +237,6 @@ export async function executeFix(
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const failing = reason === "ci" ? await failingChecks(obs.pr.number, { cwd }) : [];
   const round = obs.facts.rounds + 1;
-  const model = resolveTaskModel(agent, obs.issue, cfg);
   const prompt = (resumed: boolean): string =>
     formatFixPrompt({
       issue: obs.issue, pr: obs.pr, worktree, reason, notes: obs.feedback, failingChecks: failing,
@@ -245,7 +250,7 @@ export async function executeFix(
     issue: n, agent, worktree, prompt: prompt(resume !== undefined), model, logFile: followUpLog(cwd, n, `fix${round}`),
     ...runBudget(obs.issue, cfg, cwd), resumeSession: resume,
   });
-  if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(agent, attempt.logText, cwd)) {
+  if (!attempt.run.ok && resume !== undefined && !noteUsageLimitFromLog(key, attempt.logText, cwd)) {
     // The harness could not resume (expired/foreign session): continue from durable facts instead.
     log.warn(`#${n}: resuming '${agent}' session failed (exit ${attempt.run.code}); retrying with a fresh session`);
     resume = undefined;
@@ -270,7 +275,7 @@ export async function executeFix(
   }
   const run = attempt.run;
   const outcome = async (): Promise<StepResult> => {
-    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd, model);
     if (run.sessionId) writeSession(n, { agent, sessionId: run.sessionId }, cwd);
     // The harness ran with write access: prove again that this is still the right worktree before publishing.
     const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, () => recheckWorktree(obs, cfg, cwd, env));
@@ -284,10 +289,13 @@ export async function executeFix(
   return result;
 }
 
-/** Prefer Claude for conflict resolution (per project policy), else the author, else wait. */
-export function pickResolver(author: string, cfg: OrchConfig, cwd: string): string | null {
-  const preferred = ["claude", author].filter((a, i, all) => cfg.agents.includes(a) && all.indexOf(a) === i);
-  return preferred.find((a) => unavailableUntil(a, cwd) === null) ?? null;
+/** First configured, allowed, available resolver; <author> expands per task. */
+export function pickResolver(author: string, cfg: OrchConfig, cwd: string, issue?: Issue): string | null {
+  const preferred = cfg.conflictResolvers.map((a) => a === "<author>" ? author : a).filter((a, i, all) => cfg.agents.includes(a) && all.indexOf(a) === i);
+  return preferred.find((agent) => unavailableUntil(agent, cwd) === null && (!issue || validateRoute({
+    role: issueRole(issue), agent,
+    tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+  }, cfg).ok)) ?? null;
 }
 
 /** Merge the moved base into a conflicting PR branch with an agent, then push and re-review. */
@@ -298,8 +306,12 @@ export async function executeResolveConflict(
   env: StepEnv = defaultEnv(cfg),
 ): Promise<StepResult> {
   const n = obs.issue.number;
-  const agent = pickResolver(obs.author, cfg, cwd);
-  if (!agent) return { signal: "agent.unavailable", detail: "no harness is available to resolve the conflict" };
+  const agent = pickResolver(obs.author, cfg, cwd, obs.issue);
+  if (!agent) return { signal: "agent.unavailable", detail: "no role-allowed harness is available to resolve the conflict" };
+  const model = resolveTaskModel(agent, obs.issue, cfg);
+  if (unavailableUntil(availabilityKey(agent, model?.model), cwd)) {
+    return { signal: "agent.unavailable", detail: "resolver endpoint is cooling down" };
+  }
   const found = await resolveWorktree(obs, cfg, cwd, env);
   if ("problem" in found) return failure(found.problem);
   const worktree = found.path;
@@ -309,7 +321,6 @@ export async function executeResolveConflict(
   if (fetch.code !== 0) return failure(`git fetch failed: ${fetch.stderr.trim()}`);
 
   const round = obs.facts.rounds + 1;
-  const model = resolveTaskModel(agent, obs.issue, cfg);
   const logFile = followUpLog(cwd, n, `resolve${round}`);
   const started = Date.now();
   const attempt = await runTracked(env, {
@@ -318,7 +329,7 @@ export async function executeResolveConflict(
   });
   const run = attempt.run;
   const result = await settled(async () => {
-    if (!run.ok) return afterAgentFailure(agent, attempt, cwd);
+    if (!run.ok) return afterAgentFailure(agent, attempt, cwd, model);
     const pushed = await pushAndRequeueReview(obs, env, cwd, worktree, async () => {
       const again = await recheckWorktree(obs, cfg, cwd, env); // the harness had write access: still the right worktree?
       if (again) return again;
@@ -359,8 +370,8 @@ export interface TriageEnv {
   /** The PR's current head, to refuse recording a decision made on an older one. */
   headOf(pr: number): Promise<string>;
   comment(pr: number, body: string): Promise<void>;
-  /** Move the task to the hard tier (removing `from`, its current effort label). */
-  setHardEffort(issue: number, from: "easy" | "hard" | null): Promise<void>;
+  /** Replace current effort labels with the next tier. */
+  setEffort(issue: number, tier: EffortTier, remove: string[]): Promise<void>;
   escalate(obs: TaskObservation, reason: string): Promise<StepResult>;
   now(): Date;
 }
@@ -383,8 +394,10 @@ export function defaultTriageEnv(cfg: OrchConfig, cwd: string): TriageEnv {
     changedFiles: async (pr) => listChangedFiles(await prDiff(pr, { cwd })),
     headOf: async (pr) => (await getPr(pr, { cwd })).headSha,
     comment: (pr, body) => commentOnPr(pr, body, { cwd }),
-    setHardEffort: (issue, from) =>
-      editIssue(issue, { cwd, addLabels: [effortLabel("hard")], removeLabels: from === "easy" ? [effortLabel("easy")] : [] }),
+    setEffort: async (issue, tier, remove) => {
+      await ensureLabels(labelDefs([effortLabel(tier)]), cwd);
+      await editIssue(issue, { cwd, addLabels: [effortLabel(tier)], removeLabels: remove });
+    },
     escalate: (obs, reason) => executeEscalate(obs, reason, cwd),
     now: () => new Date(),
   };
@@ -393,7 +406,7 @@ export function defaultTriageEnv(cfg: OrchConfig, cwd: string): TriageEnv {
 /**
  * Ask the lead what to do with a task whose round budget is spent (ADR-0010). The lead reads an
  * exact, read-only checkout of the PR head and returns one decision: `retry` (one more fix round
- * with its guidance, optionally on the hard tier) or `escalate` (a human decides, with the lead's
+ * with its guidance, optionally on the next tier) or `escalate` (a human decides, with the lead's
  * diagnosis). Every decision is recorded as an `orch-triage:v1` PR comment, so the loop counts it
  * from GitHub and never triages the same task twice. Fail-closed: a paused lead, a failed run, or a
  * reply that is not one valid decision escalates to a human exactly as before triage existed.
@@ -407,14 +420,15 @@ export async function executeTriage(
 ): Promise<StepResult> {
   const n = obs.issue.number;
   const lead = cfg.lead;
-  const pausedUntil = unavailableUntil(lead, cwd);
+  const model = resolveLeadModel(cfg);
+  const key = availabilityKey(lead, model?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
     return env.escalate(obs, `${reason}; lead triage was unavailable ('${lead}' is paused until ${pausedUntil.toISOString()})`);
   }
 
   const limits = runBudget(obs.issue, cfg, cwd, cfg.reviewTimeoutMs);
-  const model = resolveLeadModel(cfg);
-  const effort = issueEffort(obs.issue);
+  const effort = issueEffort(obs.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
   const logName = `triage-${n}-pr${obs.pr.number}`;
   const logFile = resolve(cwd, "logs", `${logName}.jsonl`);
   const since = logSize(logFile);
@@ -434,7 +448,7 @@ export async function executeTriage(
     if (!decision) {
       const limit = detectUsageLimit(run.raw, env.now());
       if (limit) {
-        const until = markUnavailable(lead, { resetAt: limit.resetAt, reason: limit.message }, cwd, env.now());
+          const until = markUnavailable(key, { resetAt: limit.resetAt, reason: limit.message }, cwd, env.now());
         unavailable = `'${lead}' hit its usage limit (until ${until.toISOString()})`;
       } else {
         failed = run.aborted !== undefined ? `aborted: ${run.aborted}`
@@ -444,14 +458,15 @@ export async function executeTriage(
   } catch (error) {
     failed = error instanceof Error ? error.message : String(error);
   }
-  // Effort only moves up: from the easy tier, or from no label (which runs on `defaultEffort`).
-  const upgrade = decision?.decision === "retry" && decision.effort === "hard" && effort !== "hard";
+  // Legacy hard verdicts also request a single step up, capped at lead.
+  const nextTier = raiseEffort(effort);
+  const upgrade = decision?.decision === "retry" && !!decision.effort && nextTier !== effort;
   recordRun(n, lead, model, decision ? `triage-${decision.decision}` : "triage-failed", Date.now() - started, logFile, cwd, cfg,
     { phase: "triage" satisfies RunPhase, since });
 
   const record = (d: "retry" | "escalate"): TriageRecord => ({
     pr: obs.pr.number, head: obs.pr.headSha, timestamp: env.now().toISOString(), decision: d,
-    extraRounds: d === "retry" ? 1 : 0, ...(d === "retry" && upgrade ? { effort: "hard" as const } : {}),
+    extraRounds: d === "retry" ? 1 : 0, ...(d === "retry" && upgrade ? { effort: nextTier } : {}),
   });
 
   if (decision?.decision === "retry") {
@@ -466,13 +481,13 @@ export async function executeTriage(
     let warning = "";
     if (upgrade) {
       try {
-        await env.setHardEffort(n, effort);
+        await env.setEffort(n, nextTier, obs.issue.labels.filter((label) => label.startsWith("model:") || (label.startsWith("effort:") && label !== effortLabel(nextTier))));
       } catch (error) {
-        warning = `; could not move #${n} to the hard tier (${error instanceof Error ? error.message : String(error)})`;
-        log.warn(`#${n}: triage granted a round on the hard tier, but the effort label was not updated${warning}`);
+        warning = `; could not move #${n} to the ${nextTier} tier (${error instanceof Error ? error.message : String(error)})`;
+        log.warn(`#${n}: triage granted a round on the ${nextTier} tier, but the effort label was not updated${warning}`);
       }
     }
-    return { signal: "triage.retry", detail: `one more round${upgrade ? " on the hard tier" : ""}${warning}` };
+    return { signal: "triage.retry", detail: `one more round${upgrade ? ` on the ${nextTier} tier` : ""}${warning}` };
   }
 
   // Escalate: the lead's call, or no usable decision. Record it so the task is not triaged again.
@@ -507,4 +522,21 @@ export async function executeEscalate(obs: TaskObservation, reason: string, cwd:
     log.warn(`#${obs.issue.number}: escalated but could not comment: ${error instanceof Error ? error.message : String(error)}`);
   }
   return { signal: "task.escalated", detail: reason };
+}
+
+/** Switch the writable route without discarding the PR, claim or retained work. */
+export async function executeCascade(obs: TaskObservation, route: CascadeRoute, cfg: OrchConfig, cwd: string): Promise<StepResult> {
+  try {
+    if ((await getPr(obs.pr.number, { cwd })).headSha !== obs.pr.headSha) return failure("PR head moved before cascade");
+    const cascadeFrom: CascadeRoute = {
+      agent: obs.author, ...resolveTaskModel(obs.author, obs.issue, cfg),
+      tier: issueEffort(obs.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    };
+    await cascadeRequeue(obs.issue, route, cwd);
+    clearSession(obs.issue.number, cwd);
+    appendEvent({ type: "cascade.hop", issue: obs.issue.number, pr: obs.pr.number, agent: obs.author, cascadeFrom, cascadeTo: route }, cwd);
+    return { signal: "cascade.hop" };
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error));
+  }
 }

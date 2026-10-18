@@ -153,3 +153,29 @@ describe("decideStep: lead triage before human escalation", () => {
     expect(decideStep({ ...facts({ review: { approved: true }, rounds: 5 }), triages: 0, maxTriages: 1 }).kind).toBe("merge");
   });
 });
+
+describe("fix cascade", () => {
+  const route = { agent: "claude", tier: "lead" } as const;
+  const gates: Partial<StepFacts>[] = [
+    { review: { approved: false, changesRequested: true } },
+    { pr: { number: 9, head: "h", checks: "fail", mergeable: "clean" } },
+    { pr: { number: 9, head: "h", checks: "pass", mergeable: "conflicting" } },
+  ];
+  it.each(gates)("cascades a failed fix-type attempt before budget triage: %j", (gate) => {
+    const f = { ...facts(), ...gate, nextCascade: route };
+    expect(decideStep(f).kind).not.toBe("cascade");
+    expect(decideStep({ ...f, failedFixAttempts: 1 })).toEqual({ kind: "cascade", route });
+    expect(decideStep({ ...f, failedFixAttempts: 1, rounds: 3, maxTriages: 1 }).kind).toBe("cascade");
+  });
+  it("preserves retry, triage and escalation without a member", () => {
+    const f = { ...facts({ review: { changesRequested: true } }), failedFixAttempts: 1 };
+    expect(decideStep(f)).toEqual({ kind: "fix", reason: "review" });
+    expect(decideStep({ ...f, rounds: 3, maxTriages: 1 }).kind).toBe("triage");
+    expect(decideStep({ ...f, rounds: 3 }).kind).toBe("escalate");
+  });
+  it("never cascades reviews, waiting, merging or human-owned tasks", () => {
+    for (const f of [facts(), facts({ review: { approved: true } }), facts({ attention: true }), facts({ pr: null })]) {
+      expect(decideStep({ ...f, failedFixAttempts: 1, nextCascade: route }).kind).not.toBe("cascade");
+    }
+  });
+});

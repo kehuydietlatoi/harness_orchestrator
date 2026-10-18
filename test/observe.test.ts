@@ -9,6 +9,7 @@ vi.mock("../src/github/github.js", () => ({
 vi.mock("../src/tasks/events.js", () => ({ readEvents: () => [], fixRoundsFor: () => 0 }));
 
 import * as gh from "../src/github/github.js";
+import type { Board } from "../src/github/board.js";
 import { assembleFacts, observeTasks } from "../src/tasks/observe.js";
 import { formatTriageComment } from "../src/tasks/triage.js";
 
@@ -84,7 +85,7 @@ describe("assembleFacts", () => {
 
   it("counts a marked self-review only under cross-or-self", () => {
     const reviews = [review("claude", "approve", { mode: "self" })];
-    expect(assembleFacts({ ...base, reviews }).review.approved).toBe(true);
+    expect(assembleFacts({ ...base, reviews, cfg: { ...DEFAULT_CONFIG, reviewPolicy: "cross-or-self" } }).review.approved).toBe(true);
     const strict: OrchConfig = { ...DEFAULT_CONFIG, reviewPolicy: "cross" };
     expect(assembleFacts({ ...base, reviews, cfg: strict }).review.approved).toBe(false);
   });
@@ -128,6 +129,54 @@ describe("observeTasks", () => {
     expect(task).toMatchObject({ author: "claude", step: { kind: "review" }, feedback: null });
     expect(task.pr.number).toBe(62);
     expect(unobserved).toEqual([]);
+  });
+
+  it("observes reviews and triage through an in-memory board", async () => {
+    const reviews = [
+      review("codex", "request-changes", { head: OLD }),
+      review("codex", "request-changes", { note: "fix the null check" }),
+    ];
+    const comments = [{
+      id: 1, created_at: "", body: formatTriageComment(
+        { pr: 62, head: OLD, timestamp: "2026-10-07T00:00:00Z", decision: "retry", extraRounds: 1 },
+        { issue: 38, reason: "stuck", text: "Keep the existing interface." },
+      ),
+    }];
+    const board: Board = {
+      listIssues: async (opts) => {
+        expect(opts).toEqual({ cwd: "/repo", state: "open" });
+        return [issue];
+      },
+      listOpenPrs: async () => [pr],
+      listPrReviews: async () => reviews,
+      listPrComments: async () => comments,
+      prChecksState: async (number, opts) => {
+        expect(number).toBe(pr.number);
+        expect(opts).toEqual({ cwd: "/repo", strict: true });
+        return "pass";
+      },
+      prMergeability: async () => "clean",
+      editIssue: async () => { throw new Error("observation must not edit issues"); },
+      commentOnPr: async () => { throw new Error("observation must not post comments"); },
+    };
+    const cfg = { ...DEFAULT_CONFIG, maxReviewRounds: 1, maxLeadTriage: 1 };
+
+    const out = await observeTasks(cfg, "/repo", {}, board);
+
+    expect(out.unobserved).toEqual([]);
+    expect(out.ambiguous).toEqual([]);
+    expect(out.tasks).toHaveLength(1);
+    expect(out.tasks[0]).toMatchObject({
+      author: "claude", pr, reviews, step: { kind: "fix", reason: "review" },
+      facts: { rounds: 1, triages: 1, extraRounds: 1 },
+      feedback: "fix the null check", guidance: "Keep the existing interface.",
+    });
+    expect(gh.listIssues).not.toHaveBeenCalled();
+    expect(gh.listOpenPrs).not.toHaveBeenCalled();
+    expect(gh.listPrReviews).not.toHaveBeenCalled();
+    expect(gh.listPrComments).not.toHaveBeenCalled();
+    expect(gh.prChecksState).not.toHaveBeenCalled();
+    expect(gh.prMergeability).not.toHaveBeenCalled();
   });
 
   it("surfaces the reviewer's notes and routes the PR back to the author", async () => {

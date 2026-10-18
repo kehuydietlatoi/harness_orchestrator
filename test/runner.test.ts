@@ -15,6 +15,28 @@ function issue(labels: string[] = []): Issue {
 }
 
 describe("resolveTaskModel", () => {
+  it("refuses a disallowed role route before dispatch", () => {
+    const cfg: OrchConfig = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead"], families: ["openai"] } } };
+    const task = issue(["role:coder", "agent:claude", "effort:lead"]);
+    expect(() => resolveTaskModel("claude", task, cfg)).toThrow(/disallowed route.*anthropic/);
+    expect(() => resolveDispatchAgent(task, new Map([[task.number, task]]), cfg)).toThrow(/disallowed route.*anthropic/);
+    expect(resolveTaskModel("codex", task, cfg)).toEqual(cfg.adapters.codex.models?.lead);
+  });
+
+  it("resolves four tiers directly and legacy labels through aliases", () => {
+    const models = { free: { model: "f" }, cheap: { model: "c" }, standard: { model: "s" }, lead: { model: "l" } };
+    const cfg = { ...DEFAULT_CONFIG, adapters: { custom: { cmd: "custom", models } } };
+    for (const tier of ["free", "cheap", "standard", "lead"] as const) {
+      expect(resolveTaskModel("custom", issue(["effort:" + tier]), cfg)).toEqual(models[tier]);
+    }
+    expect(resolveTaskModel("custom", issue(["effort:easy"]), cfg)).toEqual(models.standard);
+    expect(resolveTaskModel("custom", issue(["effort:hard"]), cfg)).toEqual(models.lead);
+    const aliased = { ...cfg, tierAliases: { easy: "cheap" as const, hard: "standard" as const } };
+    expect(resolveTaskModel("custom", issue(["effort:easy"]), aliased)).toEqual(models.cheap);
+    expect(resolveTaskModel("custom", issue(["effort:hard"]), aliased)).toEqual(models.standard);
+    expect(resolveTaskModel("custom", issue(["effort:lead"]), aliased)).toEqual(models.lead);
+  });
+
   it.each([
     ["claude", "easy", { model: "claude-sonnet-5-5", effort: "medium" }],
     ["claude", "hard", { model: "claude-sonnet-5-5", effort: "medium" }],
@@ -29,7 +51,7 @@ describe("resolveTaskModel", () => {
       ...DEFAULT_CONFIG,
       adapters: {
         ...DEFAULT_CONFIG.adapters,
-        claude: { cmd: "claude", models: { easy: { model: "a", effort: "low" }, hard: { model: "b", effort: "high" } } },
+        claude: { cmd: "claude", models: { ...DEFAULT_CONFIG.adapters.claude.models!, standard: { model: "a", effort: "low" }, lead: { model: "b", effort: "high" } } },
       },
     };
 
@@ -38,15 +60,15 @@ describe("resolveTaskModel", () => {
   });
 
   it("uses the configured default effort when the issue has no effort label", () => {
-    const cfg: OrchConfig = { ...DEFAULT_CONFIG, defaultEffort: "easy" };
+    const cfg: OrchConfig = { ...DEFAULT_CONFIG, defaultEffort: "standard" };
 
-    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.easy);
+    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.standard);
   });
 
   it("falls back to hard when neither the issue nor config specifies an effort", () => {
     const cfg: OrchConfig = { ...DEFAULT_CONFIG, defaultEffort: undefined };
 
-    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.hard);
+    expect(resolveTaskModel("claude", issue(), cfg)).toEqual(DEFAULT_CONFIG.adapters.claude.models?.lead);
   });
 
   it("returns undefined when the agent has no models map", () => {

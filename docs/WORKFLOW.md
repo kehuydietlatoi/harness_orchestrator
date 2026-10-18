@@ -6,7 +6,7 @@ or cleared**. Traced from source (`src/github/labels.ts`, `src/tasks/service.ts`
 `src/commands/abandon.ts`, `src/tasks/reconcile.ts`) — if code and this table disagree, the
 code wins and this file is the bug. Vocabulary lives in `CONTEXT.md`.
 
-All labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
+The built-in labels are created by `orch init` from the canonical set in `src/github/labels.ts`.
 
 **Schema drift & self-heal.** The canonical set is **additive** — new labels arrive with
 new features (e.g. `effort:*` in #20, `assigned-by:brain` with the judge), so a repo
@@ -28,16 +28,42 @@ than failing. Re-running `orch init` still backfills the whole set at once.
 | `status:done` | `5319e7` | Merged | `merge`; `repair` projection | `repair` projection only if observed facts no longer derive `done` |
 | `status:blocked` | `b60205` | **⚠ Defined but never applied** — see note below | *(nothing)* | `repair` (stale lifecycle projection) |
 | `agent:claude` / `agent:codex` | purple/blue | Owner — which harness runs it | `assign`; `plan` (ticket `agent`); `claimSpecific` | `abandon` only (**sticky**) |
-| `effort:easy` | `c2e0c6` | Use the agent's *easy* model tier | `assign`; `plan` (ticket `effort`) | autopilot triage (retry on the hard tier) only |
-| `effort:hard` | `f9d0c4` | Use the agent's *hard* model tier | `assign`; `plan` (ticket `effort`); autopilot triage | — (**sticky**) |
+| `role:<name>` | user-defined | Constrain routing to `roles[name].tiers` and `.families` | Human / external issue author (create the label manually) | Human / external issue author |
 | `review:needed` | `e99695` | Awaiting review by the *other* harness | `submit`; `repair` for an open task PR without current approval or current-head changes requested | `approve`; `requestChanges`; `repair` after current approval, current-head changes requested, or PR closure |
 | `reviewed-by:claude` / `reviewed-by:codex` | `c5def5` | Projection of a commit-bound review decision | `approve`; `repair` from current review records | `requestChanges`; `repair` removes stale or revoked approvals |
 | `needs-attention` | `d93f0b` | Run failed, produced nothing, or has facts repair will not guess through | `processClaimed` recovery (fail, timeout, exception, no-commits); `repair` projection | `abandon`; `repair` after facts become coherent |
+| `effort:free` | `c2e0c6` | Use the agent's *free* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:cheap` | `c2e0c6` | Use the agent's *cheap* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:standard` | `c2e0c6` | Use the agent's *standard* model tier | `assign`; `plan`; autopilot triage | triage may raise one tier, capped at lead |
+| `effort:lead` | `f9d0c4` | Use the agent's *lead* model tier | `assign`; `plan`; autopilot triage | never raised further |
 | `assigned-by:brain` | `bfd4f2` | Provenance: this routing came from the judge, not a human | `assign --auto` / `POST /actions/assign` (origin brain) | *(future re-route pass)* |
 
-**Sticky** = set once at routing/claim time and honored on every future run; only
-`abandon` clears `agent:`, and *nothing* clears `effort:`. Re-routing an issue to a
-different agent/effort today means `abandon` then re-`assign`.
+Legacy `effort:easy` / `effort:hard` labels and config model keys resolve as `standard` / `lead`. The optional `tierAliases: { "easy": "cheap", "hard": "lead" }` config overrides legacy mappings; canonical names always resolve directly and explicit canonical model keys win over aliases. All four tiers keep Sonnet 5.5 medium / gpt-6.1-sol medium by default.
+
+**Sticky** = set at routing/claim time and honored on future runs. `abandon` clears
+`agent:`; triage can raise `effort:`. With an explicit `tierMembers` ladder, a failed
+implementation refused for quota or endpoint availability can replace `agent:` and
+`effort:` with the next allowed member and set `model:<id>` to select its configured
+model, reasoning effort, and family. Routing labels are ensured before writing.
+The runner first proves no commits ahead and no open PR, safely removes the worktree,
+and releases the lock; only then does it relabel `status:todo` without `needs-attention`.
+If the ladder is exhausted or absent, existing requeue/wait behavior applies.
+`model:` is cleared by abandon and tier-raising triage; independent review uses the
+reviewer's own premium model, while author identity uses the projected member.
+Autopilot also cascades a fix or conflict-resolution step after one failed attempt
+on the current PR head when a next member exists. It replaces routing labels while
+retaining the PR, claim and worktree, then re-observes before retrying with a fresh
+session. With no next member the existing retry, triage and escalation policy applies.
+Each successful hop writes `cascade.hop`; implementation runs also carry
+`cascadeFrom`/`cascadeTo` in their run record.
+
+A task without a `role:` label remains unrestricted. A named role must exist in
+`orch.config.json`; unknown roles, disallowed tiers, and disallowed provider families
+are rejected during assignment and before harness execution. Orch does not add or
+remove role labels. The selected model's `family` overrides the adapter's family;
+Claude defaults to `anthropic`, Codex to `openai`. OpenCode must specify `family`
+on each configured model (including `leadModel`). These are routing constraints;
+review approval policy is configured separately.
 
 ## Lifecycle (happy path)
 
@@ -115,14 +141,13 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
    *display* blocked-ness, but the label is not the source of that truth. Either wire it
    up or drop it — tracked as a hardening candidate.
 
-2. **`effort:` is never cleared.** Once routed, an issue keeps its effort tier forever
-   unless a human edits it. Intentional (sticky routing), but means re-routing effort
-   requires a manual label edit or `abandon`.
+2. **`effort:` persists across abandon.** Triage and implementation cascade can replace
+   it with a higher tier; other routing changes require a manual label edit.
 
 ## Where routing labels get honored
 
 - `effort:` → `resolveTaskModel(agent, issue, cfg)` (a `ModelSpec`) at spawn → `RunContext.model` →
-  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`hard`).
+  adapter appends its model/effort flags. No label ⇒ `cfg.defaultEffort` (`lead`).
 - `agent:` → `claimNext` skips issues pinned to a different agent.
 - Structured PR review metadata for the current head feeds the merge gate; `review:needed` and `reviewed-by:*` are projections only. `review-approve` requires `--head <full-sha>` from `orch review`. Repair preserves `status:in-progress` and clears `review:needed` while the latest structured decision requests changes on the current head. A new head returns the task to review; stale approval labels are removed. The review queue includes explicit `review:needed` PRs without reading reviews, and otherwise recovers stale approvals or orphaned approval labels while excluding current-head changes requested.
 
@@ -139,7 +164,7 @@ every open task PR. `--issues <list>` (what the `orch plan` pipeline starts) nar
 | resolve-conflict | PR conflicts with the base | Claude (else the author) merges `origin/<base>` into the branch; orch checks the base is an ancestor, then pushes | same as fix |
 | merge | approved on the head, CI green/none, mergeable | `merge()` through `checkMergeGate` | `status:done`; releases lock, prunes worktree |
 | await-human | as merge, with `requireHumanMerge` | nothing; reported | - |
-| triage | round budget (`maxReviewRounds` + rounds granted by triage) spent and fewer than `maxLeadTriage` triages recorded on the PR | the lead (on `leadModel`) reads a read-only checkout of the head and decides: `retry` (one more fix round with its guidance) or `escalate`; recorded as an `orch-triage:v1` PR comment | on a retry that asks for it: adds `effort:hard`, removes `effort:easy` (the only path that changes `effort:`); escalation as below |
+| triage | round budget (`maxReviewRounds` + rounds granted by triage) spent and fewer than `maxLeadTriage` triages recorded on the PR | the lead (on `leadModel`) reads a read-only checkout of the head and decides: `retry` (one more fix round with its guidance) or `escalate`; recorded as an `orch-triage:v1` PR comment | on a retry that asks for it: raises one tier (free -> cheap -> standard -> lead, capped at lead), replacing existing effort labels (the only path that changes `effort:`); escalation as below |
 | escalate | round budget spent after triage (or `maxLeadTriage: 0`), the lead's decision, a failed/paused triage, or a step failed twice in a row | comment on the PR | sets `needs-attention` (the loop then ignores the task until a human clears it) |
 
 Run state lives outside GitHub: `~/.orch/<project>/events.jsonl` (every step start/finish and its signal),
@@ -153,9 +178,12 @@ A failed harness run whose log shows a usage-limit refusal puts that agent on co
 (`src/board/availability.ts`, `~/.orch/<project>/availability.json`, clamped to 1 minute..12 hours;
 default 1 hour when no reset time is given). `processNext` / `dispatchSpecific` will not claim work for
 an agent on cooldown. This is runtime state, not an issue label, and never affects lifecycle derivation.
-Review records carry an optional `mode: "self"`; the gate accepts the author's own approval only when
+Review records carry reviewer `tier`/`family`; only `standard`/`lead` approvals from a different
+model family count. Legacy records retain premium/harness-default identity.
+The default `reviewPolicy` is `cross`. Records may carry `mode: "self"`; the gate accepts the author's own approval only when
 `reviewPolicy` is `cross-or-self` **and** that record is marked self. Writing a self record is itself
-guarded (`assertSelfReviewAllowed`: every other harness must currently be on cooldown).
+guarded (`assertSelfReviewAllowed`: every eligible different-family reviewer must be unavailable),
+and self approvals must also be premium. See [ADR-0011](adr/0011-premium-family-review-and-conflict-resolvers.md).
 
 ## Observed health in operator views
 

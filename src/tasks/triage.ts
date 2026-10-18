@@ -1,3 +1,4 @@
+import { EFFORT_TIERS, normalizeEffort, type EffortTier } from "../config.js";
 import { lastFencedBlock } from "../adapters/headless.js";
 import { parseReview, reviewNotes } from "../board/approval.js";
 import type { ChangedFile } from "../board/review-run.js";
@@ -23,8 +24,8 @@ export interface TriageRecord {
   decision: "retry" | "escalate";
   /** Fix rounds this decision granted: 1 for a retry, 0 for an escalation. */
   extraRounds: 0 | 1;
-  /** Set when the retry also moved the task to the hard tier. */
-  effort?: "hard";
+  /** The raised tier; legacy records may contain hard. */
+  effort?: EffortTier | "hard";
 }
 
 const MARKER = /\n<!-- orch-triage:v1 (.+) -->\s*$/;
@@ -32,13 +33,13 @@ const GUIDANCE_HEADING = "### Guidance for the author";
 
 /** The lead's verdict, parsed from its fenced JSON reply. */
 export type TriageDecision =
-  | { decision: "retry"; guidance: string; effort?: "hard" }
+  | { decision: "retry"; guidance: string; effort?: "raise" | "hard" }
   | { decision: "escalate"; diagnosis: string; question?: string };
 
 /** Render the PR comment that records a triage. Guidance, when present, is always the last section. Pure. */
 export function formatTriageComment(record: TriageRecord, params: { issue: number; reason: string; text: string }): string {
   const what = record.decision === "retry"
-    ? `one more fix round${record.effort === "hard" ? ", on the hard model tier" : ""}`
+    ? `one more fix round${record.effort ? `, on the ${normalizeEffort(record.effort)} model tier` : ""}`
     : "a human needs to decide (see the escalation comment)";
   const body = record.decision === "retry"
     ? `${GUIDANCE_HEADING}\n\n${params.text.trim()}`
@@ -65,7 +66,7 @@ export function parseTriageComment(comment: Pick<IssueComment, "body">): { recor
       typeof r.head === "string" && /^[a-f0-9]{40,64}$/.test(r.head) &&
       typeof r.timestamp === "string" && Number.isFinite(Date.parse(r.timestamp)) &&
       ((r.decision === "retry" && r.extraRounds === 1) || (r.decision === "escalate" && r.extraRounds === 0)) &&
-      (r.effort === undefined || r.effort === "hard");
+      (r.effort === undefined || r.effort === "hard" || EFFORT_TIERS.includes(r.effort));
     return valid ? { record: r, text: comment.body.replace(MARKER, "").trim() } : null;
   } catch {
     return null;
@@ -108,8 +109,8 @@ export function parseTriageDecision(text: string): TriageDecision | null {
     if (!v || typeof v !== "object" || Array.isArray(v)) return null;
     if (v.decision === "retry") {
       if (typeof v.guidance !== "string" || !v.guidance.trim()) return null;
-      if (v.effort !== undefined && v.effort !== "hard") return null;
-      return { decision: "retry", guidance: v.guidance.trim(), ...(v.effort === "hard" ? { effort: "hard" as const } : {}) };
+      if (v.effort !== undefined && v.effort !== "raise" && v.effort !== "hard") return null;
+      return { decision: "retry", guidance: v.guidance.trim(), ...(v.effort === "hard" || v.effort === "raise" ? { effort: v.effort } : {}) };
     }
     if (v.decision === "escalate") {
       if (typeof v.diagnosis !== "string" || !v.diagnosis.trim()) return null;
@@ -140,7 +141,7 @@ export function formatTriagePrompt(params: {
   issue: Pick<Issue, "number" | "title" | "body">;
   pr: Pick<Pr, "number" | "headSha" | "headRefName">;
   author: string;
-  effort: "easy" | "hard" | null;
+  effort: EffortTier | null;
   reason: string;
   checks: string;
   mergeable: string;
@@ -180,15 +181,15 @@ export function formatTriagePrompt(params: {
     "must fix and which to decline as out of scope, each with a one-line reason.",
     "",
     "- **retry**: one more round by the author can finish it. Give concrete guidance: what to change, what in the feedback",
-    "  is out of scope or wrong and can be declined with a short reason, and how to verify. Add `\"effort\": \"hard\"` only if",
-    "  the task is on the easy tier and the failures look like the model is out of its depth.",
+    "  is out of scope or wrong and can be declined with a short reason, and how to verify. Add `\"effort\": \"raise\"` only if",
+    "  the task is below lead and the failures look like the model is out of its depth.",
     "- **escalate**: a human must decide (ambiguous or contradictory spec, reviewer and author disagree on scope, a design",
     "  problem, flaky CI or infrastructure, or rounds that keep regressing). Diagnose it and ask the one question the human",
     "  must answer.",
     "",
     "Reply with exactly one fenced code block tagged json and nothing after it, one of:",
     "```json",
-    '{ "decision": "retry", "guidance": "...", "effort": "hard" }',
+    '{ "decision": "retry", "guidance": "...", "effort": "raise" }',
     "```",
     "(omit `effort` to keep the tier) or",
     "```json",

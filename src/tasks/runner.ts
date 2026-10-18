@@ -1,15 +1,18 @@
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
+import { cascadeLabels } from "./cascade-requeue.js";
+import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
+import { formatModelSpec, resolvePricingMode, resolveTierModel, type CascadeRoute, type ModelSpec, type OrchConfig } from "../config.js";
+import { nextHop } from "./cascade.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
-import { getIssue, editIssue, listIssues, listOpenPrs, type Issue } from "../github/github.js";
+import { getIssue, editIssue, ensureLabels, listIssues, listOpenPrs, type Issue } from "../github/github.js";
 import { prIssueNumber } from "../board/review.js";
 import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap, type ClaimFilter } from "../board/board.js";
-import { STATUS, NEEDS_ATTENTION } from "../github/labels.js";
+import { STATUS, NEEDS_ATTENTION, labelDefs } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
 import { removeWorktree } from "../git/worktree.js";
 import { log } from "../util/log.js";
@@ -18,8 +21,10 @@ import { appendRun, parseUsage, projectId, type RunPhase, type RunRecord } from 
 import { appendEvent } from "./events.js";
 import { logSize, readLogSince } from "../util/log-file.js";
 import { estimateCost } from "../board/pricing.js";
-import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { availabilityKey, markUnavailable, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { incrementQuota } from "../board/quota.js";
 import { writeSession } from "./sessions.js";
+import { endpointHealthy } from "../board/health.js";
 
 export interface RunSummary {
   issue: number;
@@ -33,9 +38,17 @@ export function resolveTaskModel(
   agent: string,
   issue: Issue,
   cfg: OrchConfig,
+  opts: { purpose?: "implementation" | "review" } = {},
 ): ModelSpec | undefined {
-  const tier = issueEffort(issue) ?? cfg.defaultEffort ?? "hard";
-  return cfg.adapters[agent]?.models?.[tier];
+  const tier = issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead";
+  const model = opts.purpose === "review" ? cfg.adapters[agent]?.models?.[tier] :
+    resolveTierModel(agent, tier, cfg, issueAgent(issue) === agent ? issue.labels : []);
+  // Role allowances constrain writable implementation, not independent review.
+  if (opts.purpose !== "review") {
+    const route = validateRoute({ role: issueRole(issue), agent, tier, model }, cfg);
+    if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+  }
+  return model;
 }
 
 async function commitsAhead(worktree: string, cfg: OrchConfig, cwd: string): Promise<number> {
@@ -77,6 +90,7 @@ export function resolveDispatchAgent(
   if (blockers.length > 0) {
     throw new Error(`#${issue.number} is blocked by open issue(s): ${blockers.map((n) => `#${n}`).join(", ")}.`);
   }
+  resolveTaskModel(agent, issue, cfg); // refuse before claiming resources
   return agent;
 }
 
@@ -95,15 +109,17 @@ export function recordRun(
   logFile: string,
   cwd: string,
   cfg: OrchConfig,
-  meta: { phase?: RunPhase; round?: number; since?: number } = {},
+  meta: { phase?: RunPhase; round?: number; since?: number; cascadeFrom?: CascadeRoute; cascadeTo?: CascadeRoute } = {},
 ): void {
   try {
     // A missing log reads as empty text: one record per completed run is preserved regardless.
     const usage = parseUsage(readLogSince(logFile, meta.since ?? 0), agent);
-    // Prefer the harness-reported cost; fall back to a per-token estimate only
-    // when pricing exists for this model (subscription agents have none → null).
-    const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
+    // Quota billing tracks requests instead of dollars, even if the provider emits a cost.
+    // Other modes preserve reported cost, with API token pricing as a fallback.
+    const mode = resolvePricingMode(agent, cfg);
+    const costUsd = mode === "quota" ? 0 : usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing, mode);
     const rec: RunRecord = {
+      ...(meta.cascadeFrom ? { cascadeFrom: meta.cascadeFrom, cascadeTo: meta.cascadeTo } : {}),
       ...(meta.phase ? { phase: meta.phase } : {}),
       ...(meta.round !== undefined ? { round: meta.round } : {}),
       ts: new Date().toISOString(),
@@ -117,8 +133,12 @@ export function recordRun(
       tokensOut: usage.tokensOut,
       tokensTotal: usage.tokensTotal,
       costUsd,
+      ...(usage.requests !== undefined ? { requests: usage.requests } : {}),
     };
     appendRun(rec, cwd);
+    if (mode === "quota" && model?.model && usage.requests !== undefined) {
+      incrementQuota(availabilityKey(agent, model.model), usage.requests, cwd, new Date(rec.ts));
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`could not record run telemetry: ${message}`);
@@ -149,7 +169,12 @@ export async function processNext(
     log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
     return null;
   }
-  const task = await claimNext(agent, cfg, cwd, { requireRouted: opts.requireRouted, only: opts.only });
+  const task = await claimNext(agent, cfg, cwd, {
+    requireRouted: opts.requireRouted, only: opts.only,
+    ...(agent === "opencode" ? {
+      canClaim: (issue: Issue) => endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]),
+    } : {}),
+  });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
 
@@ -171,9 +196,13 @@ export async function dispatchSpecific(
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
   const agent = resolveDispatchAgent(issue, open, cfg);
-  const pausedUntil = unavailableUntil(agent, cwd);
+  const key = availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
-    throw new Error(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+    throw new Error(`'${key}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+  }
+  if (!(await endpointHealthy(agent, resolveTaskModel(agent, issue, cfg)?.model, cwd, cfg.adapters[agent]))) {
+    return { issue: number, outcome: "requeued", durationMs: 0 };
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
@@ -204,6 +233,8 @@ async function processClaimed(
   let harnessDurationMs: number | undefined;
   let preserveWorktree = false;
   let logMark = 0; // log size just before the harness ran (the log is shared by every retry)
+  let cascadeFrom: CascadeRoute | undefined;
+  let cascadeTo: CascadeRoute | undefined;
 
   try {
     mkdirSync(logDir, { recursive: true });
@@ -227,10 +258,21 @@ async function processClaimed(
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
     if (!result.ok) {
-      const limitedUntil = noteUsageLimit(agent, logFile, cwd, logMark);
+      const key = availabilityKey(agent, model?.model);
+      const limitedUntil = noteUsageLimit(key, logFile, cwd, logMark) ??
+        (result.outcome === "quota" || result.outcome === "endpoint-unavailable"
+          ? markUnavailable(key, { resetAt: null, reason: result.outcome }, cwd) : null);
+      const current: CascadeRoute = { agent, ...model, tier: issueEffort(task.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
+      const hop = limitedUntil ? nextHop(current, [], issueRole(task.issue), cfg) : null;
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
-      if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd))) {
+      if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd, hop ? { issue: task.issue, route: hop } : undefined))) {
+        if (hop) {
+          cascadeFrom = current;
+          cascadeTo = hop;
+          appendEvent({ type: "cascade.hop", issue: n, agent, cascadeFrom, cascadeTo }, cwd);
+          console.log(pc.yellow(`↪ #${n} cascaded to '${hop.agent}' (${hop.tier}, ${hop.model ?? "default"})`));
+        }
         console.log(pc.yellow(`↺ #${n} requeued — '${agent}' is out of usage until ${limitedUntil.toLocaleString()}`));
         summary = { issue: n, outcome: "requeued", durationMs: result.durationMs };
         telemetryOutcome = "usage-limited";
@@ -271,7 +313,7 @@ async function processClaimed(
     telemetryOutcome = "failed";
   }
 
-  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark });
+  recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark, cascadeFrom, cascadeTo });
   return summary;
 }
 
@@ -325,15 +367,23 @@ async function recoverClaim(
  * released before the labels change so a `todo` task never still looks claimed. Returns false, having
  * changed no labels, when any of that does not hold.
  */
-async function requeueClaim(n: number, worktree: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+async function requeueClaim(n: number, worktree: string, cfg: OrchConfig, cwd: string, cascade?: { issue: Issue; route: CascadeRoute }): Promise<boolean> {
   try {
     if ((await commitsAhead(worktree, cfg, cwd)) > 0) return false;
     if ((await listOpenPrs({ cwd })).some((pr) => prIssueNumber(pr) === n)) return false;
+    const addLabels = [STATUS.todo as string];
+    const removeLabels = [STATUS.claimed as string, STATUS.inProgress as string];
+    if (cascade) {
+      const labels = cascadeLabels(cascade.issue, cascade.route);
+      addLabels.push(...labels.addLabels);
+      removeLabels.push(...labels.removeLabels, NEEDS_ATTENTION);
+      await ensureLabels(labelDefs(addLabels), cwd);
+    }
     if (!(await removeWorktree(worktree, { cwd, disposableIgnored: cfg.disposableIgnored }))) return false;
     // release() reports failure by returning false, not by throwing: a lock that is still held must never
     // be relabelled todo (it would read as claimed and the task could not run after the cooldown).
     if (!(await lockRelease(n, { cwd }))) return false;
-    await editIssue(n, { cwd, addLabels: [STATUS.todo], removeLabels: [STATUS.claimed, STATUS.inProgress] });
+    await editIssue(n, { cwd, addLabels, removeLabels: removeLabels.filter((label) => !addLabels.includes(label)) });
     return true;
   } catch (error) {
     warnRecovery(n, "requeue failed", error);

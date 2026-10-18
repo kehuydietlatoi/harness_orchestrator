@@ -22,7 +22,7 @@ export async function reviewQueueCommand(opts: { agent?: string }): Promise<void
   const cfg = loadConfig(cwd);
   const agent = resolveAgent(opts.agent, cfg);
 
-  const items = await reviewQueue(agent, cwd, cfg.reviewPolicy);
+  const items = await reviewQueue(agent, cwd, cfg.reviewPolicy, cfg);
   console.log(pc.bold(`Review queue for '${agent}'\n`));
   if (!items.length) {
     console.log(pc.dim("  (nothing awaiting your review)"));
@@ -88,7 +88,7 @@ export async function reviewApproveCommand(prArg: string, opts: { agent?: string
   const prNum = parsePr(prArg);
 
   const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "", opts.head,
-    opts.self ? { mode: "self", cfg } : {});
+    opts.self ? { mode: "self", cfg } : { cfg });
   console.log(pc.green(`PR #${prNum} approved by '${agent}' (issue #${issue}, authored by '${author}').`));
   console.log(pc.dim("Cross-review satisfied — `orch merge` will now accept this PR (if CI is green)."));
 }
@@ -103,7 +103,7 @@ export async function reviewChangesCommand(
   const prNum = parsePr(prArg);
   if (!opts.notes) throw new Error("--notes is required to request changes");
 
-  const { issue, author } = await requestChanges(prNum, agent, cwd, opts.notes, opts.self ? { mode: "self", cfg } : {});
+  const { issue, author } = await requestChanges(prNum, agent, cwd, opts.notes, opts.self ? { mode: "self", cfg } : { cfg });
   console.log(pc.yellow(`PR #${prNum}: changes requested by '${agent}'.`));
   console.log(pc.dim(`Issue #${issue} bounced back to author '${author}' (status:in-progress).`));
 }

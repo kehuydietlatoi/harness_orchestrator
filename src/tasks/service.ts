@@ -1,3 +1,5 @@
+import { log } from "../util/log.js";
+import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { existsSync } from "node:fs";
 import { exec } from "../util/exec.js";
 import {
@@ -26,8 +28,8 @@ import {
   resolveBaseBranch,
   type RepositoryBase,
 } from "../git/git.js";
-import { claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
-import type { OrchConfig } from "../config.js";
+import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
+import { resolveTierModel, type OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
 
 export interface ClaimedTask {
@@ -310,6 +312,12 @@ export async function claimSpecific(
 ): Promise<ClaimedTask> {
   const observation = await observeClaim(number, cfg, cwd, deps);
   decideClaim(number, observation);
+  const route = validateRoute({
+    role: issueRole(observation.issue), agent,
+    tier: issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+    model: resolveTierModel(agent, issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, observation.issue.labels),
+  }, cfg);
+  if (!route.ok) throw new Error(`#${number}: disallowed route: ${route.reason}`);
   const base = await deps.resolveBaseBranch(cfg.baseBranch, cwd);
   const ctx: ClaimContext = {
     number,
@@ -345,7 +353,7 @@ export async function claimNext(
   agent: string,
   cfg: OrchConfig,
   cwd: string,
-  opts: ClaimFilter = {},
+  opts: ClaimFilter & { canClaim?: (issue: Issue) => boolean | Promise<boolean> } = {},
 ): Promise<ClaimedTask | null> {
   const candidates = await eligibleIssues(cwd, agent);
   if (candidates.length === 0) return null;
@@ -358,6 +366,15 @@ export async function claimNext(
   };
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
+    const route = validateRoute({
+      role: issueRole(candidate), agent, tier: issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
+      model: resolveTierModel(agent, issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, candidate.labels),
+    }, cfg);
+    if (!route.ok) {
+      log.warn(`#${candidate.number}: disallowed route: ${route.reason}`);
+      continue;
+    }
+    if (opts.canClaim && !(await opts.canClaim(candidate))) continue;
     try {
       return await claimSpecific(candidate.number, agent, cfg, cwd, deps);
     } catch {

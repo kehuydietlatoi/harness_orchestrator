@@ -9,7 +9,7 @@ export class BudgetSpentError extends Error {
 }
 
 export function issueBudgetStatus(issue: Issue, cfg: OrchConfig, cwd: string) {
-  const budget = resolveBudget(cfg, issueEffort(issue) ?? cfg.defaultEffort ?? "hard", issue.body);
+  const budget = resolveBudget(cfg, issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", issue.body);
   return budgetStatus(budget ? readRuns(cwd).filter((r) => r.issue === issue.number) : [], budget);
 }
 
