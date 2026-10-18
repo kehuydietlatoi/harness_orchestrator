@@ -25,6 +25,38 @@ import { availabilityKey, markUnavailable, noteUsageLimitFromLog, unavailableUnt
 import { incrementQuota } from "../board/quota.js";
 import { writeSession } from "./sessions.js";
 import { endpointHealthy } from "../board/health.js";
+import { exec } from "../util/exec.js";
+
+class VerificationFailed extends Error {}
+
+/** Finish a worker's uncommitted output using only coordinator-loaded configuration. */
+async function commitWorkerOutput(task: ClaimedTask, agent: string, model: ModelSpec | undefined, cfg: OrchConfig): Promise<boolean> {
+  const cwd = task.worktree.path;
+  const git = async (args: string[]) => {
+    const result = await exec("git", args, { cwd });
+    if (result.code !== 0) throw new Error(`git ${args[0]} failed: ${result.stderr.trim()}`);
+    return result.stdout;
+  };
+  const assertBranch = async () => {
+    if ((await git(["symbolic-ref", "--short", "HEAD"])).trim() !== task.worktree.branch) {
+      throw new Error("Worker worktree is no longer on the claimed task branch");
+    }
+  };
+  await assertBranch();
+  if (!(await git(["status", "--porcelain", "--untracked-files=all"])).trim()) return false;
+  for (const argv of cfg.verify ?? []) {
+    const result = await exec(argv[0], argv.slice(1), { cwd, timeoutMs: 300_000 });
+    if (result.code !== 0) {
+      const tail = `${result.stdout}\n${result.stderr}`.slice(-6000);
+      throw new VerificationFailed(`Coordinator verification failed (exit ${result.code}). Worktree and claim retained; no commit or submission.\n\nCommand (argv): ${JSON.stringify(argv)}\n\nOutput tail:\n${tail.split(/\r?\n/).map(line => `    ${line}`).join("\n")}`);
+    }
+  }
+  await assertBranch();
+  await git(["add", "--all"]);
+  await git(["commit", "-m", `${task.issue.title} (#${task.issue.number})`, "-m",
+    `Worker: ${agent}; model: ${formatModelSpec(model) ?? "default"}`]);
+  return true;
+}
 
 export interface RunSummary {
   issue: number;
@@ -151,7 +183,8 @@ export function recordRun(
 /**
  * Claim the next eligible task, drive the harness over it in its worktree, and
  * finalise: if the agent already submitted we leave it; if it produced commits
- * but didn't submit we auto-submit; otherwise we flag it for a human.
+ * but didn't submit we auto-submit; uncommitted output is verified and committed
+ * by the coordinator first. Empty output is flagged for a human.
  * Returns null when there is nothing eligible to claim.
  */
 export async function processNext(
@@ -295,7 +328,8 @@ async function processClaimed(
         console.log(pc.green(`✓ #${n} submitted by '${agent}'`));
         summary = { issue: n, outcome: "submitted", durationMs: result.durationMs };
         telemetryOutcome = "submitted";
-      } else if ((await commitsAhead(task.worktree.path, cfg, cwd)) > 0) {
+      } else if ((await commitsAhead(task.worktree.path, cfg, cwd)) > 0 ||
+          await commitWorkerOutput(task, agent, model, cfg)) {
         // Agent finished but didn't submit — auto-submit if it produced work.
         const url = await submit(n, agent, cfg, cwd);
         console.log(pc.green(`✓ #${n} auto-submitted — ${url}`));
@@ -311,9 +345,13 @@ async function processClaimed(
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
     await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree, disposableIgnored: cfg.disposableIgnored });
+    if (error instanceof VerificationFailed) {
+      const comment = await exec("gh", ["issue", "comment", String(n), "--body-file", "-"], { cwd, input: error.message });
+      if (comment.code !== 0) log.warn(`#${n}: could not comment verification failure: ${comment.stderr}`);
+    }
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
-    summary = { issue: n, outcome: "failed", durationMs };
-    telemetryOutcome = "failed";
+    summary = { issue: n, outcome: error instanceof VerificationFailed ? "needs-attention" : "failed", durationMs };
+    telemetryOutcome = summary.outcome;
   }
 
   recordRun(n, agent, model, telemetryOutcome, summary.durationMs, logFile, cwd, cfg, { phase: "implement", since: logMark, cascadeFrom, cascadeTo });

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { killProcessTree } from "./spawn.js";
 
 export interface ExecResult {
   code: number;
@@ -23,11 +24,16 @@ export const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 export function exec(
   cmd: string,
   args: string[] = [],
-  opts: { cwd?: string; input?: string; maxBuffer?: number } = {},
+  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd: opts.cwd, shell: false });
+    let timedOut = false;
+    const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
+      timedOut = true;
+      killProcessTree(child);
+    }, opts.timeoutMs);
     let stdout = "";
     let stderr = "";
     let bytes = 0;
@@ -59,8 +65,12 @@ export function exec(
     child.stderr.on("data", (d: Buffer) => {
       if (accept(d)) stderr += errDecoder.write(d);
     });
-    child.on("error", (err) => resolve({ code: 127, stdout, stderr: stderr + String(err) }));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: 127, stdout, stderr: stderr + String(err) });
+    });
     child.on("close", (code) => {
+      clearTimeout(timer);
       // Flush any bytes the decoders are still holding (a valid stream leaves
       // nothing pending; a truncated one emits the trailing replacement char).
       if (!overflowed) {
@@ -73,6 +83,10 @@ export function exec(
           stdout,
           stderr: `${stderr}\n[exec] output exceeded maxBuffer (${maxBuffer} bytes); process killed`,
         });
+        return;
+      }
+      if (timedOut) {
+        resolve({ code: 124, stdout, stderr: `${stderr}\n[exec] timed out after ${opts.timeoutMs}ms` });
         return;
       }
       resolve({ code: code ?? 0, stdout, stderr });

@@ -6,6 +6,11 @@ import { commandExists, exec } from "../src/util/exec.js";
 const node = process.execPath;
 
 describe("exec", () => {
+  it("kills a command at its timeout and reports failure", async () => {
+    const result = await exec(node, ["-e", "setInterval(() => {}, 1000)"], { timeoutMs: 100 });
+    expect(result.code).toBe(124);
+    expect(result.stderr).toContain("timed out");
+  });
   it("captures stdout and a zero exit code", async () => {
     const r = await exec(node, ["-e", "process.stdout.write('hello')"]);
     expect(r).toEqual({ code: 0, stdout: "hello", stderr: "" });

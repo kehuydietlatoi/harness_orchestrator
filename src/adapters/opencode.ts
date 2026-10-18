@@ -9,10 +9,18 @@ import { buildOpencodeArgv, reduceOpencode } from "./opencode-events.js";
 import type { HarnessAdapter, HeadlessContext, HeadlessResult, RunContext, RunResult } from "./types.js";
 
 /** Ordered rules: the last matching bash pattern wins in OpenCode. */
-export function opencodePermissions(worktree: string, readOnly = false) {
+export function opencodePermissions(worktree: string, readOnly = false, verify: readonly string[][] = []) {
   const root = resolve(worktree).replaceAll("\\", "/").replace(/\/$/, "");
   // OpenCode's wildcard matcher has no literal escape for these characters.
   if (/[?*]/.test(root)) throw new Error("OpenCode worktree path must not contain wildcard characters");
+  const checks: Record<string, string> = {};
+  // Bash permissions are glob patterns, not argv. Only expose commands whose
+  // literal spelling cannot introduce shell syntax or broaden a glob rule.
+  for (const argv of readOnly ? [] : verify) {
+    if (argv.length && argv.every(arg => /^[a-zA-Z0-9_./:=@+-]+$/.test(arg))) {
+      checks[argv.join(" ")] = "allow";
+    }
+  }
   return {
     external_directory: { "*": "deny", [`${root}/*`]: "allow" },
     edit: readOnly ? "deny" : "allow",
@@ -23,6 +31,7 @@ export function opencodePermissions(worktree: string, readOnly = false) {
       "git log*": "allow",
       "rg *": "allow",
       "ls*": "allow",
+      ...checks,
       "git push*": "deny",
     },
     webfetch: "deny",
@@ -35,6 +44,7 @@ export class OpencodeAdapter implements HarnessAdapter {
   constructor(
     private readonly cfg?: AdapterConfig,
     private readonly spawn: typeof spawnLogged = spawnLogged,
+    private readonly verify: readonly string[][] = [],
   ) {}
 
   private async command(): Promise<string> {
@@ -78,7 +88,7 @@ export class OpencodeAdapter implements HarnessAdapter {
     const runDir = mkdtempSync(join(state, "opencode-"));
     try {
       const config = join(runDir, "config.json");
-      writeFileSync(config, JSON.stringify({ permission: opencodePermissions(realpathSync(ctx.cwd), ctx.readOnly) }), { mode: 0o600 });
+      writeFileSync(config, JSON.stringify({ permission: opencodePermissions(realpathSync(ctx.cwd), ctx.readOnly, this.verify) }), { mode: 0o600 });
       const logFile = ctx.logFile ?? join(runDir, "output.jsonl");
       mkdirSync(dirname(logFile), { recursive: true });
       const mark = logSize(logFile);

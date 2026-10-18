@@ -13,7 +13,7 @@ export function makeAdapter(agent: string, cfg: OrchConfig): HarnessAdapter {
     case "codex":
       return new CodexAdapter(acfg);
     case "opencode":
-      return new OpencodeAdapter(cfg.adapters[agent]);
+      return new OpencodeAdapter(cfg.adapters[agent], undefined, cfg.verify);
     default:
       throw new Error(`No adapter registered for agent '${agent}'. Add one in src/adapters/.`);
   }
