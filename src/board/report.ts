@@ -11,7 +11,7 @@ import type { RunRecord } from "./telemetry.js";
  * unknown cost is reported as unknown, never as zero.
  */
 
-export type TaskOutcome = "merged" | "escalated" | "open";
+export type TaskOutcome = "merged" | "escalated" | "budget-stopped" | "open";
 
 export interface TaskReport {
   issue: number;
@@ -37,6 +37,7 @@ export interface RunReport {
     tasks: number;
     merged: number;
     escalated: number;
+    budgetStopped: number;
     open: number;
     /** Escalated / (merged + escalated); null before anything finished. */
     escalationRate: number | null;
@@ -71,6 +72,8 @@ function mean(values: readonly number[]): number | null {
 
 /** Build the report for the activity in `scope`. Pure. */
 export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunRecord[], scope: ReportScope = {}): RunReport {
+  const terminalAt = new Map<number, number>();
+  const latestRun = new Map<number, RunRecord>();
   const byIssue = new Map<number, TaskReport & { firstAt: number | null; mergedAt: number | null }>();
   const task = (issue: number) => {
     let t = byIssue.get(issue);
@@ -99,11 +102,12 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
       case "review.changes_requested": t.reviews.changesRequested += 1; break;
       case "triage.retry": t.triaged = true; break;
       // The last terminal signal wins: a human can hand an escalated task back and it may merge later.
-      case "task.escalated": t.outcome = "escalated"; break;
+      case "task.escalated": t.outcome = "escalated"; terminalAt.set(e.issue, Date.parse(e.ts)); break;
       case "task.merged": {
         t.outcome = "merged";
         const at = Date.parse(e.ts);
         t.mergedAt = Number.isFinite(at) ? at : null;
+        terminalAt.set(e.issue, at);
         break;
       }
     }
@@ -115,8 +119,15 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
     const t = task(r.issue);
     seen(t, r.ts);
     t.agentRuns += 1;
+    if (!latestRun.has(r.issue) || Date.parse(r.ts) >= Date.parse(latestRun.get(r.issue)!.ts)) latestRun.set(r.issue, r);
     if (r.costUsd === null || !Number.isFinite(r.costUsd)) t.costComplete = false;
     else t.costUsd = (t.costUsd ?? 0) + r.costUsd;
+  }
+
+  for (const [issue, r] of latestRun) {
+    if (r.outcome === "budget-spent" && Date.parse(r.ts) >= (terminalAt.get(issue) ?? -Infinity)) {
+      task(issue).outcome = "budget-stopped";
+    }
   }
 
   const tasks: TaskReport[] = [...byIssue.values()]
@@ -128,6 +139,7 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
 
   const merged = tasks.filter((t) => t.outcome === "merged");
   const escalated = tasks.filter((t) => t.outcome === "escalated").length;
+  const budgetStopped = tasks.filter((t) => t.outcome === "budget-stopped").length;
   const known = tasks.filter((t) => t.costUsd !== null);
   const costUsd = known.length ? known.reduce((sum, t) => sum + (t.costUsd ?? 0), 0) : null;
   return {
@@ -136,7 +148,8 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
       tasks: tasks.length,
       merged: merged.length,
       escalated,
-      open: tasks.length - merged.length - escalated,
+      budgetStopped,
+      open: tasks.length - merged.length - escalated - budgetStopped,
       escalationRate: merged.length + escalated ? escalated / (merged.length + escalated) : null,
       meanFixRounds: mean(merged.map((t) => t.fixRounds)),
       costUsd,
@@ -160,17 +173,17 @@ export function formatRunReport(report: RunReport): string {
   const { totals } = report;
   if (totals.tasks === 0) return "No autopilot activity in this range.";
   const lines = [
-    `Tasks: ${totals.tasks}  merged ${totals.merged}  escalated ${totals.escalated}  open ${totals.open}`,
+    `Tasks: ${totals.tasks}  merged ${totals.merged}  escalated ${totals.escalated}  open ${totals.open}  budget-stopped ${totals.budgetStopped}`,
     `Escalation rate: ${totals.escalationRate === null ? "-" : `${Math.round(totals.escalationRate * 100)}%`}` +
       `   Rounds to approval (mean, merged): ${totals.meanFixRounds === null ? "-" : totals.meanFixRounds.toFixed(1)}`,
     `Cost: ${money(totals.costUsd, totals.costComplete)}   per merged task: ${money(totals.costPerMerged, totals.costComplete)}` +
       (totals.costComplete ? "" : "   (some runs report no cost, e.g. flat-rate Codex)"),
     "",
-    "  issue  outcome    rounds  reviews(+/-)  triaged  runs  cost       time",
+    "  issue  outcome        rounds  reviews(+/-)  triaged  runs  cost       time",
   ];
   for (const t of report.tasks) {
     lines.push(
-      `  #${String(t.issue).padEnd(5)} ${t.outcome.padEnd(10)} ${String(t.fixRounds).padEnd(7)} ` +
+      `  #${String(t.issue).padEnd(5)} ${t.outcome.padEnd(14)} ${String(t.fixRounds).padEnd(7)} ` +
         `${`${t.reviews.approved}/${t.reviews.changesRequested}`.padEnd(13)} ${(t.triaged ? "yes" : "-").padEnd(8)} ` +
         `${String(t.agentRuns).padEnd(5)} ${money(t.costUsd, t.costComplete).padEnd(10)} ${minutes(t.durationMs)}`,
     );

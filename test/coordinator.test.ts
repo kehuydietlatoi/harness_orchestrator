@@ -1339,6 +1339,91 @@ describe("cascade scheduling", () => {
     expect(w.events.some((event) => event.type === "cascade.hop" || event.type === "fix.pushed")).toBe(false);
     expect(summary).toMatchObject({ merged: [], escalated: [38], triaged: [] });
   });
+
+  it.each([
+    ["in-run", "codex"], ["pre-claim", "codex"],
+    ["in-run", "claude"], ["pre-claim", "claude"],
+  ])("retries a healthy route in the same run after an %s hop to %s", async (path, destination) => {
+    const w = new World();
+    w.todo.push({ issue: 20, agent: "codex", pr: { approved: true } });
+    const base = w.deps();
+    const attempts: string[] = [];
+    let hopped = false;
+    const deps: CoordinatorDeps = {
+      ...base,
+      // Claude is probed first and drained before a cross-harness hop targets it.
+      availableAgents: () => ["claude", "codex"],
+      implement: async (agent, onClaimed, onCascade) => {
+        if (agent !== (hopped ? destination : "codex")) return null;
+        attempts.push(hopped ? "healthy" : "dead");
+        if (!hopped) {
+          hopped = true;
+          w.todo[0].agent = destination;
+          onCascade?.(destination);
+          if (path === "pre-claim") return null;
+          onClaimed(20);
+          return { issue: 20, outcome: "requeued", durationMs: 1 };
+        }
+        return base.implement(agent, onClaimed);
+      },
+    };
+    let done = false;
+    const run = runAutopilot({ ...OPTS, max: 1 }, deps).finally(() => { done = true; });
+    for (let i = 0; i < 20 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+    expect(done).toBe(true);
+    expect((await run).merged).toEqual([20]);
+    expect(attempts.slice(0, 2)).toEqual(["dead", "healthy"]);
+  });
+
+  it("waits without hot-looping when a requeue has no hop and every endpoint is cooling", async () => {
+    const w = new World();
+    const base = w.deps();
+    let requeued = false;
+    const attempts = vi.fn(async (_agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null> => {
+      if (requeued) return null; // the endpoint cooldown prevents another claim
+      requeued = true;
+      onClaimed(20);
+      return { issue: 20, outcome: "requeued", durationMs: 1 };
+    });
+    const sleep = vi.fn(base.sleep);
+    const start = Date.now();
+    const run = runAutopilot({ ...OPTS, maxIdleMs: 5000 }, {
+      ...base, availableAgents: () => ["codex"], implement: attempts,
+      blockedBacklog: async () => requeued ? [20] : [], sleep,
+    });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await run).toMatchObject({ stopped: "idle-timeout", failures: 0, submitted: [] });
+    expect(Date.now() - start).toBeGreaterThanOrEqual(5000);
+    expect(attempts.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(sleep.mock.calls.filter(([, opts]) => !opts?.unref).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("ignores a concurrent empty claim that started before a hop to its harness", async () => {
+    const w = new World();
+    w.todo.push({ issue: 20, agent: "claude", pr: { approved: true } });
+    const base = w.deps();
+    let hopped = false;
+    let firstClaude = true;
+    const run = runAutopilot(OPTS, {
+      ...base,
+      implement: async (agent, onClaimed, onCascade) => {
+        if (agent === "claude" && firstClaude) {
+          firstClaude = false;
+          await base.sleep(1000); // its empty inventory was read before the relabel
+          return null;
+        }
+        if (agent === "codex" && !hopped) {
+          hopped = true;
+          onCascade?.("claude");
+          return null;
+        }
+        return base.implement(agent, onClaimed);
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await run).merged).toEqual([20]);
+  });
+
   it("switches members after one failed fix, then retries on the preserved PR", async () => {
     const w = new World();
     w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: { fix: [{ signal: "step.failed", detail: "no commits" }] } }));
