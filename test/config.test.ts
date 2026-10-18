@@ -78,6 +78,7 @@ describe("loadConfig", () => {
     expect(config.adapters.claude).toEqual({
       cmd: "custom-claude",
       family: "anthropic",
+      pricingMode: "api",
       models: {
         free: { model: "claude-sonnet-5-5", effort: "medium" },
         cheap: { model: "claude-sonnet-5-5", effort: "medium" },
@@ -89,6 +90,7 @@ describe("loadConfig", () => {
     expect(config.adapters.codex).toEqual({
       cmd: "codex",
       family: "openai",
+      pricingMode: "subscription",
       models: {
         free: { model: "gpt-6.1-sol", effort: "medium" },
         cheap: { model: "gpt-6.1-sol", effort: "medium" },
@@ -96,6 +98,17 @@ describe("loadConfig", () => {
         lead: { model: "gpt-6.1-sol", effort: "medium" },
       },
     });
+  });
+
+  it("defaults OpenCode to quota and accepts explicit pricing modes", () => {
+    const config = loadConfig(writeConfig({ adapters: { opencode: { cmd: "opencode" }, codex: { pricingMode: "api" } } }));
+    expect(config.adapters.opencode.pricingMode).toBe("quota");
+    expect(config.adapters.codex.pricingMode).toBe("api");
+    expect(config.adapters.claude.pricingMode).toBe("api");
+  });
+
+  it("rejects unknown pricing modes", () => {
+    expect(() => loadConfig(writeConfig({ adapters: { opencode: { pricingMode: "free" } } }))).toThrow(/pricingMode/);
   });
 
   it("reads legacy string tiers: Codex's is an effort, others' are models", () => {
@@ -152,6 +165,7 @@ describe("loadConfig", () => {
     expect(config.adapters.claude).toEqual({
       cmd: "claude",
       family: "anthropic",
+      pricingMode: "api",
       models: {
         free: { model: "claude-sonnet-5-5", effort: "medium" },
         cheap: { model: "claude-sonnet-5-5", effort: "medium" },

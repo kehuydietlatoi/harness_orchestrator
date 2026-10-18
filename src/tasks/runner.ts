@@ -2,7 +2,7 @@ import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
 import pc from "picocolors";
-import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
+import { formatModelSpec, resolvePricingMode, type ModelSpec, type OrchConfig } from "../config.js";
 import { claimNext, claimSpecific, submit, type ClaimedTask } from "./service.js";
 import { buildBrief } from "./brief.js";
 import { makeAdapter } from "../adapters/index.js";
@@ -18,7 +18,8 @@ import { appendRun, parseUsage, projectId, type RunPhase, type RunRecord } from 
 import { appendEvent } from "./events.js";
 import { logSize, readLogSince } from "../util/log-file.js";
 import { estimateCost } from "../board/pricing.js";
-import { noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { availabilityKey, noteUsageLimitFromLog, unavailableUntil } from "../board/availability.js";
+import { incrementQuota } from "../board/quota.js";
 import { writeSession } from "./sessions.js";
 
 export interface RunSummary {
@@ -106,9 +107,10 @@ export function recordRun(
   try {
     // A missing log reads as empty text: one record per completed run is preserved regardless.
     const usage = parseUsage(readLogSince(logFile, meta.since ?? 0), agent);
-    // Prefer the harness-reported cost; fall back to a per-token estimate only
-    // when pricing exists for this model (subscription agents have none → null).
-    const costUsd = usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing);
+    // Quota billing tracks requests instead of dollars, even if the provider emits a cost.
+    // Other modes preserve reported cost, with API token pricing as a fallback.
+    const mode = resolvePricingMode(agent, cfg);
+    const costUsd = mode === "quota" ? 0 : usage.costUsd ?? estimateCost(usage, model?.model ?? null, cfg.pricing, mode);
     const rec: RunRecord = {
       ...(meta.phase ? { phase: meta.phase } : {}),
       ...(meta.round !== undefined ? { round: meta.round } : {}),
@@ -123,8 +125,12 @@ export function recordRun(
       tokensOut: usage.tokensOut,
       tokensTotal: usage.tokensTotal,
       costUsd,
+      ...(usage.requests !== undefined ? { requests: usage.requests } : {}),
     };
     appendRun(rec, cwd);
+    if (mode === "quota" && model?.model && usage.requests !== undefined) {
+      incrementQuota(availabilityKey(agent, model.model), usage.requests, cwd, new Date(rec.ts));
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`could not record run telemetry: ${message}`);
@@ -155,7 +161,12 @@ export async function processNext(
     log.warn(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit); not claiming work`);
     return null;
   }
-  const task = await claimNext(agent, cfg, cwd, { requireRouted: opts.requireRouted, only: opts.only });
+  const task = await claimNext(agent, cfg, cwd, {
+    requireRouted: opts.requireRouted, only: opts.only,
+    ...(agent === "opencode" ? {
+      canClaim: (issue: Issue) => !unavailableUntil(availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model), cwd),
+    } : {}),
+  });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
 
@@ -177,9 +188,10 @@ export async function dispatchSpecific(
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
   const agent = resolveDispatchAgent(issue, open, cfg);
-  const pausedUntil = unavailableUntil(agent, cwd);
+  const key = availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model);
+  const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
-    throw new Error(`'${agent}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
+    throw new Error(`'${key}' is paused until ${pausedUntil.toLocaleString()} (usage limit).`);
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
   return processClaimed(task, agent, cfg, cwd);
@@ -225,7 +237,7 @@ async function processClaimed(
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
     if (!result.ok) {
-      const limitedUntil = noteUsageLimit(agent, logFile, cwd, logMark);
+      const limitedUntil = noteUsageLimit(availabilityKey(agent, model?.model), logFile, cwd, logMark);
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
       if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd))) {

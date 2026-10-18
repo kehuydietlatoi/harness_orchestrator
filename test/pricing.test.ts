@@ -9,6 +9,10 @@ const usage = (over: Partial<Parameters<typeof estimateCost>[0]> = {}) => ({
 });
 
 describe("estimateCost", () => {
+  it("returns zero for quota mode even when usage, model, and prices are unknown", () => {
+    expect(estimateCost(usage({ tokensIn: null }), null, {}, "quota")).toBe(0);
+    expect(estimateCost(usage(), "opus", DEFAULT_PRICING, "subscription")).toBeNull();
+  });
   it("prices the default Sonnet 5.5 model id at the sonnet rates", () => {
     // 1M input @ $3 + 100k output @ $15/M = 3 + 1.5 = 4.5
     expect(estimateCost(usage(), "claude-sonnet-5-5", DEFAULT_PRICING)).toBeCloseTo(4.5, 6);

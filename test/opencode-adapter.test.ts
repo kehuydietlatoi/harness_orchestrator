@@ -133,6 +133,7 @@ describe("OpenCode adapter", () => {
     expect(parseUsage(raw, "opencode")).toEqual({
       tokensIn: usage.tokensIn, tokensOut: usage.tokensOut, tokensTotal: usage.tokensIn + usage.tokensOut,
       cachedInputTokens: usage.cachedInputTokens, costUsd: usage.costUsd,
+      requests: usage.requests,
     });
   });
 });
