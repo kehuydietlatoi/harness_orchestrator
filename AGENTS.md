@@ -7,6 +7,8 @@
 ## Conventions
 _(add project-specific facts, gotchas, and architectural decisions below)_
 
+- **Autopilot Board seam (#118)**: `src/github/board.ts` defines `Board` and its production delegate `ghBoard`. `observeTasks(cfg, cwd, opts, board)` routes GitHub observations through the optional fourth argument (defaults to `ghBoard`); existing `github.ts` exports and other consumers retain their contracts.
+
 - **Flow label visibility (#110)**: `public/index.html` keeps state-driven edge-label visibility in the extractable pure `flow-label-visibility` block; hover/focus visibility stays in CSS. Hit paths share the rendered edge geometry and must keep their transparent 10px stroke even on highlighted/active edges.
 
 - **Workflow graph and docs (#98)**: `src/demo/flow-graph.ts` is the single source for the graph and generated `docs/FLOWS.md`. New autopilot steps or lifecycle states must add nodes and a registered scenario; cover every new edge, then run `npm run docs:flows`. `test/flows-coverage.test.ts` enforces full edge/flow coverage and documentation drift.
