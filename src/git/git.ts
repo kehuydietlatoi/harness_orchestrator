@@ -108,6 +108,43 @@ export async function countCommitsAhead(
   return Number(text);
 }
 
+/**
+ * Refresh an unattached task branch before re-claiming it. Only a branch with
+ * no history of its own may advance. Return the missing base commit count for
+ * preserved work, so the caller can report it without rewriting that work.
+ */
+export async function refreshTaskBranch(
+  branch: string,
+  baseRef: string,
+  cwd: string,
+): Promise<number> {
+  const ref = `refs/heads/${branch}`;
+  if (!(await refExists(ref, cwd))) return 0;
+  const tipOf = async (ref: string): Promise<string> => {
+    const result = await exec("git", ["rev-parse", "--verify", `${ref}^{commit}`], { cwd });
+    if (result.code !== 0) throw commandFailure("git rev-parse", result.stderr);
+    const tip = result.stdout.trim();
+    if (!tip) throw new Error("git rev-parse returned no commit");
+    return tip;
+  };
+  // Pin both observations, and compare-and-set the branch so concurrent work
+  // cannot be overwritten between the ancestry check and the ref update.
+  const tip = await tipOf(ref);
+  const base = await tipOf(baseRef);
+  if (tip === base) return 0;
+  if (await countCommitsAhead(base, tip, cwd)) {
+    return countCommitsAhead(tip, base, cwd);
+  }
+  const worktrees = await exec("git", ["worktree", "list", "--porcelain"], { cwd });
+  if (worktrees.code !== 0) throw commandFailure("git worktree list", worktrees.stderr);
+  if (worktrees.stdout.split(/\r?\n/).includes(`branch ${ref}`)) {
+    throw new Error(`cannot refresh checked-out task branch '${branch}'`);
+  }
+  const updated = await exec("git", ["update-ref", ref, base, tip], { cwd });
+  if (updated.code !== 0) throw commandFailure("git update-ref", updated.stderr);
+  return 0;
+}
+
 /** Observe a task branch relative to the validated repository base. */
 export async function compareBranchToBase(
   branch: string,

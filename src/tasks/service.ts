@@ -20,6 +20,8 @@ import {
 import { STATUS, agentLabel, REVIEW_NEEDED, NEEDS_ATTENTION } from "../github/labels.js";
 import {
   addWorktree,
+  branchName,
+  slugify,
   observeWorktree,
   worktreePath,
   type Worktree,
@@ -27,6 +29,7 @@ import {
 } from "../git/worktree.js";
 import {
   resolveBaseBranch,
+  refreshTaskBranch,
   type RepositoryBase,
 } from "../git/git.js";
 import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
@@ -83,8 +86,14 @@ const claimSagaDeps: ClaimSagaDeps = {
   editIssue: (number, edit, cwd) => editIssue(number, { cwd, ...edit }),
   observeWorktree: (number, title, root, cwd) =>
     observeWorktree(number, title, root, { cwd }),
-  addWorktree: (number, title, root, baseRef, cwd) =>
-    addWorktree(number, title, root, { cwd, baseRef }),
+  addWorktree: async (number, title, root, baseRef, cwd) => {
+    const branch = branchName(number, slugify(title));
+    const behind = await refreshTaskBranch(branch, baseRef, cwd);
+    if (behind > 0) {
+      log.warn(`Task branch '${branch}' has its own commits and is behind ${baseRef} by ${behind} commit(s); preserving it unchanged.`);
+    }
+    return addWorktree(number, title, root, { cwd, baseRef });
+  },
 };
 
 interface ClaimContext {
