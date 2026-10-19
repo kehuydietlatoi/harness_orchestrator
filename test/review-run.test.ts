@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
+import { loadPack } from "../src/pack/load.js";
 import { formatReview, parseReview } from "../src/board/approval.js";
 
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
-  prChangedPaths: vi.fn(),
+  prChangedPaths: vi.fn(), commentOnPr: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/no/such/worktree", removeWorktree: vi.fn() }));
@@ -217,6 +218,31 @@ describe("runAutomatedReview", () => {
   afterEach(() => {
     rmSync(dirname(availabilityPath(cwd)), { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects a scope violation before a reviewer, checkout or run telemetry", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    vi.mocked(gh.getIssue).mockResolvedValue({ ...issue, labels: [...issue.labels, "role:gameplay-programmer"] });
+    vi.mocked(gh.prChangedPaths).mockResolvedValue(["src/new.ts", "design/old.md"]);
+    const { deps, calls, checkouts } = runner([{ text: approveText }]);
+    await expect(runAutomatedReview(62, { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd, {}, deps))
+      .rejects.toThrow('"design/old.md": forbidden by design/**');
+    expect(calls).toEqual([]);
+    expect(checkouts).toEqual([]);
+    expect(recordRun).not.toHaveBeenCalled();
+    expect(gh.editIssue).toHaveBeenCalledWith(38, { cwd, addLabels: ["needs-attention"] });
+    expect(gh.commentOnPr).toHaveBeenCalledWith(62, expect.stringContaining('"design/old.md": forbidden by design/**'), { cwd });
+  });
+
+  it("does not review when the head moves during a scope check", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    vi.mocked(gh.getIssue).mockResolvedValue({ ...issue, labels: [...issue.labels, "role:gameplay-programmer"] });
+    vi.mocked(gh.getPr).mockResolvedValueOnce(pr).mockResolvedValue({ ...pr, headSha: "b".repeat(40) });
+    const { deps, calls } = runner([{ text: approveText }]);
+    await expect(runAutomatedReview(62, { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd, {}, deps))
+      .rejects.toThrow("head moved");
+    expect(calls).toEqual([]);
+    expect(gh.editIssue).not.toHaveBeenCalled();
   });
 
   it("reviews an OpenAI-only implementation role with an Anthropic reviewer", async () => {

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, type OrchConfig } from "../src/config.js";
+import { loadPack } from "../src/pack/load.js";
 import { answeredChangeRequestRounds, formatReview, latestChangeRequestNotes } from "../src/board/approval.js";
 
 vi.mock("../src/github/github.js", () => ({
   listIssues: vi.fn(), listOpenPrs: vi.fn(), listPrReviews: vi.fn(), prChecksState: vi.fn(), prMergeability: vi.fn(),
-  listPrComments: vi.fn(),
+  listPrComments: vi.fn(), prChangedPaths: vi.fn(),
 }));
 vi.mock("../src/tasks/events.js", () => ({ readEvents: () => [], fixRoundsFor: () => 0 }));
 
@@ -122,6 +123,23 @@ describe("observeTasks", () => {
     vi.mocked(gh.listPrReviews).mockResolvedValue([]);
     vi.mocked(gh.prChecksState).mockResolvedValue("pass");
     vi.mocked(gh.prMergeability).mockResolvedValue("clean");
+  });
+
+  it("escalates a PR pushed outside submit before any review or triage", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: [...issue.labels, "role:gameplay-programmer"] }]);
+    vi.mocked(gh.prChangedPaths).mockResolvedValue(["src/new.ts", "design/old.md"]);
+    const { tasks: [task] } = await observeTasks({ ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack, roles: { "gameplay-programmer": { tiers: ["standard", "lead"], families: ["openai", "anthropic"] } } }, "/repo");
+    expect(task.step).toEqual({ kind: "escalate", reason: expect.stringContaining('"design/old.md": forbidden by design/**') });
+    expect(gh.listPrComments).not.toHaveBeenCalled();
+  });
+
+  it("does not review an unreadable scope diff", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    vi.mocked(gh.listIssues).mockResolvedValue([{ ...issue, labels: [...issue.labels, "role:gameplay-programmer"] }]);
+    vi.mocked(gh.prChangedPaths).mockRejectedValue(new Error("incomplete file list"));
+    expect(await observeTasks({ ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack, roles: { "gameplay-programmer": { tiers: ["standard", "lead"], families: ["openai", "anthropic"] } } }, "/repo"))
+      .toEqual({ tasks: [], unobserved: [62], ambiguous: [] });
   });
 
   it("derives the next step for each orch-owned task PR", async () => {

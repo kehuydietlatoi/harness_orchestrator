@@ -18,6 +18,8 @@ export interface PrStepFacts {
 }
 
 export interface StepFacts {
+  /** A complete PR path observation rejected the worker's scope. */
+  scopeFailure?: string | null;
   /** Failed fix-type attempts on this head and route, supplied by the coordinator. */
   failedFixAttempts?: number;
   /** Policy-validated next member; absent preserves the existing retry policy. */
@@ -91,6 +93,7 @@ function decidePrStep(f: StepFacts): Step {
   if (f.attention) return { kind: "none", reason: "needs-attention: a human owns this task" };
   const pr = f.pr;
   if (!pr) return { kind: "none", reason: "no open pull request" };
+  if (f.scopeFailure) return { kind: "escalate", reason: f.scopeFailure };
 
   const extra = f.extraRounds ?? 0;
   const exhausted = f.rounds >= f.maxRounds + extra;

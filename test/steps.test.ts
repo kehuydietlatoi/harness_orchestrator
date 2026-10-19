@@ -21,6 +21,12 @@ function facts(over: {
 }
 
 describe("decideStep", () => {
+  it("escalates scope violations ahead of review, fixes, triage or merging", () => {
+    for (const over of [{}, { review: { changesRequested: true } }, { review: { approved: true } }, { pr: { checks: "fail" as const } }]) {
+      expect(decideStep({ ...facts(over), scopeFailure: "design/a.md: forbidden by design/**", maxTriages: 10 }))
+        .toEqual({ kind: "escalate", reason: "design/a.md: forbidden by design/**" });
+    }
+  });
   it("leaves a task alone when a human owns it or there is no PR yet", () => {
     expect(decideStep(facts({ attention: true, review: { changesRequested: true } })).kind).toBe("none");
     expect(decideStep(facts({ pr: null })).kind).toBe("none");
