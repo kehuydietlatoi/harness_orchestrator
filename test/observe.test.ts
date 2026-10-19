@@ -157,6 +157,7 @@ describe("observeTasks", () => {
       },
       prMergeability: async () => "clean",
       editIssue: async () => { throw new Error("observation must not edit issues"); },
+      closeIssue: async () => { throw new Error("observation must not close issues"); },
       commentOnPr: async () => { throw new Error("observation must not post comments"); },
     };
     const cfg = { ...DEFAULT_CONFIG, maxReviewRounds: 1, maxLeadTriage: 1 };

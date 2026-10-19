@@ -178,8 +178,10 @@ export async function editIssue(
   if (r.code !== 0) throw new Error(`gh issue edit #${number} failed: ${r.stderr.trim()}`);
 }
 
+/** Close an issue. Closing an already-closed issue succeeds (gh only warns); any other failure throws. */
 export async function closeIssue(number: number, opts: { cwd?: string } = {}): Promise<void> {
-  await exec("gh", ["issue", "close", String(number)], { cwd: opts.cwd });
+  const r = await exec("gh", ["issue", "close", String(number)], { cwd: opts.cwd });
+  if (r.code !== 0) throw new Error(`gh issue close #${number} failed: ${r.stderr.trim()}`);
 }
 
 // ---------------------------------------------------------------------------
