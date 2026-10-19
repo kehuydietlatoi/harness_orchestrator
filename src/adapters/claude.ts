@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { workerEnvironment } from "../util/environment.js";
 import { commandExists } from "../util/exec.js";
 import { spawnInteractive, spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig, ModelSpec } from "../config.js";
@@ -104,6 +105,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     const args = buildClaudeTaskArgs(ctx.model, session, ctx.maxBudgetUsd);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
+      env: workerEnvironment(this.id, this.cfg.env),
       input: ctx.prompt,
       logFile: ctx.logFile,
       timeoutMs: ctx.timeoutMs,
@@ -121,12 +123,13 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
     const args = ctx.readOnly ? buildClaudeReviewArgs(ctx.model, ctx.maxBudgetUsd) : buildClaudeTaskArgs(ctx.model, undefined, ctx.maxBudgetUsd);
-    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromClaudeStreamJson);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromClaudeStreamJson, undefined, workerEnvironment(this.id, this.cfg.env));
   }
 
   runInteractivePlan(ctx: InteractivePlanContext): Promise<InteractivePlanResult> {
     return spawnInteractive(this.cfg.cmd, buildClaudeInteractivePlanArgs(ctx.model, ctx.seed), {
       cwd: ctx.cwd,
+      env: workerEnvironment(this.id, this.cfg.env),
       shell: WIN,
     });
   }

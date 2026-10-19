@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnLogged } from "../util/spawn.js";
+import { cleanEnvironment } from "../util/environment.js";
 import type { ModelSpec } from "../config.js";
 import type { HarnessAdapter, HeadlessContext, HeadlessResult } from "./types.js";
 
@@ -31,11 +32,13 @@ export async function runStructuredHeadless(
   ctx: HeadlessContext,
   resultText: (raw: string) => string,
   abortOn?: (line: string) => string | undefined,
+  env: NodeJS.ProcessEnv = cleanEnvironment(),
 ): Promise<HeadlessResult> {
   mkdirSync(dirname(ctx.logFile), { recursive: true });
   rmSync(ctx.logFile, { force: true });
   const r = await spawnLogged(cmd, args, {
     cwd: ctx.cwd,
+    env,
     input: ctx.prompt,
     logFile: ctx.logFile,
     timeoutMs: ctx.timeoutMs,

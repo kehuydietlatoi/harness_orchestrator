@@ -36,6 +36,26 @@ introducing OS-level isolation. Keeping HOME permits tools to read local auth
 files, and tests remain executable code: the cleaned environment is not a
 sandbox or a guarantee that every credential source is inaccessible.
 
+## Worker environments (#189)
+
+Task, headless, and interactive harness runs use the same credential cleaning
+function as host verification. `adapters.<id>.env` defaults to an empty list;
+only listed names that are set are restored after cleaning. For example, an
+API-key Claude setup lists `ANTHROPIC_API_KEY`, and OpenRouter lists
+`OPENROUTER_API_KEY`. Claude and Codex subscription logins need no environment
+exception; Codex retains the non-secret `CODEX_HOME` location when set. GitHub
+tokens (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`) are always excluded,
+even if listed. Worker `orch submit` uses gh's keyring login; otherwise the
+coordinator commits and submits from its own process (#139). Runtime paths and
+profile locations survive cleaning, and the spawn helper fixes `PWD` to its cwd.
+OpenCode's orch-owned configuration overrides are applied after cleaning.
+
+Residual risk: workers still run as the operator user and can read login files
+under the profile, including `~/.codex/auth.json` and Claude credentials. Removing
+credentials from inherited environments limits direct exposure but does not
+prevent this filesystem access. Closing that boundary requires OS-level
+isolation, which is out of scope for this change.
+
 ## Capability and sensitivity routing (#176)
 
 `validateRoute` is the pure policy boundary for role, sensitivity, and model

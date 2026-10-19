@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Worker credentials (#189)**: `src/util/environment.ts` owns the cleaning rule shared by verify and every harness run. Adapter `env` names restore only set variables; GitHub tokens are always excluded. Codex preserves `CODEX_HOME`; OpenCode applies orch-owned config overrides after cleaning. Keep `PWD` correction in the shared spawn helpers. Profile login files remain readable; see ADR-0013.
+
 - **Harness cwd isolation (#188)**: `spawnLogged` and `spawnInteractive` set `PWD` to the absolute spawn cwd (defaulting to the current directory), including when adapters provide their own environment. OpenCode shell tools trust inherited `PWD` over the OS cwd; forwarding the operator's value can escape the task worktree. Keep this rule shared across all harnesses.
 
 - **Worker scope (#186)**: `src/tasks/scope-guard.ts` checks manifest `write_scope` union ticket `files` when pack + role label are present; `forbidden` wins. Runner leftover commits, submit branch diffs, and autopilot/automated reviews share the guard. Check deletions and both rename names; rejections retain worktree/lock, flag needs-attention, and comment paths. See ADR-0014.

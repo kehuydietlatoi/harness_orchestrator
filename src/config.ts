@@ -41,6 +41,8 @@ export type ReviewPolicy = "cross" | "cross-or-self";
 
 export interface AdapterConfig {
   cmd: string;
+  /** Inherited variable names to restore after credential stripping (GitHub tokens are always denied). */
+  env?: string[];
   family?: string;
   pricingMode?: "api" | "subscription" | "quota";
   models?: Record<EffortTier, ModelSpec>;
@@ -373,6 +375,9 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
     const defaults = DEFAULT_CONFIG.adapters[agent];
     const merged = { ...defaults, ...override };
+    if (merged.env !== undefined && (!Array.isArray(merged.env) || !merged.env.every(name => typeof name === "string" && /^[a-z_][a-z0-9_]*$/i.test(name)))) {
+      throw new Error(`adapters.${agent}.env must be a list of environment variable names`);
+    }
     merged.pricingMode ??= agent === "opencode" ? "quota" : agent === "codex" ? "subscription" : "api";
     if (!["api", "subscription", "quota"].includes(merged.pricingMode)) {
       throw new Error(`adapters.${agent}.pricingMode must be api, subscription, or quota`);
