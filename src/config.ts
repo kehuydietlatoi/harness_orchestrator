@@ -173,7 +173,8 @@ export interface OrchConfig {
    * cost fallback when a harness log reports none. Subscription-billed agents
    * (e.g. Codex) simply have no entry, so their cost stays null. */
   pricing: Record<string, ModelPricing>;
-  /** Top-level ignored paths (a trailing `/` matches a directory and its contents)
+  /** Ignored paths (a trailing `/` matches a directory and its contents;
+   * filename globs with `*` and `?` match only root-level files)
    * that are regenerable build/install output, so a worktree holding only these
    * may still be removed safely. Any other ignored, untracked, or dirty path
    * keeps the worktree. */
@@ -187,7 +188,7 @@ export const DEFAULT_PROTECTED_PATHS = [
 ];
 
 /** Regenerable output that never makes a task worktree worth preserving. */
-export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/"];
+export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/", "*.log"];
 
 export const DEFAULT_CONFIG: OrchConfig = {
   roles: {},

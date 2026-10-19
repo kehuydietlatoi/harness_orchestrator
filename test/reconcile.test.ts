@@ -206,6 +206,34 @@ describe("planRepairs", () => {
     expect(plan.projectedState.kind).toBe("done");
   });
 
+  it.each([null, "owner"])("preserves completion labels while reporting merged residue (lock %s)", (lockOwner) => {
+    const plan = planRepairs(observation({
+      issue: issue({ state: "CLOSED", labels: [STATUS.done, "reviewed-by:codex"] }),
+      lockOwner,
+      worktree: {
+        kind: "usable", path: "/wt/issue-36", branch: "task/36-preview-first-repair",
+        removable: false, retentionReason: "worktree has untracked notes.txt",
+      },
+      branch: "ahead", prs: [pr("MERGED")], telemetry: "submitted",
+    }));
+    expect(plan.actions).toEqual([]);
+    expect(plan.blocked.join("; ")).toMatch(/residue.*notes.txt/);
+    expect(plan.state.kind).toBe("inconsistent");
+  });
+
+  it("projects done for a merged issue with residue instead of needs-attention", () => {
+    const plan = planRepairs(observation({
+      issue: issue({ state: "CLOSED", labels: [STATUS.inReview, REVIEW_NEEDED, NEEDS_ATTENTION, "reviewed-by:codex"] }),
+      worktree: { kind: "conflict", path: "/wt/issue-36", detail: "detached HEAD" },
+      branch: "ahead", prs: [pr("MERGED")],
+    }));
+    expect(plan.actions).toEqual([{
+      kind: "sync-labels", issue: 36, add: [STATUS.done],
+      remove: [NEEDS_ATTENTION, REVIEW_NEEDED, STATUS.inReview].sort(),
+    }]);
+    expect(plan.blocked.join("; ")).toContain("detached HEAD");
+  });
+
   it("restores a missing lock before preserving uncommitted work", () => {
     const plan = planRepairs(
       observation({
@@ -410,6 +438,23 @@ describe("repair observation of an open PR", () => {
 });
 
 describe("reconcileIssue", () => {
+  it.each([true, false])("keeps merged completion labels across repeated apply (removable %s)", async (removable) => {
+    const harness = fakeDeps(observation({
+      issue: issue({ state: "CLOSED", labels: [STATUS.done, "reviewed-by:codex"] }),
+      lockOwner: "owner", branch: "ahead", prs: [pr("MERGED")], telemetry: "submitted",
+      worktree: {
+        kind: "usable", path: "/wt/issue-36", branch: "task/36-preview-first-repair",
+        removable, retentionReason: removable ? undefined : "untracked notes.txt",
+      },
+    }));
+    const first = await reconcileIssue(36, DEFAULT_CONFIG, "/repo", { apply: true }, harness.deps);
+    expect(first.applied.map((action) => action.kind)).toEqual(removable ? ["safe-remove-worktree", "release-lock"] : []);
+    expect(first.blocked.length > 0).toBe(!removable);
+    expect(harness.current().issue?.labels).toEqual([STATUS.done, "reviewed-by:codex"]);
+    expect(harness.current().lockOwner).toBe(removable ? null : "owner");
+    expect((await reconcileIssue(36, DEFAULT_CONFIG, "/repo", { apply: true }, harness.deps)).applied).toEqual([]);
+  });
+
   it("reports orphaned path refs with no matching live claim and preserves them", async () => {
     const orphan = { ref: "refs/orch/lock/path/dead", sha: "blob", issue: 36, path: "scenes/main.scene", owner: "old-owner" };
     const h = fakeDeps(observation({ pathLocks: [orphan] }));

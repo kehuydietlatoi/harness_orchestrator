@@ -138,11 +138,20 @@ then re-observes and re-plans. A lost response or interruption therefore has no 
 resume cursor: rerunning repair continues from whatever durable side effects are visible,
 and a second successful run converges to no actions.
 
+For a closed issue with a merged PR, repair preserves `status:done` and existing
+`reviewed-by:*` labels even when local resources remain. It reports retained worktrees
+as cleanup residue, without adding `needs-attention` to the finished issue. Safe
+cleanup and lock release still require the usual preservation proofs.
+
 Repair may prune a registration whose directory is already absent, but it never force
 removes a worktree or deletes a branch. Dirty, untracked, ignored, detached, conflicted,
 or not-otherwise-preserved work is reported and kept under its lock. Destruction is a
 separate human decision: `orch abandon <issue> --discard`. Plain `abandon` now uses the
 same safe-removal proof and refuses to release the lock when retained work exists.
+Ignored disposable output is allowed by `disposableIgnored`: trailing `/` entries cover
+directories and their contents; simple `*` and `?` filename globs match root files only.
+Defaults include `node_modules/`, `dist/`, `coverage/`, `logs/`, and `*.log`. Tracked
+modifications and untracked files always block safe cleanup, including matching logs.
 
 ## Known wrinkles (documented, not yet fixed)
 

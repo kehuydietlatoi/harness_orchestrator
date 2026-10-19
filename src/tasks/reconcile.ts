@@ -346,7 +346,7 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
           facts.worktree = false;
         } else {
           blocked.push(
-            `worktree was preserved: ${observation.worktree.retentionReason ?? "safe removal could not be proven"}`,
+            `worktree residue was preserved at ${observation.worktree.path}: ${observation.worktree.retentionReason ?? "safe removal could not be proven"}`,
           );
         }
       }
@@ -460,7 +460,10 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
   }
 
   if (issue) {
-    const expected = new Set(projectLifecycleLabels(projectedState));
+    // Completion is established by GitHub even when local cleanup is blocked.
+    // Keep the inconsistency in the repair report without relabelling finished work.
+    const completed = facts.issue === "closed" && facts.pr === "merged";
+    const expected = new Set(projectLifecycleLabels(completed ? "done" : projectedState));
     const add = [...expected].filter((label) => !issue.labels.includes(label));
     const remove = [...new Set([...STATUS_LABELS, NEEDS_ATTENTION])].filter(
       (label) => issue.labels.includes(label) && !expected.has(label),
@@ -469,8 +472,11 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
     const review = reviewFact(pr, observation.reviews);
     const reviewers = acceptedReviewers(review, issueAgent(issue), observation.reviewPolicy, observation.authorFamily);
     const reviewLabels = reviewers.map(reviewedByLabel);
-    remove.push(...issue.labels.filter((label) => label.startsWith(REVIEWED_BY_PREFIX) && !reviewLabels.includes(label)));
-    add.push(...reviewLabels.filter((label) => !issue.labels.includes(label)));
+    // Merged PR reviews are not fetched; existing review labels are history.
+    if (!completed) {
+      remove.push(...issue.labels.filter((label) => label.startsWith(REVIEWED_BY_PREFIX) && !reviewLabels.includes(label)));
+      add.push(...reviewLabels.filter((label) => !issue.labels.includes(label)));
+    }
     if (projectedState.kind === "in-review") {
       if (reviewers.length && issue.labels.includes(REVIEW_NEEDED)) remove.push(REVIEW_NEEDED);
       else if (!reviewers.length && !issue.labels.includes(REVIEW_NEEDED)) add.push(REVIEW_NEEDED);
