@@ -9,6 +9,7 @@
 ## Conventions
 
 - Never create a symlink, junction or hard link to anything outside your worktree; run `npm ci` inside it.
+- Compare link destinations with the canonical worktree root after resolving path aliases; Windows temporary paths can use short names such as `RUNNER~1` for the same directory.
 - **Worker link guard (#205)**: `externalLinks` in `src/git/worktree.ts` scans ignored paths without entering links. Runner checks after worker runs before recovery or verification; submit checks before push. Violations or unreadable scans retain worktree/lock and flag needs-attention with an issue comment. Files with nlink > 1 are conservatively rejected because external hard-link peers cannot be enumerated portably.
 
 - **Merged cleanup residue (#180)**: `disposableIgnored` supports root filename `*`/`?` globs and defaults include `*.log`; only ignored entries qualify. Nested logs, matching directories, untracked files, and tracked edits still block cleanup. Repair keeps lifecycle inconsistencies visible in its report but projects `status:done` and preserves review history on closed issues with merged PRs, even when local cleanup is blocked.

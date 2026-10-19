@@ -73,6 +73,17 @@ describe("task worktrees", () => {
     finally { unlinkSync(link); }
   });
 
+  it("allows internal targets spelled through an ancestor alias", () => {
+    const alias = join(base, "alias");
+    const nested = join(repo, "nested");
+    mkdirSync(nested);
+    symlinkSync(repo, alias, process.platform === "win32" ? "junction" : "dir");
+    const link = join(nested, "node_modules");
+    symlinkSync(join(alias, "nested"), link, process.platform === "win32" ? "junction" : "dir");
+    try { expect(externalLinks(nested)).toEqual([]); }
+    finally { unlinkSync(link); unlinkSync(alias); }
+  });
+
   it("reports hard links to external files conservatively", () => {
     const target = join(base, "shared.txt");
     writeFileSync(target, "keep");

@@ -223,7 +223,9 @@ export function externalLinks(worktree: string): ExternalLink[] {
     const stat = lstatSync(path);
     if (stat.isSymbolicLink()) {
       const target = resolve(dirname(path), readlinkSync(path));
-      if (outside(target) || outside(canonical(target))) links.push({ path: relative(root, path), target });
+      // Compare canonical identities: Windows short names and ancestor aliases
+      // can spell an internal target as a path lexically outside the root.
+      if (outside(canonical(target))) links.push({ path: relative(root, path), target });
     } else if (stat.isDirectory()) {
       for (const name of readdirSync(path)) visit(join(path, name));
     } else if (stat.isFile() && stat.nlink > 1) {
