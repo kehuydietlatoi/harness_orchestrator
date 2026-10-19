@@ -5,6 +5,7 @@ import { issueAgent, isEligible } from "../board/board.js";
 import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
 import type { Budget } from "./budget.js";
+import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
 import { routeFamily } from "../routing/route-policy.js";
 
 export interface TicketV2 {
@@ -89,8 +90,11 @@ function ticketShapes(values: readonly unknown[]): { tickets: Ticket[]; errors: 
       if (new Set(v).size !== v.length) problem(field, "must contain unique values");
       if (field === "decisions" && !v.every((x) => /^D-[0-9]{3,}$/.test(x))) problem(field, "must contain D-### decision ids");
       if (field === "context" && !v.every((x) => /^[a-z0-9]+(\.[a-z0-9-]+)*$/.test(x))) problem(field, "must contain dotted context anchors");
-      if (field === "locks" && !v.every((x) => x.trim().length > 0)) problem(field, "must contain non-empty paths");
+      if (field === "locks") for (const path of v) {
+        try { normalizeLockPath(path); } catch (error) { problem(field, (error as Error).message); }
+      }
     }
+    if (raw.kind === "asset" && (!Array.isArray(raw.locks) || !raw.locks.length)) problem("locks", "must be non-empty for kind asset");
     if (raw.verify !== undefined) {
       if (!Array.isArray(raw.verify) || !raw.verify.length || !raw.verify.every((argv) =>
         Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string" && arg.trim().length > 0))) {
@@ -122,6 +126,15 @@ export function parseTickets(raw: string): Ticket[] {
   const result = ticketShapes(value);
   if (result.errors.length) throw new Error(result.errors.join("; "));
   return result.tickets;
+}
+
+/** Parse the structured issue metadata without loading issue-creation I/O. */
+export function parseTicketV2(body: string): TicketV2 {
+  const json = /^## Ticket metadata \(v2\)\r?\n\r?\n```json\r?\n([\s\S]*?)\r?\n```[ \t]*$/m.exec(body)?.[1];
+  if (json === undefined) return {};
+  const fields: unknown = JSON.parse(json);
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) throw new Error("ticket metadata must be an object");
+  return ticketV2Fields(parseTickets(JSON.stringify([{ ...fields, title: "metadata" }]))[0]);
 }
 
 export interface ResolvedTicket extends TicketV2 {
@@ -271,6 +284,26 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
 
   for (const [file, owners] of fileOwners) {
     if (owners.length > 1) warnings.push(`file "${file}" is claimed by tickets ${owners.join(", ")}`);
+  }
+
+  const byId = new Map(resolved.filter((t) => t.id).map((t) => [t.id!, t]));
+  const depends = (from: ResolvedTicket, target: ResolvedTicket, seen = new Set<ResolvedTicket>()): boolean => {
+    if (seen.has(from)) return false;
+    seen.add(from);
+    return from.knownDeps.some((id) => {
+      const dep = byId.get(id);
+      return dep !== undefined && (dep === target || depends(dep, target, seen));
+    });
+  };
+  const who = (t: ResolvedTicket) => `ticket ${t.index}${t.id ? ` ("${t.id}")` : ""}`;
+  for (let i = 0; i < resolved.length; i++) for (let j = i + 1; j < resolved.length; j++) {
+    const a = resolved[i], b = resolved[j];
+    if (depends(a, b) || depends(b, a)) continue;
+    for (const left of a.locks ?? []) for (const right of b.locks ?? []) {
+      try {
+        if (lockPathsOverlap(left, right)) errors.push(`${who(a)} and ${who(b)}: locks overlap (${JSON.stringify(left)}, ${JSON.stringify(right)}); add a dependsOn path`);
+      } catch { /* Structural path errors were already collected above. */ }
+    }
   }
 
   const brief = opts.brief?.trim() ?? "";

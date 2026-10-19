@@ -34,3 +34,36 @@ worktrees. No network, no daemon.
 - The lock is released explicitly on merge; an abandoned claim leaves a ref that a
   future `orch doctor`/reaper can detect (a heartbeat/stale-claim sweep is a natural
   extension).
+
+## Exclusive path claims (#173)
+
+Claims with ticket-v2 `locks` create the issue ref and every
+`refs/orch/lock/path/<sha256(normalized-path)>` ref in one `update-ref --stdin`
+transaction. Path refs point to blobs containing the issue number, normalized
+path/glob, and issue owner token. Release compare-deletes the issue and its
+matching path refs in one transaction; it needs no current issue-body lookup.
+Setup rollback, merge, abandon, safe runner recovery, and repair therefore share
+the same ownership boundary. Retained worker output keeps its path claims.
+
+Hash equality alone cannot exclude overlapping globs. Before reading the path
+namespace, acquisition reads a persistent version ref,
+`refs/orch/path-lock-version`. The claim transaction also compare-updates that
+version to a fresh random blob. A concurrent addition invalidates the snapshot;
+the loser re-reads and retries. This ref is a version, never a held mutex, so a
+coordinator crash cannot strand a global lock. Releases only remove conflicts
+and need no version update. Conflicts return ordinary unavailability and leave
+no issue projection or worktree behind.
+
+`src/git/path-locks.ts` compares glob languages without expanding the checkout,
+protecting files that do not exist yet. Paths are repository-relative, with
+portable `/` separators and normalized `./` segments; absolute paths and `..`
+segments are rejected. A path also protects its descendants. Matching is case
+sensitive and supports `*`, `**`, `?`, character classes/ranges (including
+negation), and brace alternatives. Extglobs and brace expansions above 256
+variants conservatively overlap all paths. Use simple globs for precise claims.
+
+Plan validation rejects overlaps between tickets without a transitive hard
+dependency; advisory `after` ordering grants no exclusivity. Asset tickets
+require nonempty locks. Repair discovers path-ref owners independently of issue
+refs and reports path refs with no matching live claim, preserving them for
+inspection.

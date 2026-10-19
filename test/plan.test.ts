@@ -2,6 +2,33 @@ import { describe, it, expect } from "vitest";
 import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
 import { renderTicketBody } from "../src/tasks/plan-create.js";
 
+describe("exclusive plan locks", () => {
+  it.each([["scenes/main.scene", "scenes/main.scene"], ["assets/**", "assets/hero.png"], ["assets/*/hero.png", "assets/characters/*.png"]])(
+    "rejects independent tickets sharing %s / %s", (left, right) => {
+      const result = resolvePlan([{ id: "first", title: "a", locks: [left] }, { id: "second", title: "b", locks: [right] }]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatch(/first.*second.*locks overlap/);
+    });
+
+  it("allows sharing through transitive hard dependencies, but not after preferences", () => {
+    const a = { id: "a", title: "a", locks: ["scenes/**"] };
+    const b = { id: "b", title: "b", dependsOn: ["a"] };
+    const c = { id: "c", title: "c", locks: ["scenes/main.scene"], dependsOn: ["b"] };
+    expect(resolvePlan([a, b, c]).errors).toEqual([]);
+    expect(resolvePlan([a, { ...c, dependsOn: [], after: ["a"] }]).errors.join(" ")).toMatch(/a.*c.*locks overlap/);
+  });
+
+  it("requires nonempty asset locks in parse and resolve and rejects escaping paths", () => {
+    for (const locks of [undefined, []]) {
+      const ticket = { id: "hero", title: "hero", kind: "asset" as const, locks };
+      expect(() => parseTickets(JSON.stringify([ticket]))).toThrow(/hero.*locks.*asset/);
+      expect(resolvePlan([ticket]).errors.join(" ")).toMatch(/hero.*locks.*asset/);
+    }
+    expect(resolvePlan([{ title: "bad", locks: ["../outside"] }]).errors.join(" ")).toMatch(/locks.*repository-relative/);
+    expect(resolvePlan([{ title: "hero", kind: "asset", locks: ["assets/hero.png"] }]).errors).toEqual([]);
+  });
+});
+
 describe("renderTicketBody", () => {
   it("includes body, file-ownership hints, and resolved deps", () => {
     const body = renderTicketBody(

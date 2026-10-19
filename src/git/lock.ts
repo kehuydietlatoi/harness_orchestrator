@@ -1,5 +1,6 @@
 import { exec } from "../util/exec.js";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { lockPathsOverlap, normalizeLockPath } from "./path-locks.js";
 
 /**
  * Atomic task-claim primitive.
@@ -16,6 +17,41 @@ import { randomUUID } from "node:crypto";
  */
 
 const LOCK_NS = "refs/orch/lock/issue-";
+const PATH_NS = "refs/orch/lock/path/";
+// A persistent CAS version, outside the lock namespace; never a held mutex.
+const PATH_VERSION = "refs/orch/path-lock-version";
+
+export interface PathLock { ref: string; sha: string; issue: number; path: string; owner: string }
+
+export function pathLockRef(path: string): string {
+  return PATH_NS + createHash("sha256").update(normalizeLockPath(path)).digest("hex");
+}
+
+async function writeBlob(value: unknown, cwd?: string): Promise<string> {
+  const result = await exec("git", ["hash-object", "-w", "--stdin"], { cwd, input: JSON.stringify(value) });
+  if (result.code !== 0) throw new Error(`cannot write path lock metadata: ${result.stderr.trim()}`);
+  return result.stdout.trim();
+}
+
+/** Strict reads: an unreadable lock must never permit an overlapping claim. */
+export async function listPathLocks(opts: { cwd?: string } = {}): Promise<PathLock[]> {
+  const result = await exec("git", ["for-each-ref", "--format=%(refname) %(objectname)", PATH_NS], opts);
+  if (result.code !== 0) throw new Error(`cannot observe path locks: ${result.stderr.trim()}`);
+  return Promise.all(result.stdout.trim().split(/\r?\n/).filter(Boolean).map(async (line) => {
+    const [ref, sha] = line.split(" ");
+    const blob = await exec("git", ["cat-file", "blob", sha], opts);
+    if (blob.code !== 0) throw new Error(`cannot read path lock ${ref}`);
+    const data = JSON.parse(blob.stdout);
+    if (!Number.isInteger(data.issue) || data.issue <= 0 || typeof data.path !== "string" ||
+        typeof data.owner !== "string" || pathLockRef(data.path) !== ref) throw new Error(`invalid path lock ${ref}`);
+    return { ref, sha, issue: data.issue, path: data.path, owner: data.owner };
+  }));
+}
+
+export async function pathsLocked(paths: readonly string[], opts: { cwd?: string } = {}): Promise<boolean> {
+  if (!paths.length) return false;
+  return (await listPathLocks(opts)).some((held) => paths.some((path) => lockPathsOverlap(path, held.path)));
+}
 
 export type ClaimOutcome = "acquired" | "already-held" | "error";
 
@@ -56,11 +92,35 @@ export async function createOwnerToken(
 /** Attempt to atomically claim an issue. Exactly one racer can win. */
 export async function claim(
   issue: number,
-  opts: { cwd?: string; sha?: string } = {},
+  opts: { cwd?: string; sha?: string; paths?: readonly string[] } = {},
 ): Promise<ClaimResult> {
   const sha = opts.sha ?? (await headSha(opts.cwd));
   if (!sha) return { outcome: "error", detail: "cannot resolve HEAD (repo has no commits?)" };
 
+  const paths = [...new Set((opts.paths ?? []).map(normalizeLockPath))];
+  if (paths.length) {
+    // Read the version BEFORE the namespace snapshot. Concurrent additions must
+    // change it in the same transaction as their refs, so exactly one wins.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const version = await exec("git", ["rev-parse", "--verify", "--quiet", PATH_VERSION], { cwd: opts.cwd });
+      if (await pathsLocked(paths, opts)) return { outcome: "already-held" };
+      const next = await writeBlob({ nonce: randomUUID() }, opts.cwd);
+      const entries = await Promise.all(paths.map(async (path) => {
+        const blob = await writeBlob({ issue, path, owner: sha }, opts.cwd);
+        return `create ${pathLockRef(path)} ${blob}`;
+      }));
+      const update = version.code === 0 ? `update ${PATH_VERSION} ${next} ${version.stdout.trim()}` : `create ${PATH_VERSION} ${next}`;
+      const result = await exec("git", ["update-ref", "--stdin"], {
+        cwd: opts.cwd, input: [`create ${lockRef(issue)} ${sha}`, update, ...entries, ""].join("\n"),
+      });
+      if (result.code === 0) return { outcome: "acquired" };
+      if (await isLocked(issue, opts)) return { outcome: "already-held" };
+      if (!/cannot lock ref|already exists|reference already exists/i.test(result.stderr + result.stdout)) {
+        return { outcome: "error", detail: result.stderr + result.stdout };
+      }
+    }
+    return { outcome: "already-held", detail: "concurrent path claim contention; retry later" };
+  }
   const input = `create ${lockRef(issue)} ${sha}\n`;
   const r = await exec("git", ["update-ref", "--stdin"], { cwd: opts.cwd, input });
   if (r.code === 0) return { outcome: "acquired" };
@@ -74,9 +134,8 @@ export async function claim(
 
 /** Release a claim (called on merge or abandonment). */
 export async function release(issue: number, opts: { cwd?: string } = {}): Promise<boolean> {
-  const input = `delete ${lockRef(issue)}\n`;
-  const r = await exec("git", ["update-ref", "--stdin"], { cwd: opts.cwd, input });
-  return r.code === 0;
+  const current = await owner(issue, opts);
+  return current === null ? true : releaseOwned(issue, current, opts);
 }
 
 /** Read the exact object id stored in a claim lock, or null when it is absent. */
@@ -93,7 +152,8 @@ export async function releaseOwned(
   expectedOwner: string,
   opts: { cwd?: string } = {},
 ): Promise<boolean> {
-  const input = `delete ${lockRef(issue)} ${expectedOwner}\n`;
+  const paths = (await listPathLocks(opts)).filter((lock) => lock.issue === issue && lock.owner === expectedOwner);
+  const input = [`delete ${lockRef(issue)} ${expectedOwner}`, ...paths.map((lock) => `delete ${lock.ref} ${lock.sha}`), ""].join("\n");
   const r = await exec("git", ["update-ref", "--stdin"], { cwd: opts.cwd, input });
   return r.code === 0;
 }

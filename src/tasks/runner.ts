@@ -245,6 +245,7 @@ export async function dispatchSpecific(
     return { issue: number, outcome: "requeued", durationMs: 0 };
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
+  if (!task) return { issue: number, outcome: "requeued", durationMs: 0 };
   return processClaimed(task, agent, cfg, cwd);
 }
 
