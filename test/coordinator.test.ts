@@ -14,6 +14,7 @@ vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
 
 /** A tiny fake GitHub: PR state that the fake executors mutate and `observe` reads back. */
 interface SimPr {
+  scopeFailure?: string;
   nextCascade?: StepFacts["nextCascade"];
   issue: number;
   author: string;
@@ -79,6 +80,7 @@ class World {
     }
     const tasks = open.map((p) => {
       const facts = {
+        scopeFailure: p.scopeFailure,
         nextCascade: p.nextCascade,
         attention: p.attention,
         pr: { number: 1000 + p.issue, head: `h${p.version}`, checks: p.checks, mergeable: p.mergeable },
@@ -180,6 +182,15 @@ async function drive(world: World, opts: Partial<AutopilotOptions> = {}) {
 }
 
 describe("runAutopilot", () => {
+  it("hands a scope violation to a human without launching review or a fix", async () => {
+    const w = new World();
+    const task = w.add(pr(38, { scopeFailure: "design/game.md: forbidden by design/**" }));
+    const result = await drive(w, { claim: "none" });
+    expect(result.escalated).toEqual([38]);
+    expect(w.calls).toEqual(["escalate:38"]);
+    expect(task.attention).toBe(true);
+    expect(w.events.some(e => e.signal === "task.escalated" && e.detail?.includes("design/game.md"))).toBe(true);
+  });
   it("escalates a spent ticket budget without launching an agent step", async () => {
     const w = new World();
     w.add(pr(38));

@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,10 +16,10 @@ const cli = path.join(repoRoot, "dist", "cli.js");
 const tsc = path.join(repoRoot, "node_modules", "typescript", "bin", "tsc");
 
 /** Run the built CLI, returning { code, stdout, stderr } without throwing. */
-function runCli(args: string[]): { code: number; stdout: string; stderr: string } {
+function runCli(args: string[], cwd = repoRoot): { code: number; stdout: string; stderr: string } {
   try {
     const stdout = execFileSync(process.execPath, [cli, ...args], {
-      cwd: repoRoot,
+      cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -49,6 +50,31 @@ describe("built CLI smoke", () => {
   it("exits non-zero on an unknown command", () => {
     const { code } = runCli(["definitely-not-a-real-command"]);
     expect(code).not.toBe(0);
+  });
+
+  it("enforces pack validation through the built plan dry-run", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "orch-pack-cli-"));
+    try {
+      cpSync(path.join(repoRoot, "test/fixtures/pack"), path.join(cwd, ".studio"), { recursive: true });
+      writeFileSync(path.join(cwd, "orch.config.json"), JSON.stringify({ pack: ".studio" }));
+      writeFileSync(path.join(cwd, "tickets.json"), JSON.stringify([{ id: "T1", title: "Implement rule" }]));
+      const result = runCli(["plan", "tickets.json", "--dry-run"], cwd);
+      expect(result.code).toBe(1);
+      for (const field of ["role", "kind", "verify"]) expect(result.stdout).toContain(`${field} is required`);
+      const ticket = { id: "T2", title: "Resolve design", role: "gameplay-programmer", kind: "code", verify: [["npm", "test"]], decisions: ["D-999", "D-001"], context: ["combat.missing"] };
+      mkdirSync(path.join(cwd, "design"));
+      writeFileSync(path.join(cwd, "design/decisions.md"), "| D-001 | Old rule | superseded | D-002 | today |\n");
+      writeFileSync(path.join(cwd, "tickets.json"), JSON.stringify([ticket]));
+      const unresolved = runCli(["plan", "tickets.json", "--dry-run"], cwd);
+      expect(unresolved.code).toBe(1);
+      expect(unresolved.stdout).toContain('("T2"): decisions: unknown decision D-999');
+      expect(unresolved.stdout).toContain('("T2"): decisions: D-001 is superseded');
+      expect(unresolved.stdout).toContain('("T2"): context: anchor combat.missing');
+      writeFileSync(path.join(cwd, "orch.config.json"), "{}");
+      expect(runCli(["plan", "tickets.json", "--dry-run"], cwd).code).toBe(0);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("serves the workflow graph and scenario registry in demo mode", async () => {

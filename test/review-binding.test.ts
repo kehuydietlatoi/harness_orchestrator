@@ -3,6 +3,7 @@ import { DEFAULT_CONFIG } from "../src/config.js";
 import { formatReview, parseReview } from "../src/board/approval.js";
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
+  prChangedPaths: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/worktree", removeWorktree: vi.fn() }));
@@ -15,6 +16,7 @@ const issue = { number: 38, title: "task", body: "", state: "OPEN", labels: ["ag
 const pr = { number: 62, title: "task", body: "Closes #38", state: "OPEN", headSha: head, headRefName: "task/38-task", htmlUrl: "" };
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(gh.prChangedPaths).mockResolvedValue([]);
   vi.mocked(gh.getPr).mockResolvedValue(pr);
   vi.mocked(gh.getIssue).mockResolvedValue(issue);
   vi.mocked(gh.listPrReviews).mockResolvedValue([{ id: 1, state: "COMMENTED", commit_id: head,
@@ -22,6 +24,36 @@ beforeEach(() => {
   vi.mocked(gh.prChecksPass).mockResolvedValue({ pass: true, detail: "ok" });
 });
 describe("review and merge boundary", () => {
+  it.each(["package.json", "vitest.config.ts", "jest.config.cjs", ".mocharc.json", "playwright.config.js", "orch.config.json", "packages/game/package.json"])("requires lead approval for %s", async (path) => {
+    vi.mocked(gh.prChangedPaths).mockResolvedValue([path]);
+    const setApproval = (tier?: "standard" | "lead", family = "anthropic", approvedHead = head) =>
+      vi.mocked(gh.listPrReviews).mockResolvedValue([{ id: 1, state: "COMMENTED", commit_id: approvedHead,
+        body: formatReview({ reviewer: "claude", tier, family, pr: 62, head: approvedHead,
+          timestamp: "2026-10-19T12:00:00Z", decision: "approve" }, "ok") }]);
+    for (const cfg of [DEFAULT_CONFIG, { ...DEFAULT_CONFIG, requireCrossReview: false }]) {
+      for (const tier of [undefined, "standard"] as const) {
+        setApproval(tier);
+        const gate = await checkMergeGate(62, cfg, "/repo");
+        expect(gate.ok).toBe(false);
+        expect(gate.reasons.join(" ")).toContain(`lead-tier approval: ${path}`);
+      }
+      setApproval("lead", "openai");
+      expect((await checkMergeGate(62, cfg, "/repo")).ok).toBe(false);
+      setApproval("lead", "anthropic", "b".repeat(40));
+      expect((await checkMergeGate(62, cfg, "/repo")).ok).toBe(false);
+      setApproval("lead");
+      expect((await checkMergeGate(62, cfg, "/repo")).ok).toBe(true);
+    }
+  });
+  it("uses configured protected paths and fails closed on unavailable files or a changing head", async () => {
+    vi.mocked(gh.prChangedPaths).mockResolvedValue(["scripts/check.js"]);
+    expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).ok).toBe(true);
+    expect((await checkMergeGate(62, { ...DEFAULT_CONFIG, protectedPaths: ["scripts/**"] }, "/repo")).ok).toBe(false);
+    vi.mocked(gh.prChangedPaths).mockRejectedValueOnce(new Error("offline"));
+    expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).reasons.join(" ")).toContain("cannot check protected verify paths");
+    vi.mocked(gh.getPr).mockResolvedValueOnce(pr).mockResolvedValueOnce({ ...pr, headSha: "b".repeat(40) });
+    expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).reasons.join(" ")).toContain("head changed");
+  });
   it("manual review writers include tier and model family", async () => {
     await approve(62, "claude", "/repo", "ok", head, { cfg: DEFAULT_CONFIG });
     await requestChanges(62, "claude", "/repo", "fix", { cfg: DEFAULT_CONFIG });

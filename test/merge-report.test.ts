@@ -8,6 +8,7 @@ import { formatReview } from "../src/board/approval.js";
 const paths = vi.hoisted(() => ({ worktree: "" }));
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
+  prChangedPaths: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
   closeIssue: vi.fn(),
 }));
@@ -27,6 +28,7 @@ describe("merge cleanup report", () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(gh.prChangedPaths).mockResolvedValue([]);
     base = mkdtempSync(join(tmpdir(), "orch-merge-"));
     paths.worktree = base;
     vi.mocked(gh.getPr).mockResolvedValue(pr);

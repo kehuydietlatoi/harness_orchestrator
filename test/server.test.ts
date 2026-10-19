@@ -7,6 +7,8 @@ import type { Issue } from "../src/github/github.js";
 import type { Ticket } from "../src/tasks/plan.js";
 import { LANES, NODES, EDGES, FLOWS, STEP_NODES, STATE_NODES } from "../src/demo/flow-graph.js";
 import type { DemoPlayer } from "../src/server/server.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
+import { loadPack } from "../src/pack/load.js";
 
 vi.mock("../src/board/snapshot.js", () => ({
   buildSnapshot: vi.fn(async () => ({
@@ -390,6 +392,19 @@ describe("write surface", () => {
     expect(parsed.tickets[1]).toMatchObject({ knownDeps: ["a"], knownAfter: ["a"] });
     expect(parsed.errors).toEqual([]);
     expect(parsed.warnings.some((w: string) => /claimed by tickets 1, 2/.test(w))).toBe(true);
+    expect(creates).toHaveLength(0);
+  });
+
+  it("applies pack-required fields in both dashboard planning routes", async () => {
+    const { deps, creates } = fakeDeps({ loadConfig: () => ({ ...DEFAULT_CONFIG,
+      pack: "test/fixtures/pack", loadedPack: loadPack("test/fixtures/pack") }) });
+    const port = await start(deps);
+    const draft = [{ id: "T1", title: "Implement rule" }];
+    const preview = await post(port, "/actions/plan-preview", draft);
+    expect(JSON.parse(preview.body).errors).toHaveLength(3);
+    const create = await post(port, "/actions/plan-create", draft);
+    expect(create.status).toBe(400);
+    expect(JSON.parse(create.body).errors).toEqual(JSON.parse(preview.body).errors);
     expect(creates).toHaveLength(0);
   });
 

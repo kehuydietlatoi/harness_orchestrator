@@ -378,6 +378,14 @@ describe("repair observation of an open PR", () => {
 });
 
 describe("reconcileIssue", () => {
+  it("reports orphaned path refs with no matching live claim and preserves them", async () => {
+    const orphan = { ref: "refs/orch/lock/path/dead", sha: "blob", issue: 36, path: "scenes/main.scene", owner: "old-owner" };
+    const h = fakeDeps(observation({ pathLocks: [orphan] }));
+    const result = await reconcileIssue(36, DEFAULT_CONFIG, "/repo", {}, h.deps);
+    expect(result.blocked.join(" ")).toMatch(/orphaned path lock.*scenes\/main.scene.*no live claim/);
+    expect(h.deps.execute).not.toHaveBeenCalled();
+    expect(planRepairs(observation({ lockOwner: "old-owner", pathLocks: [orphan] })).blocked.join(" ")).not.toContain("orphaned");
+  });
   it("is read-only by default", async () => {
     const harness = fakeDeps(observation({ issue: issue({ labels: [STATUS.claimed] }) }));
 

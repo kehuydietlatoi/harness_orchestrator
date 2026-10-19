@@ -1,4 +1,6 @@
 import { nextHop } from "./cascade.js";
+import { issueScope, scopeFailure } from "./scope-guard.js";
+import { parseTicketV2 } from "./plan.js";
 import { availabilityKey, unavailableUntil } from "../board/availability.js";
 import { resolveTaskModel } from "./runner.js";
 import { issueRole } from "../routing/route-policy.js";
@@ -64,7 +66,7 @@ export function assembleFacts(params: {
     nextCascade: nextHop({
       agent: author, ...resolveTaskModel(author, issue, cfg),
       tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
-    }, [], issueRole(issue), cfg, params.isRouteAvailable),
+    }, [], issueRole(issue), cfg, params.isRouteAvailable, parseTicketV2(issue.body)),
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },
@@ -142,9 +144,16 @@ export async function observeTasks(
       const base = { issue, author, pr, reviews, checks, mergeable, localRounds: fixRoundsFor(events, n), cfg,
         isRouteAvailable: (member: CascadeRoute) => !unavailableUntil(availabilityKey(member.agent, member.model), cwd) };
       let facts = assembleFacts(base);
+      if (!facts.attention) {
+        const role = issueScope(issue, cfg);
+        if (role) {
+          if (!board.prChangedPaths) throw new Error("Cannot observe PR paths for write_scope");
+          facts.scopeFailure = scopeFailure(await board.prChangedPaths(pr.number, { cwd }), role, issue.body);
+        }
+      }
       // Triage records matter only once the round budget is reached, so the common path reads no comments.
       let triage: TriageFacts | undefined;
-      if (cfg.maxLeadTriage > 0 && facts.rounds >= facts.maxRounds) {
+      if (!facts.scopeFailure && cfg.maxLeadTriage > 0 && facts.rounds >= facts.maxRounds) {
         triage = triageFacts(await board.listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
         facts = assembleFacts({ ...base, triage });
       }

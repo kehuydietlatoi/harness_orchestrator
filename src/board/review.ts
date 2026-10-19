@@ -12,6 +12,7 @@ import {
   recordPrReview,
   prChecksPass,
   mergePr,
+  prChangedPaths,
 } from "../github/github.js";
 import { ghBoard } from "../github/board.js";
 import { log } from "../util/log.js";
@@ -20,6 +21,8 @@ import { issueAgent, byNumber } from "./board.js";
 import { release as lockRelease } from "../git/lock.js";
 import { worktreePath, removeWorktree } from "../git/worktree.js";
 import type { OrchConfig, ReviewPolicy } from "../config.js";
+import { DEFAULT_PROTECTED_PATHS } from "../config.js";
+import { pathMatchesGlob } from "../git/path-locks.js";
 import { acceptedReviewers, defaultFamily, formatReview, reviewState, type ReviewMode, type ReviewIdentity } from "./approval.js";
 import { assertSelfReviewAllowed } from "./reviewer.js";
 
@@ -199,8 +202,16 @@ export function evaluateGate(params: {
   checksDetail: string;
   requireHumanMerge: boolean;
   humanApproved: boolean;
+  protectedPathsChanged?: readonly string[];
 }): string[] {
   const reasons: string[] = [];
+  if (params.protectedPathsChanged?.length) {
+    const accepted = acceptedReviewers({ ...params, selfReviewers: params.selfReviewers ?? [] },
+      params.author, params.reviewPolicy, params.authorFamily);
+    if (!accepted.some((agent) => params.agents.includes(agent) && params.reviewMetadata?.[agent]?.tier === "lead")) {
+      reasons.push(`protected verify paths require an accepted lead-tier approval: ${params.protectedPathsChanged.join(", ")}`);
+    }
+  }
   if (params.requireCrossReview) {
     if (!reviewSatisfied(params)) {
       reasons.push(
@@ -230,7 +241,19 @@ export async function checkMergeGate(
   }
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
-  const approvals = cfg.requireCrossReview
+  let protectedPathsChanged: string[] = [];
+  const protectedPaths = cfg.protectedPaths ?? DEFAULT_PROTECTED_PATHS;
+  if (protectedPaths.length) {
+    try {
+      protectedPathsChanged = (await prChangedPaths(prNum, { cwd })).filter((path) =>
+        protectedPaths.some((pattern) => pathMatchesGlob(pattern, path)));
+      // Bind the file observation to the same head as the approvals and eventual merge.
+      if ((await getPr(prNum, { cwd })).headSha !== pr.headSha) reasons.push("PR head changed while checking protected verify paths");
+    } catch (error) {
+      reasons.push(`cannot check protected verify paths: ${(error as Error).message}`);
+    }
+  }
+  const approvals = cfg.requireCrossReview || protectedPathsChanged.length > 0
     ? reviewState(await listPrReviews(prNum, { cwd }), prNum, pr.headSha) : null;
   if (pr.state !== "OPEN" || !pr.headSha) reasons.push("PR must be open with a known head");
   if (cfg.requireCrossReview && (!author || !cfg.agents.includes(author))) reasons.push("PR author must be a configured harness");
@@ -250,6 +273,7 @@ export async function checkMergeGate(
       checksDetail: checks.detail,
       requireHumanMerge: cfg.requireHumanMerge,
       humanApproved,
+      protectedPathsChanged,
     }),
   );
 

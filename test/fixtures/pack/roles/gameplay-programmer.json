@@ -1,0 +1,37 @@
+{
+  "id": "gameplay-programmer",
+  "summary": "Implements gameplay rules and mechanics from the design spec, test-first where acceptance is behavioural.",
+  "prompt": "gameplay-programmer.md",
+  "kinds": [
+    "code"
+  ],
+  "tiers": [
+    "standard",
+    "lead"
+  ],
+  "families": [
+    "openai",
+    "anthropic"
+  ],
+  "needs": [
+    "shell"
+  ],
+  "write_scope": [
+    "src/**",
+    "server/**",
+    "scripts/**",
+    "tests/**"
+  ],
+  "forbidden": [
+    "tests/acceptance/**",
+    "design/**",
+    ".github/**",
+    ".studio/**"
+  ],
+  "gates": [
+    "deterministic",
+    "observe-if-visible",
+    "code-review"
+  ],
+  "standing": []
+}

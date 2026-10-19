@@ -1,10 +1,36 @@
+import { designReferenceErrors, type DesignContext } from "./brief-context.js";
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
-import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
+import { DEFAULT_CONFIG, EFFORT_TIERS, normalizeEffort, resolveTierModel, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
+import type { Budget } from "./budget.js";
+import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
+import { routeFamily, validateRoute } from "../routing/route-policy.js";
+import { verifyTrustErrors } from "./verify.js";
 
-export interface Ticket {
+export interface TicketV2 {
+  role?: string;
+  kind?: "code" | "asset" | "design-data" | "qa" | "prototype" | "docs";
+  milestone?: string;
+  decisions?: string[];
+  context?: string[];
+  locks?: string[];
+  verify?: string[][];
+  needs?: ("shell" | "vision" | "web" | "engine" | "image-gen" | "audio-gen")[];
+  sensitivity?: "public" | "internal" | "secret";
+  budget?: Budget;
+  model?: string;
+}
+
+export const V2_FIELDS = ["role", "kind", "milestone", "decisions", "context", "locks", "verify", "needs", "sensitivity", "budget", "model"] as const;
+
+/** Pure projection; these fields never contribute to plan marker identities. */
+export function ticketV2Fields(ticket: TicketV2): TicketV2 {
+  return Object.fromEntries(V2_FIELDS.filter((key) => ticket[key] !== undefined).map((key) => [key, ticket[key]]));
+}
+
+export interface Ticket extends TicketV2 {
   id?: string; // local id other tickets reference in dependsOn or after
   title: string;
   body?: string;
@@ -21,57 +47,98 @@ export interface Ticket {
 export const MAX_BRIEF_CHARS = 4000;
 
 
-/** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
- * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
- * `body`/`agent`/`effort` must be a string and any present `dependsOn`/`after`/`files`/`acceptance`/`outOfScope` must be an array of
- * strings. Malformed field values are reported (ticket-indexed, all at once) rather
- * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
- * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
- * shaped like a valid ticket list. */
+/** Collect every structural error, keeping a safe working copy for semantic checks. */
+function ticketShapes(values: readonly unknown[]): { tickets: Ticket[]; errors: string[] } {
+  const errors: string[] = [];
+  const tickets = values.map((value, i) => {
+    const index = i + 1;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors.push("ticket " + index + " must be an object (field: ticket)");
+      return { title: "" };
+    }
+    const raw = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    const who = "ticket " + index + (typeof raw.id === "string" ? " (\"" + raw.id + "\")" : "");
+    const problem = (field: string, message: string) => errors.push(who + ": " + field + " " + message);
+    for (const field of ["id", "title", "body", "agent", "effort", "role", "kind", "milestone", "sensitivity", "model"]) {
+      if (raw[field] === undefined) continue;
+      if (typeof raw[field] !== "string") problem(field, "must be a string");
+      else out[field] = raw[field];
+    }
+    for (const field of ["dependsOn", "after", "files", "acceptance", "outOfScope", "decisions", "context", "locks", "needs"]) {
+      const v = raw[field];
+      if (v === undefined) continue;
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) problem(field, "must be an array of strings");
+      else out[field] = v;
+    }
+    const enums: Record<string, readonly string[]> = {
+      kind: ["code", "asset", "design-data", "qa", "prototype", "docs"],
+      sensitivity: ["public", "internal", "secret"],
+      needs: ["shell", "vision", "web", "engine", "image-gen", "audio-gen"],
+    };
+    for (const [field, allowed] of Object.entries(enums)) {
+      const v = out[field];
+      if (v !== undefined && !(Array.isArray(v) ? v : [v]).every((x) => allowed.includes(x as string))) {
+        problem(field, "must use only: " + allowed.join(", "));
+        delete out[field];
+      }
+    }
+    if (typeof out.role === "string" && !/^[a-z][a-z0-9-]*$/.test(out.role)) problem("role", "must be a lowercase role slug");
+    if (typeof out.milestone === "string" && !out.milestone.trim()) problem("milestone", "must be non-empty");
+    for (const field of ["decisions", "context", "locks", "needs"]) {
+      const v = out[field];
+      if (!Array.isArray(v)) continue;
+      if (new Set(v).size !== v.length) problem(field, "must contain unique values");
+      if (field === "decisions" && !v.every((x) => /^D-[0-9]{3,}$/.test(x))) problem(field, "must contain D-### decision ids");
+      if (field === "context" && !v.every((x) => /^[a-z0-9]+(\.[a-z0-9-]+)*$/.test(x))) problem(field, "must contain dotted context anchors");
+      if (field === "locks") for (const path of v) {
+        try { normalizeLockPath(path); } catch (error) { problem(field, (error as Error).message); }
+      }
+    }
+    if (raw.kind === "asset" && (!Array.isArray(raw.locks) || !raw.locks.length)) problem("locks", "must be non-empty for kind asset");
+    if (raw.verify !== undefined) {
+      if (!Array.isArray(raw.verify) || !raw.verify.length || !raw.verify.every((argv) =>
+        Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string" && arg.trim().length > 0))) {
+        problem("verify", "must be a non-empty array of non-empty argv arrays of non-empty strings (no shell command strings)");
+      } else out.verify = raw.verify;
+    }
+    if (raw.budget !== undefined) {
+      const budget = raw.budget;
+      if (!budget || typeof budget !== "object" || Array.isArray(budget)) problem("budget", "must be an object");
+      else {
+        out.budget = budget;
+        for (const [key, n] of Object.entries(budget)) {
+          if (!["minutes", "usd", "requests"].includes(key) || typeof n !== "number" || !Number.isFinite(n) || n < 0 || (key === "requests" && !Number.isInteger(n))) {
+            problem("budget." + key, "must be a supported non-negative number (requests must be an integer)");
+            delete out.budget;
+          }
+        }
+      }
+    }
+    return { ...out, title: out.title ?? "" } as unknown as Ticket;
+  });
+  return { tickets, errors };
+}
+
+/** Parse JSON and report every structural problem together. */
 export function parseTickets(raw: string): Ticket[] {
   const value: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
   if (!Array.isArray(value)) throw new Error("tickets file must be a JSON array");
-  const errors: string[] = [];
-  const tickets = value.map((t, i) => {
-    const index = i + 1;
-    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(`ticket ${index} must be an object`);
-    const o = t as Record<string, unknown>;
-
-    const stringArray = (v: unknown, field: string): string[] | undefined => {
-      if (v === undefined) return undefined;
-      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
-        errors.push(`ticket ${index}: ${field} must be an array of strings`);
-        return undefined;
-      }
-      return v;
-    };
-
-    if (o.id !== undefined && typeof o.id !== "string") errors.push(`ticket ${index}: id must be a string`);
-    if (o.title !== undefined && typeof o.title !== "string") errors.push(`ticket ${index}: title must be a string`);
-    if (o.body !== undefined && typeof o.body !== "string") errors.push(`ticket ${index}: body must be a string`);
-    const acceptance = stringArray(o.acceptance, "acceptance");
-    const outOfScope = stringArray(o.outOfScope, "outOfScope");
-    if (o.agent !== undefined && typeof o.agent !== "string") errors.push(`ticket ${index}: agent must be a string`);
-    if (o.effort !== undefined && typeof o.effort !== "string") errors.push(`ticket ${index}: effort must be a string`);
-
-    return {
-      id: typeof o.id === "string" ? o.id : undefined,
-      title: typeof o.title === "string" ? o.title : "",
-      body: typeof o.body === "string" ? o.body : undefined,
-      dependsOn: stringArray(o.dependsOn, "dependsOn"),
-      after: stringArray(o.after, "after"),
-      files: stringArray(o.files, "files"),
-      ...(acceptance ? { acceptance } : {}),
-      ...(outOfScope ? { outOfScope } : {}),
-      ...(typeof o.agent === "string" ? { agent: o.agent } : {}),
-      ...(typeof o.effort === "string" ? { effort: o.effort } : {}),
-    };
-  });
-  if (errors.length) throw new Error(errors.join("; "));
-  return tickets;
+  const result = ticketShapes(value);
+  if (result.errors.length) throw new Error(result.errors.join("; "));
+  return result.tickets;
 }
 
-export interface ResolvedTicket {
+/** Parse the structured issue metadata without loading issue-creation I/O. */
+export function parseTicketV2(body: string): TicketV2 {
+  const json = /^## Ticket metadata \(v2\)\r?\n\r?\n```json\r?\n([\s\S]*?)\r?\n```[ \t]*$/m.exec(body)?.[1];
+  if (json === undefined) return {};
+  const fields: unknown = JSON.parse(json);
+  if (!fields || typeof fields !== "object" || Array.isArray(fields)) throw new Error("ticket metadata must be an object");
+  return ticketV2Fields(parseTickets(JSON.stringify([{ ...fields, title: "metadata" }]))[0]);
+}
+
+export interface ResolvedTicket extends TicketV2 {
   /** 1-based position in the file. */
   index: number;
   id?: string;
@@ -95,6 +162,9 @@ export interface ResolvedTicket {
 }
 
 export interface ResolveOptions {
+  design?: DesignContext;
+  /** Loaded project config enables pack validation without adding IO to the validator. */
+  config?: OrchConfig;
   /** Configured agents. When given, a ticket routed to any other agent is dropped (warning). */
   agents?: readonly string[];
   tierAliases?: TierAliases;
@@ -123,16 +193,71 @@ export interface ResolvedPlan {
  * issues with neither label: an `effort` without an `agent` is dropped. Pure.
  */
 export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {}): ResolvedPlan {
-  const errors: string[] = [];
+  opts = { agents: opts.config?.agents, tierAliases: opts.config?.tierAliases, ...opts };
+  const shaped = ticketShapes(tickets);
+  const errors = shaped.errors;
   const warnings: string[] = [];
   const seen = new Set<string>();
   const fileOwners = new Map<string, number[]>();
   const resolved: ResolvedTicket[] = [];
 
-  tickets.forEach((t, i) => {
+  shaped.tickets.forEach((t, i) => {
     const index = i + 1;
-    if (!t.title.trim()) errors.push(`ticket ${index} needs a title`);
-    if (t.id && seen.has(t.id)) errors.push(`ticket ${index}: duplicate id "${t.id}"`);
+    const who = `ticket ${index}${t.id ? ` ("${t.id}")` : ""}`;
+    if (!t.title.trim()) errors.push(`${who}: title needs a title`);
+    if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
+    const cfg = opts.config;
+    if (t.needs !== undefined || t.sensitivity !== undefined || cfg?.sensitivity !== undefined || cfg?.pack !== undefined) {
+      const policy = cfg ?? DEFAULT_CONFIG;
+      const tiers = t.effort ? [normalizeEffort(t.effort, policy.tierAliases)].filter((tier): tier is EffortTier => !!tier)
+        : t.agent ? [policy.defaultEffort ?? "lead"] : EFFORT_TIERS;
+      const agents = t.agent ? [t.agent.trim()] : opts.agents ?? policy.agents;
+      const results = agents.filter(agent => policy.agents.includes(agent) && policy.adapters[agent]).flatMap(agent => tiers.flatMap(tier => {
+        // Unassigned tickets may choose any configured ladder member; explicit routes
+        // must validate the exact model that dispatch would select.
+        const members = t.agent || t.model ? [undefined] : policy.tierMembers?.[tier].filter(m => m.agent === agent) ?? [];
+        return (members.length ? members : [undefined]).map(member => {
+          try {
+            const model = member ? { ...policy.adapters[agent]?.models?.[tier], ...member } : resolveTierModel(agent, tier, policy, t.model ? [`model:${t.model}`] : []);
+            return validateRoute({ ...t, agent, tier, model }, policy);
+          } catch (error) { return { ok: false as const, reason: (error as Error).message }; }
+        });
+      }));
+      if (!results.some(result => result.ok)) {
+        errors.push(`${who}: needs/sensitivity have no satisfying allowed route: ${[...new Set(results.flatMap(result => result.ok ? [] : [result.reason]))].join("; ")}`);
+      }
+    }
+    const future = t.needs?.filter(need => ["engine", "image-gen", "audio-gen"].includes(need));
+    if (future?.length) errors.push(`${who}: needs ${future.join(", ")} require tooling from Phases 3-4`);
+    errors.push(...verifyTrustErrors(t.verify ?? [], cfg?.verify ?? []).map((error) => `${who}: ${error}`));
+    if (cfg?.pack !== undefined) {
+      errors.push(...designReferenceErrors(t, opts.design).map(error => `${who}: ${error}`));
+      for (const field of ["role", "kind", "verify"] as const) {
+        if (!t[field]) errors.push(`${who}: ${field} is required when pack is configured`);
+      }
+      const role = t.role;
+      if (role) {
+        if (!cfg.loadedPack || !Object.hasOwn(cfg.loadedPack.roles, role)) {
+          errors.push(`${who}: role '${role}' does not exist in the pack`);
+        } else {
+          const allowance = cfg.roles[role];
+          const tier = normalizeEffort(t.effort?.trim(), cfg.tierAliases);
+          if (t.effort !== undefined && (!tier || !allowance.tiers.includes(tier))) {
+            errors.push(`${who}: effort '${t.effort}' is outside role '${role}' tiers`);
+          }
+          if (t.agent !== undefined) {
+            const agent = t.agent.trim();
+            const tiers = tier ? [tier] : allowance.tiers;
+            if (!cfg.agents.includes(agent) || !tiers.some((tier) => {
+              const family = routeFamily(agent, tier, cfg);
+              return family !== undefined && allowance.families.includes(family);
+            })) {
+              errors.push(`${who}: agent '${agent}' has no allowed family for role '${role}'`);
+            }
+          }
+        }
+      }
+    }
 
     const dependsOn = t.dependsOn ?? [];
     const knownDeps: string[] = [];
@@ -174,6 +299,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
 
     if (t.id) seen.add(t.id);
     resolved.push({
+      ...ticketV2Fields(t),
       index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, acceptance, outOfScope, dependsOn, knownDeps, after, knownAfter,
       ...(agent ? { agent } : {}),
       ...(effort ? { effort: effort as EffortTier } : {}),
@@ -182,6 +308,26 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
 
   for (const [file, owners] of fileOwners) {
     if (owners.length > 1) warnings.push(`file "${file}" is claimed by tickets ${owners.join(", ")}`);
+  }
+
+  const byId = new Map(resolved.filter((t) => t.id).map((t) => [t.id!, t]));
+  const depends = (from: ResolvedTicket, target: ResolvedTicket, seen = new Set<ResolvedTicket>()): boolean => {
+    if (seen.has(from)) return false;
+    seen.add(from);
+    return from.knownDeps.some((id) => {
+      const dep = byId.get(id);
+      return dep !== undefined && (dep === target || depends(dep, target, seen));
+    });
+  };
+  const who = (t: ResolvedTicket) => `ticket ${t.index}${t.id ? ` ("${t.id}")` : ""}`;
+  for (let i = 0; i < resolved.length; i++) for (let j = i + 1; j < resolved.length; j++) {
+    const a = resolved[i], b = resolved[j];
+    if (depends(a, b) || depends(b, a)) continue;
+    for (const left of a.locks ?? []) for (const right of b.locks ?? []) {
+      try {
+        if (lockPathsOverlap(left, right)) errors.push(`${who(a)} and ${who(b)}: locks overlap (${JSON.stringify(left)}, ${JSON.stringify(right)}); add a dependsOn path`);
+      } catch { /* Structural path errors were already collected above. */ }
+    }
   }
 
   const brief = opts.brief?.trim() ?? "";

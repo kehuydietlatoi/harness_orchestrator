@@ -298,6 +298,41 @@ Optional role allowances constrain issues carrying a `role:<name>` label:
 
 Issues without a role label remain unrestricted. Unknown roles are rejected.
 
+Tickets can declare `needs: ["shell", "vision", "web"]` and `sensitivity` as
+`public`, `internal`, or `secret`. Planning rejects routes whose selected model
+cannot meet every need; dispatch rechecks the policy before spawning, and cascades
+skip incompatible members. Claude defaults to shell and vision; Codex and
+OpenCode default to shell. No harness defaults to web. A model spec or ladder
+member's `capabilities` array replaces these defaults, including `[]`.
+`engine`, `image-gen`, and `audio-gen` needs require tooling from Phases 3-4.
+
+```json
+"sensitivity": {
+  "default": "internal",
+  "secret": { "families": ["anthropic", "openai"] },
+  "internal": {
+    "families": ["anthropic", "openai"],
+    "allow": ["provider/approved-model"]
+  }
+}
+```
+
+Secret always excludes OpenCode. Internal requires exact OpenCode model ids in
+`allow`; native harnesses use the family list. Public adds no sensitivity filter.
+Ticket sensitivity overrides the configured default, which otherwise falls back
+to internal. Legacy tickets without needs or sensitivity retain existing routing
+unless `sensitivity` or `pack` is configured.
+
+Optional `"pack": ".studio"` loads JSON role manifests from `.studio/roles/<role>.json`
+and the sibling Markdown file named by each manifest's `prompt`. The path is relative
+to `orch.config.json`. Each manifest's `tiers` and `families` supply its routing
+allowance; an explicit config `roles.<role>` replaces that allowance. With a pack,
+plans require `role`, `kind`, and non-empty `verify` argv arrays. The role must exist
+in the pack, and any supplied effort and agent must satisfy its effective allowance.
+`orch doctor` checks all manifests and prompt files. Projects without `pack` retain
+optional v2 fields. Prompt rendering and per-ticket command execution are separate
+from loading and validation.
+
 Optional `tierMembers` config enables implementation fallback after quota or endpoint
 errors. Members are tried in order, then at higher tiers, subject to role allowances:
 
@@ -320,6 +355,15 @@ and are recorded in both `events.jsonl` and `runs.jsonl`.
 `adapters.<agent>.family` defaults to `anthropic` for Claude and `openai` for
 Codex; a model spec's `family` overrides it. OpenCode requires a family on each
 configured model, including `leadModel`. Role tiers must be valid effort tiers.
+
+Harness environments strip inherited credentials by default. Set
+`adapters.<agent>.env` to the names of provider variables to pass through, e.g.
+`["ANTHROPIC_API_KEY"]` for Claude API billing or `["OPENROUTER_API_KEY"]` for
+OpenCode with OpenRouter. The default is empty; Claude and Codex subscription
+logins use profile credentials, and Codex preserves `CODEX_HOME` when set.
+GitHub tokens are always excluded, even if listed. Worker `orch submit` relies
+on gh's keyring login; otherwise the coordinator handles submission. See
+[the environment boundary and remaining filesystem risk](docs/adr/0013-ticket-verify-trust.md#worker-environments-189).
 
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
@@ -376,6 +420,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Recoverable lifecycle](docs/adr/0006-recoverable-task-lifecycle.md) — observed state and safe recovery
 - [Prompt injection](docs/adr/0007-prompt-injection-threat-model.md) — trusted authorship and agent inputs
 - [Multi-provider routing](docs/adr/0012-multi-provider-routing.md) — tiers, fallback ladders, budgets, and provider boundaries
+- [Domain packs and ticket schema v2](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) — pack roles, validation, briefs, verification, routing filters, and path locks
 
 ## Development
 

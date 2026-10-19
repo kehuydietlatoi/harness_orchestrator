@@ -3,10 +3,13 @@ export type { Budget } from "./tasks/budget.js";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
+import { loadPack, type DomainPack } from "./pack/load.js";
 
 /** What an adapter is told to run for one effort tier. Either field may be omitted
  * to defer to the harness's own configured default (e.g. `~/.codex/config.toml`). */
 export interface ModelSpec {
+  /** Explicit replacement for the harness's default capabilities. */
+  capabilities?: string[];
   /** Harness-specific model id or alias (`claude-sonnet-5-5`, a Codex model id). */
   model?: string;
   /** Provider identity, overriding the adapter default. Required for OpenCode. */
@@ -38,6 +41,8 @@ export type ReviewPolicy = "cross" | "cross-or-self";
 
 export interface AdapterConfig {
   cmd: string;
+  /** Inherited variable names to restore after credential stripping (GitHub tokens are always denied). */
+  env?: string[];
   family?: string;
   pricingMode?: "api" | "subscription" | "quota";
   models?: Record<EffortTier, ModelSpec>;
@@ -69,11 +74,13 @@ function normalizeModelSpec(agent: string, value: unknown, field = "models entri
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return agent === "codex" ? { effort: value } : { model: value };
   if (typeof value === "object") {
-    const { model, effort, family } = value as ModelSpec;
+    const { model, effort, family, capabilities } = value as ModelSpec;
+    validateCapabilities(capabilities, `adapters.${agent}.${field}.capabilities`);
     if (family !== undefined && (typeof family !== "string" || !family.trim())) {
       throw new Error(`adapters.${agent}.${field}.family must be a non-empty string`);
     }
     return {
+      ...(capabilities !== undefined ? { capabilities } : {}),
       ...(family !== undefined ? { family } : {}),
       ...(typeof model === "string" ? { model } : {}),
       ...(typeof effort === "string" ? { effort } : {}),
@@ -102,7 +109,27 @@ export function resolveFamily(
     ({ claude: "anthropic", codex: "openai" } as Record<string, string>)[agent];
 }
 
+function validateCapabilities(value: unknown, field: string): void {
+  if (value !== undefined && (!Array.isArray(value) || !value.every(v => typeof v === "string" && v.trim().length > 0))) {
+    throw new Error(`${field} must be an array of non-empty strings`);
+  }
+}
+
+/** Defaults describe proven headless worker tools, never inferred from model names. */
+export function resolveCapabilities(agent: string, spec?: ModelSpec): readonly string[] {
+  return spec?.capabilities ?? ({ claude: ["shell", "vision"], codex: ["shell"], opencode: ["shell"] } as Record<string, string[]>)[agent] ?? [];
+}
+
 export interface OrchConfig {
+  sensitivity?: {
+    default?: "public" | "internal" | "secret";
+    secret?: { families?: string[] };
+    internal?: { families?: string[]; allow?: string[] };
+  };
+  /** Domain pack path, relative to the project config directory. */
+  pack?: string;
+  /** Loaded by loadConfig; never read from serialized config. */
+  loadedPack?: DomainPack;
   /** Ordered implementation fallback ladder. Omitted preserves single-member retries. */
   tierMembers?: Record<EffortTier, TierMember[]>;
   roles: Record<string, { tiers: EffortTier[]; families: string[] }>;
@@ -129,6 +156,8 @@ export interface OrchConfig {
   taskTimeoutMs: number;
   /** Trusted local checks, executed directly in the task worktree before auto-commit. */
   verify?: string[][];
+  /** Repository-relative globs whose changes require a current lead-tier approval. */
+  protectedPaths?: string[];
   budgets?: { default?: Budget; byTier?: Partial<Record<EffortTier, Budget>> };
   /**
    * How long one automated review may run. Much shorter than a task: reading a diff takes minutes, and a
@@ -152,12 +181,17 @@ export interface OrchConfig {
 }
 
 export const CONFIG_FILE = "orch.config.json";
+export const DEFAULT_PROTECTED_PATHS = [
+  "**/package.json", "**/vitest.config.*", "**/jest.config.*", "**/.mocharc*",
+  "**/playwright.config.*", "**/orch.config.json",
+];
 
 /** Regenerable output that never makes a task worktree worth preserving. */
 export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/"];
 
 export const DEFAULT_CONFIG: OrchConfig = {
   roles: {},
+  protectedPaths: [...DEFAULT_PROTECTED_PATHS],
   agents: ["claude", "codex"],
   lead: "claude",
   requireCrossReview: true,
@@ -220,6 +254,26 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  if (raw.sensitivity !== undefined) {
+    const s = raw.sensitivity;
+    if (!s || typeof s !== "object" || Array.isArray(s) ||
+        (s.default !== undefined && !["public", "internal", "secret"].includes(s.default))) {
+      throw new Error("sensitivity must be an object with a public, internal, or secret default");
+    }
+    for (const key of ["secret", "internal"] as const) {
+      const policy = s[key];
+      if (policy !== undefined && (!policy || typeof policy !== "object" || Array.isArray(policy))) {
+        throw new Error(`sensitivity.${key} must be an object`);
+      }
+      validateCapabilities(policy?.families, `sensitivity.${key}.families`);
+    }
+    validateCapabilities(s.internal?.allow, "sensitivity.internal.allow");
+  }
+  if (raw.protectedPaths !== undefined && (!Array.isArray(raw.protectedPaths) ||
+      !raw.protectedPaths.every((path) => typeof path === "string" && path.trim().length > 0 &&
+        ![...path].some((char) => char.charCodeAt(0) < 32) && !/^(?:[\\/]|[a-z]:)/i.test(path) && !path.split(/[\\/]/).includes("..")))) {
+    throw new Error("protectedPaths must be a list of repository-relative path globs");
+  }
   if (Object.prototype.hasOwnProperty.call(raw, "verify") &&
       (!Array.isArray(raw.verify) || !raw.verify.every((argv) =>
         Array.isArray(argv) && argv.length > 0 && argv.every((arg) =>
@@ -278,7 +332,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   const defaultEffort = raw.defaultEffort === undefined
     ? DEFAULT_CONFIG.defaultEffort : normalizeEffort(raw.defaultEffort, aliases);
   if (!defaultEffort) throw new Error("defaultEffort must be free, cheap, standard, lead, easy, or hard");
-  const roles: OrchConfig["roles"] = {};
+  if (raw.pack !== undefined && (typeof raw.pack !== "string" || !raw.pack.trim())) {
+    throw new Error("pack must be a non-empty directory path");
+  }
+  const loadedPack = raw.pack === undefined ? undefined : loadPack(raw.pack, cwd);
+  const roles: OrchConfig["roles"] = Object.fromEntries(Object.entries(loadedPack?.roles ?? {})
+    .map(([id, { manifest }]) => [id, { tiers: manifest.tiers, families: manifest.families }]));
   if (raw.roles !== undefined) {
     if (!raw.roles || typeof raw.roles !== "object" || Array.isArray(raw.roles)) {
       throw new Error("roles must be an object of { tiers, families } allowances");
@@ -316,6 +375,9 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   for (const [agent, override] of Object.entries(raw.adapters ?? {})) {
     const defaults = DEFAULT_CONFIG.adapters[agent];
     const merged = { ...defaults, ...override };
+    if (merged.env !== undefined && (!Array.isArray(merged.env) || !merged.env.every(name => typeof name === "string" && /^[a-z_][a-z0-9_]*$/i.test(name)))) {
+      throw new Error(`adapters.${agent}.env must be a list of environment variable names`);
+    }
     merged.pricingMode ??= agent === "opencode" ? "quota" : agent === "codex" ? "subscription" : "api";
     if (!["api", "subscription", "quota"].includes(merged.pricingMode)) {
       throw new Error(`adapters.${agent}.pricingMode must be api, subscription, or quota`);
@@ -370,6 +432,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
       if (!Array.isArray(members)) throw new Error(`tierMembers.${tier} must be an array`);
       const seen = new Set<string>();
       for (const member of members) {
+        validateCapabilities(member?.capabilities, `tierMembers.${tier}.capabilities`);
         if (!member || !(raw.agents ?? DEFAULT_CONFIG.agents).includes(member.agent) || !adapters[member.agent]) {
           throw new Error(`tierMembers.${tier} requires a configured agent`);
         }
@@ -394,6 +457,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     ...raw,
     adapters,
     roles,
+    loadedPack,
     ...(budgets ? { budgets } : {}),
     defaultEffort,
     tierAliases: aliases,
@@ -411,6 +475,7 @@ export function resolveTierModel(agent: string, tier: EffortTier, cfg: OrchConfi
   if (!member) return base;
   return {
     ...base,
+    ...(member.capabilities !== undefined ? { capabilities: member.capabilities } : {}),
     ...(member.model !== undefined ? { model: member.model } : {}),
     ...(member.effort !== undefined ? { effort: member.effort } : {}),
     ...(member.family !== undefined ? { family: member.family } : {}),

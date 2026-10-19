@@ -1,3 +1,4 @@
+import { renderPackBrief, storeBrief } from "./brief-render.js";
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
 import { cascadeLabels, cascadeRequeue } from "./cascade-requeue.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
@@ -27,8 +28,12 @@ import { writeSession } from "./sessions.js";
 import { endpointHealthy } from "../board/health.js";
 import { ENDPOINT_COOLDOWN_MS } from "../adapters/usage-limit.js";
 import { exec } from "../util/exec.js";
+import { parseTicketV2 } from "./plan.js";
+import { verifyEnvironment, verifyTrustErrors } from "./verify.js";
+import { issueScope, scopeFailure, ScopeRejected } from "./scope-guard.js";
 
 class VerificationFailed extends Error {}
+class RouteRefusal extends Error {}
 
 /** Finish a worker's uncommitted output using only coordinator-loaded configuration. */
 async function commitWorkerOutput(task: ClaimedTask, agent: string, model: ModelSpec | undefined, cfg: OrchConfig): Promise<boolean> {
@@ -45,14 +50,28 @@ async function commitWorkerOutput(task: ClaimedTask, agent: string, model: Model
   };
   await assertBranch();
   if (!(await git(["status", "--porcelain", "--untracked-files=all"])).trim()) return false;
-  for (const argv of cfg.verify ?? []) {
-    const result = await exec(argv[0], argv.slice(1), { cwd, timeoutMs: 300_000 });
+  const role = issueScope(task.issue, cfg);
+  const checkScope = async () => {
+    if (!role) return;
+    // No rename detection: both old and new names are checked, as are deletions.
+    const paths = (await git(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]) +
+      await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+    const reason = scopeFailure(paths, role, task.issue.body);
+    if (reason) throw new ScopeRejected(reason);
+  };
+  await checkScope();
+  const ticketVerify = parseTicketV2(task.issue.body).verify ?? [];
+  const trustErrors = verifyTrustErrors(ticketVerify, cfg.verify ?? []);
+  if (trustErrors.length) throw new VerificationFailed(`Ticket #${task.issue.number}: ${trustErrors.join("; ")}`);
+  for (const argv of [...cfg.verify ?? [], ...ticketVerify]) {
+    const result = await exec(argv[0], argv.slice(1), { cwd, timeoutMs: 300_000, env: verifyEnvironment() });
     if (result.code !== 0) {
       const tail = `${result.stdout}\n${result.stderr}`.slice(-6000);
       throw new VerificationFailed(`Coordinator verification failed (exit ${result.code}). Worktree and claim retained; no commit or submission.\n\nCommand (argv): ${JSON.stringify(argv)}\n\nOutput tail:\n${tail.split(/\r?\n/).map(line => `    ${line}`).join("\n")}`);
     }
   }
   await assertBranch();
+  await checkScope();
   await git(["add", "--all"]);
   await git(["commit", "-m", `${task.issue.title} (#${task.issue.number})`, "-m",
     `Worker: ${agent}; model: ${formatModelSpec(model) ?? "default"}`]);
@@ -63,7 +82,7 @@ export interface RunSummary {
   issue: number;
   outcome: "submitted" | "needs-attention" | "failed" | "requeued";
   prUrl?: string;
-  reason?: "budget spent";
+  reason?: string;
   durationMs: number;
 }
 
@@ -78,8 +97,10 @@ export function resolveTaskModel(
     resolveTierModel(agent, tier, cfg, issueAgent(issue) === agent ? issue.labels : []);
   // Role allowances constrain writable implementation, not independent review.
   if (opts.purpose !== "review") {
-    const route = validateRoute({ role: issueRole(issue), agent, tier, model }, cfg);
-    if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+    try {
+      const route = validateRoute({ ...parseTicketV2(issue.body), role: issueRole(issue), agent, tier, model }, cfg);
+      if (!route.ok) throw new Error(route.reason);
+    } catch (error) { throw new RouteRefusal(`#${issue.number}: disallowed route: ${(error as Error).message}`); }
   }
   return model;
 }
@@ -210,9 +231,17 @@ export async function processNext(
   }
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
-    ...(agent === "opencode" ? {
-      canClaim: (issue: Issue) => preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade),
-    } : {}),
+    canClaim: async (issue: Issue) => {
+      try { resolveTaskModel(agent, issue, cfg); }
+      catch (error) {
+        if (!(error instanceof RouteRefusal)) throw error;
+        // An unpinned task may still be runnable by another agent.
+        if (issueAgent(issue) === agent) await refuseRoute(issue, agent, cfg, cwd);
+        else log.warn(error.message);
+        return false;
+      }
+      return agent !== "opencode" || preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade);
+    },
   });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
@@ -234,7 +263,13 @@ export async function dispatchSpecific(
   const issue = open.get(number);
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
-  const agent = resolveDispatchAgent(issue, open, cfg);
+  let agent: string;
+  try { agent = resolveDispatchAgent(issue, open, cfg); }
+  catch (error) {
+    if (!(error instanceof RouteRefusal)) throw error;
+    await refuseRoute(issue, issueAgent(issue)!, cfg, cwd);
+    return { issue: number, outcome: "needs-attention", reason: "disallowed route", durationMs: 0 };
+  }
   const key = availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model);
   const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
@@ -244,7 +279,20 @@ export async function dispatchSpecific(
     return { issue: number, outcome: "requeued", durationMs: 0 };
   }
   const task = await claimSpecific(number, agent, cfg, cwd);
+  if (!task) return { issue: number, outcome: "requeued", durationMs: 0 };
   return processClaimed(task, agent, cfg, cwd);
+}
+
+/** A refusal spends no request budget and never constructs an adapter. */
+async function refuseRoute(issue: Issue, agent: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+  try { resolveTaskModel(agent, issue, cfg); return false; }
+  catch (error) {
+    if (!(error instanceof RouteRefusal)) throw error;
+    await editIssue(issue.number, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.todo] });
+    appendEvent({ type: "task.escalated", issue: issue.number, agent, detail: error.message }, cwd);
+    log.warn(error.message);
+    return true;
+  }
 }
 
 /** No harness or claim resources have been created: only advance the todo's route. */
@@ -253,7 +301,7 @@ async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd
   if (await endpointHealthy(agent, model?.model, cwd, cfg.adapters[agent])) return true;
   const current: CascadeRoute = { agent, ...model, tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
   const hop = nextHop(current, [], issueRole(issue), cfg,
-    member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd));
+    member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd), parseTicketV2(issue.body));
   if (hop) {
     // Failed relabels must not report a hop. Keep this path free of run telemetry:
     // no implementation harness ran and no ticket request budget was consumed.
@@ -281,6 +329,23 @@ async function processClaimed(
     log.warn("#" + n + ": budget spent; handing task to a human");
     return { issue: n, outcome: "needs-attention", reason: "budget spent", durationMs: 0 };
   }
+  let prompt: string | undefined;
+  if (cfg.pack !== undefined) {
+    try {
+      prompt = renderPackBrief(task.issue, cfg, cwd);
+      storeBrief(n, prompt, cwd);
+    } catch (error) {
+      const reason = `Incomplete brief: ${error instanceof Error ? error.message : String(error)}`;
+      await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+      appendEvent({ type: "task.escalated", issue: n, agent, detail: reason }, cwd);
+      log.warn(`#${n}: ${reason}`);
+      return { issue: n, outcome: "needs-attention", reason, durationMs: 0 };
+    }
+  }
+  if (await refuseRoute(task.issue, agent, cfg, cwd)) {
+    await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+    return { issue: n, outcome: "needs-attention", reason: "disallowed route", durationMs: 0 };
+  }
   const model = resolveTaskModel(agent, task.issue, cfg);
   const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");
@@ -300,13 +365,12 @@ async function processClaimed(
     console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
     const adapter = makeAdapter(agent, cfg);
-    const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
     logMark = logSize(logFile); // judge this run only by what it appends to the shared log
     const result = await adapter.runTask({
       issue: n,
       agent,
       worktree: task.worktree.path,
-      prompt,
+      prompt: prompt ?? buildBrief(task.issue, task.worktree, agent, cwd),
       model,
       logFile,
       ...limits,
@@ -331,7 +395,7 @@ async function processClaimed(
           }, cwd) : null);
       const current: CascadeRoute = { agent, ...model, tier: issueEffort(task.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
       const hop = limitedUntil ? nextHop(current, [], issueRole(task.issue), cfg,
-        member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd)) : null;
+        member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd), parseTicketV2(task.issue.body)) : null;
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
       if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd, hop ? { issue: task.issue, route: hop } : undefined))) {
@@ -377,12 +441,12 @@ async function processClaimed(
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
     await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree, disposableIgnored: cfg.disposableIgnored });
-    if (error instanceof VerificationFailed) {
+    if (error instanceof VerificationFailed || error instanceof ScopeRejected) {
       const comment = await exec("gh", ["issue", "comment", String(n), "--body-file", "-"], { cwd, input: error.message });
       if (comment.code !== 0) log.warn(`#${n}: could not comment verification failure: ${comment.stderr}`);
     }
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
-    summary = { issue: n, outcome: error instanceof VerificationFailed ? "needs-attention" : "failed", durationMs };
+    summary = { issue: n, outcome: error instanceof VerificationFailed || error instanceof ScopeRejected ? "needs-attention" : "failed", durationMs };
     telemetryOutcome = summary.outcome;
   }
 

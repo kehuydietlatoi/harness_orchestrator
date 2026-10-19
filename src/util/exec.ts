@@ -27,11 +27,11 @@ export const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 export function exec(
   cmd: string,
   args: string[] = [],
-  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number } = {},
+  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): Promise<ExecResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, shell: false });
+    const child = spawn(cmd, args, { cwd: opts.cwd, shell: false, ...(opts.env ? { env: opts.env } : {}) });
     let timedOut = false;
     const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
       timedOut = true;

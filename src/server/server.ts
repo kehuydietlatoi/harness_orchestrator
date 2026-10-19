@@ -1,3 +1,4 @@
+import { loadDesignContext } from "../tasks/brief-context.js";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "../routing/assign.js";
@@ -248,6 +249,8 @@ async function handleAssign(
 
 /** Preview a ticket draft: parse + validate, return the resolved plan. Writes nothing. */
 async function handlePlanPreview(
+  cwd: string,
+  deps: ServerDeps,
   request: http.IncomingMessage,
   response: http.ServerResponse,
 ): Promise<void> {
@@ -258,7 +261,8 @@ async function handlePlanPreview(
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     return;
   }
-  sendJson(response, 200, resolvePlan(tickets)); // { tickets, errors, warnings }
+  const config = deps.loadConfig(cwd);
+  sendJson(response, 200, resolvePlan(tickets, config.pack === undefined ? {} : { config, design: loadDesignContext(cwd) })); // { tickets, errors, warnings }
 }
 
 /** Create issues from a ticket draft — the second mutating route. Refuses (400) on
@@ -276,13 +280,14 @@ async function handlePlanCreate(
     sendJson(response, 400, { error: error instanceof Error ? error.message : String(error) });
     return;
   }
-  const { agents, tierAliases } = deps.loadConfig(cwd); // a ticket routed to an unknown agent is created unrouted
-  const { errors } = resolvePlan(tickets, { agents, tierAliases });
+  const config = deps.loadConfig(cwd);
+  const { agents, tierAliases } = config; // a ticket routed to an unknown agent is created unrouted
+  const { errors } = resolvePlan(tickets, { design: config?.pack === undefined ? undefined : loadDesignContext(cwd), config, agents, tierAliases });
   if (errors.length) {
     sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
     return;
   }
-  const result = await deps.createIssues(tickets, cwd, { agents, tierAliases });
+  const result = await deps.createIssues(tickets, cwd, { config, agents, tierAliases });
   sendJson(response, 200, result);
 }
 
@@ -370,7 +375,7 @@ export function createServer(cwd: string, deps: ServerDeps = defaultDeps): http.
           : pathname === "/actions/assign"
             ? handleAssign(cwd, deps, request, response)
             : pathname === "/actions/plan-preview"
-              ? handlePlanPreview(request, response)
+              ? handlePlanPreview(cwd, deps, request, response)
               : pathname === "/actions/plan-create"
                 ? handlePlanCreate(cwd, deps, request, response)
                 : pathname === "/actions/dispatch"

@@ -40,7 +40,7 @@ class Walk {
     this.to("auto.decide", "Re-observe the current head, review, CI and budgets; signals alone never authorize work.", observation);
     const result = decide("decideStep", decideStep, input);
     this.to(`step.${result.output.kind}`, `decideStep chooses ${JSON.stringify(result.output)}.`, result.decision,
-      result.output.kind === "escalate" ? input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
+      result.output.kind === "escalate" ? input.scopeFailure ? "worker diff violates scope" : input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
     return result.output;
   }
   review(changes: boolean): void {
@@ -160,6 +160,12 @@ const cappedFacts = facts({ budgetSpent: true });
 capped.step(cappedFacts);
 capped.handoff(cappedFacts);
 
+const scoped = new Walk("autopilot-scope-rejected", "Worker diff outside role scope", ["escalation"],
+  "A worker pushed a forbidden path without orch submit; no review starts and the worktree is retained.");
+const scopedFacts = facts({ scopeFailure: "Worker diff rejected: design/combat.md: forbidden by design/**" });
+scoped.step(scopedFacts);
+scoped.handoff(scopedFacts);
+
 const cascade = new Walk("autopilot-cascade", "Cascade after a failed fix", ["autopilot-fix"], "One failed fix switches to the next configured model before retrying.");
 cascade.step(facts({ failedFixAttempts: 1, nextCascade: { agent: "claude", tier: "lead" }, review: { approved: false, changesRequested: true } }));
 cascade.b.patch(ISSUE, { agent: "claude" });
@@ -172,6 +178,6 @@ export const AUTOPILOT_SCENARIOS: readonly Scenario[] = [
   fixScenario("autopilot-ci-fix", "Fix failing CI", "ci"),
   fixScenario("autopilot-conflict", "Merge the base to resolve conflict", "conflict"),
   waitScenario("autopilot-wait-ci", false), waitScenario("autopilot-wait-mergeability", true),
-  capped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
+  capped.b.build(), scoped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
   triageScenario("autopilot-triage-escalate", false), triageScenario("autopilot-triage-disabled", false, true), ambiguous,
 ];

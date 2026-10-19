@@ -1,10 +1,11 @@
-import type { TierAliases } from "../config.js";
+import { renderTicketV2 } from "./ticket-metadata.js";
+import { loadDesignContext } from "./brief-context.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createIssue, ensureLabels, listIssues, type Issue } from "../github/github.js";
+import { createIssue, ensureLabels, ensureMilestone, listIssues, type Issue } from "../github/github.js";
 import { STATUS, agentLabel, effortLabel, labelDefs } from "../github/labels.js";
 import { renderDefinitionOfDone } from "./definition-of-done.js";
-import { parseTickets, resolvePlan, type ResolvedTicket, type Ticket } from "./plan.js";
+import { parseTickets, resolvePlan, type ResolvedTicket, type Ticket, type TicketV2, type ResolveOptions } from "./plan.js";
 
 const MARKER_VERSION = "v1";
 
@@ -41,17 +42,12 @@ export interface PlanCreateDeps {
   createIssue: typeof createIssue;
   /** Creates missing routing labels before the first routed create; omitted, nothing is ensured. */
   ensureLabels?: typeof ensureLabels;
+  ensureMilestone?: typeof ensureMilestone;
 }
 
-export interface PlanCreateOptions {
-  /** Plan brief (the brainstorm's goal, decisions, constraints) embedded in every created issue. */
-  brief?: string;
-  /** Configured agents: a ticket routed to any other agent is created unrouted. */
-  agents?: readonly string[];
-  tierAliases?: TierAliases;
-}
+export type PlanCreateOptions = ResolveOptions;
 
-const defaultDeps: PlanCreateDeps = { listIssues, createIssue, ensureLabels };
+const defaultDeps: PlanCreateDeps = { listIssues, createIssue, ensureLabels, ensureMilestone };
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -102,12 +98,17 @@ export function renderPlanContext(brief: string | undefined): string {
 }
 
 /** Labels a new issue is created with: todo, plus the plan's validated routing. Pure. */
-export function creationLabels(ticket: Pick<ResolvedTicket, "agent" | "effort">): string[] {
+export function creationLabels(ticket: Pick<ResolvedTicket, "agent" | "effort"> & TicketV2): string[] {
   const labels: string[] = [STATUS.todo];
   if (ticket.agent) labels.push(agentLabel(ticket.agent));
   if (ticket.agent && ticket.effort) labels.push(effortLabel(ticket.effort));
+  for (const field of ["role", "kind", "sensitivity", "model"] as const) {
+    if (ticket[field] !== undefined) labels.push(`${field}:${ticket[field]}`);
+  }
   return labels;
 }
+
+export { parseTicketV2, renderTicketV2 } from "./ticket-metadata.js";
 
 /** Pure: render the GitHub issue body from a ticket + resolved dependency numbers. */
 export function renderTicketBody(
@@ -131,10 +132,30 @@ export function renderTicketBody(
   if (afterNumbers.length) {
     parts.push(`After: ${afterNumbers.map((n) => `#${n}`).join(", ")}`);
   }
+  if (ticket.budget) {
+    const tokens: string[] = [];
+    if (ticket.budget.minutes !== undefined) tokens.push(`${decimal(ticket.budget.minutes)}m`);
+    if (ticket.budget.usd !== undefined) tokens.push(`$${decimal(ticket.budget.usd)}`);
+    if (ticket.budget.requests !== undefined) tokens.push(`${decimal(ticket.budget.requests)}req`);
+    if (tokens.length) parts.push(`Budget: ${tokens.join(" ")}`);
+  }
+  const metadata = renderTicketV2(ticket);
+  if (metadata) parts.push(metadata);
   const context = renderPlanContext(brief);
   if (context) parts.push(context);
   if (markers) parts.push(`${markers.plan}\n${markers.ticket}`);
   return parts.join("\n\n") || "_(no description)_";
+}
+
+/** Budget's line grammar uses decimals, including for numbers JS prints as exponents. */
+function decimal(value: number): string {
+  const [coefficient, exponent] = String(value).split("e");
+  if (exponent === undefined) return coefficient;
+  const digits = coefficient.replace(".", "");
+  const point = (coefficient.indexOf(".") < 0 ? coefficient.length : coefficient.indexOf(".")) + Number(exponent);
+  if (point <= 0) return `0.${"0".repeat(-point)}${digits}`;
+  if (point >= digits.length) return digits + "0".repeat(point - digits.length);
+  return `${digits.slice(0, point)}.${digits.slice(point)}`;
 }
 
 function failure(ticket: Ticket, error: unknown): Failed {
@@ -186,7 +207,7 @@ export async function createFromPlan(
   deps: PlanCreateDeps = defaultDeps,
   opts: PlanCreateOptions = {},
 ): Promise<PlanCreateResult> {
-  const plan = resolvePlan(tickets, opts);
+  const plan = resolvePlan(tickets, { ...opts, design: opts.config?.pack === undefined ? undefined : loadDesignContext(cwd) });
   if (plan.errors.length) throw new Error(`invalid tickets: ${plan.errors.join("; ")}`);
 
   const result: PlanCreateResult = { created: [], reused: [], failed: [] };
@@ -221,6 +242,7 @@ export async function createFromPlan(
   }
 
   const idToNumber = new Map<string, number>();
+  const milestones = new Set<string>();
   for (let index = 0; index < tickets.length; index++) {
     const ticket = tickets[index];
     const marker = markers.tickets[index];
@@ -256,7 +278,14 @@ export async function createFromPlan(
     const afterNumbers = plan.tickets[index].knownAfter.map((id) => idToNumber.get(id) as number);
     const body = renderTicketBody(ticket, depNumbers, { plan: markers.plan, ticket: marker }, afterNumbers, opts.brief);
     try {
-      const number = await deps.createIssue(ticket.title, body, creationLabels(plan.tickets[index]), { cwd });
+      if (ticket.milestone !== undefined && !milestones.has(ticket.milestone)) {
+        if (!deps.ensureMilestone) throw new Error("milestone creation is unavailable");
+        await deps.ensureMilestone(ticket.milestone, cwd);
+        milestones.add(ticket.milestone);
+      }
+      const number = await deps.createIssue(ticket.title, body, creationLabels(plan.tickets[index]), {
+        cwd, ...(ticket.milestone !== undefined ? { milestone: ticket.milestone } : {}),
+      });
       const created = { id: ticket.id, number, title: ticket.title };
       result.created.push(created);
       if (ticket.id) idToNumber.set(ticket.id, number);

@@ -36,6 +36,19 @@ export async function currentLogin(opts: { cwd?: string } = {}): Promise<string>
 
 const REST_PAGE_SIZE = 100;
 
+/** Include both sides of renames so moving a protected file cannot evade review. */
+export async function prChangedPaths(number: number, opts: { cwd?: string } = {}): Promise<string[]> {
+  const files = await paginatedApi<{ filename: string; previous_filename?: string }>(
+    `repos/{owner}/{repo}/pulls/${number}/files`, {}, opts);
+  // GitHub's file-list limit must never turn an incomplete observation into permission to merge.
+  if (files.length >= 3000) throw new Error("PR file list may be truncated; cannot check protected verify paths");
+  if (files.some((file) => typeof file.filename !== "string" ||
+      (file.previous_filename !== undefined && typeof file.previous_filename !== "string"))) {
+    throw new Error("invalid PR file list");
+  }
+  return files.flatMap((file) => file.previous_filename ? [file.filename, file.previous_filename] : [file.filename]);
+}
+
 /** Page through a REST list endpoint via `gh api`, following `page`/`per_page`
  * until a page comes back short — the only way to get a complete result set
  * without an artificial cap (the `gh <noun> list` subcommands only take a
@@ -143,13 +156,24 @@ export async function getIssue(number: number, opts: { cwd?: string } = {}): Pro
   return parseIssue(JSON.parse(r.stdout));
 }
 
+/** Ensure an exact milestone title, reconciling concurrent creates/response loss. */
+export async function ensureMilestone(title: string, cwd: string = process.cwd()): Promise<void> {
+  const find = async () => (await paginatedApi<{ title: string }>(
+    "repos/{owner}/{repo}/milestones", { state: "all" }, { cwd },
+  )).some((milestone) => milestone.title === title);
+  if (await find()) return;
+  const r = await exec("gh", ["api", "repos/{owner}/{repo}/milestones", "--method", "POST", "--raw-field", `title=${title}`], { cwd });
+  if (r.code !== 0 && !(await find())) throw new Error(`could not create milestone: ${r.stderr.trim()}`);
+}
+
 export async function createIssue(
   title: string,
   body: string,
   labels: string[],
-  opts: { cwd?: string } = {},
+  opts: { cwd?: string; milestone?: string } = {},
 ): Promise<number> {
   const args = ["issue", "create", "--title", title, "--body", body];
+  if (opts.milestone !== undefined) args.push("--milestone", opts.milestone);
   for (const l of labels) args.push("--label", l);
   const r = await exec("gh", args, { cwd: opts.cwd });
   if (r.code !== 0) throw new Error(`gh issue create failed: ${r.stderr.trim()}`);

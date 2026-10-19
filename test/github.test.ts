@@ -5,6 +5,26 @@ vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(.
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
 const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff, closeIssue } = await import("../src/github/github.js");
+const { prChangedPaths } = await import("../src/github/github.js");
+
+describe("prChangedPaths", () => {
+  beforeEach(() => execMock.mockReset());
+  it("paginates and retains both sides of renames and deleted paths", async () => {
+    execMock.mockResolvedValueOnce({ code: 0, stderr: "", stdout: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ filename: `src/${i}.ts` }))) });
+    execMock.mockResolvedValueOnce({ code: 0, stderr: "", stdout: JSON.stringify([
+      { filename: "old-config.txt", previous_filename: "vitest.config.ts", status: "renamed" },
+      { filename: "orch.config.json", status: "removed" },
+    ]) });
+    const paths = await prChangedPaths(7, { cwd: "/repo" });
+    expect(paths).toHaveLength(103);
+    expect(paths.slice(-3)).toEqual(["old-config.txt", "vitest.config.ts", "orch.config.json"]);
+    expect(execMock.mock.calls[1][1][1]).toContain("page=2");
+  });
+  it("throws instead of treating a failed file read as no protected changes", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    await expect(prChangedPaths(7)).rejects.toThrow(/offline/);
+  });
+});
 
 describe("closeIssue", () => {
   beforeEach(() => execMock.mockReset());
@@ -313,5 +333,48 @@ describe("listLabels", () => {
     execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "boom" });
 
     expect(await listLabels()).toEqual([]);
+  });
+});
+
+
+describe("milestones for plan creation", () => {
+  beforeEach(() => execMock.mockReset());
+
+  it("finds an existing milestone beyond the first page without creating it", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ title: 'Other ' + i }))) });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify([{ title: "Phase 2" }]) });
+    await ensureMilestone("Phase 2", "/repo");
+    expect(execMock).toHaveBeenCalledTimes(2);
+    expect(execMock.mock.calls[1][1][1]).toContain("page=2");
+  });
+
+  it("creates a missing milestone with literal title argv", async () => {
+    const { ensureMilestone, createIssue } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "{}" });
+    await ensureMilestone("Phase 2", "/repo");
+    expect(execMock.mock.calls[1]).toEqual(["gh", ["api", "repos/{owner}/{repo}/milestones", "--method", "POST", "--raw-field", "title=Phase 2"], { cwd: "/repo" }]);
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "https://github.com/o/r/issues/10" });
+    await expect(createIssue("Ticket", "Body", ["status:todo"], { cwd: "/repo", milestone: "Phase 2" })).resolves.toBe(10);
+    expect(execMock.mock.calls[2][1]).toContain("--milestone");
+    expect(execMock.mock.calls[2][1]).toContain("Phase 2");
+  });
+
+  it("reconciles a concurrent create or lost response without retrying the write", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 1, stderr: "response lost" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify([{ title: "Phase 2" }]) });
+    await expect(ensureMilestone("Phase 2")).resolves.toBeUndefined();
+    expect(execMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails closed when the milestone cannot be created", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 1, stderr: "permission denied" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    await expect(ensureMilestone("Phase 2")).rejects.toThrow("permission denied");
   });
 });

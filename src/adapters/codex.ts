@@ -1,4 +1,5 @@
 import { logSize, readLogSince } from "../util/log-file.js";
+import { workerEnvironment } from "../util/environment.js";
 import { commandExists } from "../util/exec.js";
 import { spawnLogged } from "../util/spawn.js";
 import type { AdapterConfig, ModelSpec } from "../config.js";
@@ -104,6 +105,7 @@ export class CodexAdapter implements HarnessAdapter {
     const logMark = ctx.logFile ? logSize(ctx.logFile) : 0; // the log is shared by every retry
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
+      env: workerEnvironment(this.id, this.cfg.env),
       input: ctx.prompt,
       logFile: ctx.logFile,
       timeoutMs: ctx.timeoutMs,
@@ -125,6 +127,6 @@ export class CodexAdapter implements HarnessAdapter {
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
     const args = ctx.readOnly ? buildCodexReviewArgs(ctx.model) : buildCodexTaskArgs(ctx.model);
-    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromCodexJson, codexDelegation);
+    return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromCodexJson, codexDelegation, workerEnvironment(this.id, this.cfg.env));
   }
 }

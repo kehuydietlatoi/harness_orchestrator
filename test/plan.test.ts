@@ -1,6 +1,71 @@
 import { describe, it, expect } from "vitest";
 import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
 import { renderTicketBody } from "../src/tasks/plan-create.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
+
+describe("needs and sensitivity planning", () => {
+  it("permits vision on Claude, refusing default Codex and web everywhere", () => {
+    expect(resolvePlan([{ title: "See", agent: "claude", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors).toEqual([]);
+    expect(resolvePlan([{ id: "see", title: "See", agent: "codex", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/ticket 1.*see.*needs.*vision/);
+    expect(resolvePlan([{ title: "Search", needs: ["web"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/no satisfying.*web/);
+  });
+  it.each(["engine", "image-gen", "audio-gen"] as const)("defers %s to Phases 3-4", need => {
+    expect(resolvePlan([{ title: "Future", needs: [need] }]).errors.join()).toContain("Phases 3-4");
+  });
+  it("finds a capable later member but rejects an explicit incapable selection", () => {
+    const config = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex", model: "a" }, { agent: "codex", model: "b", capabilities: ["vision"] }] } };
+    expect(resolvePlan([{ title: "See", needs: ["vision"] }], { config }).errors).toEqual([]);
+    expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "a", needs: ["vision"] }], { config }).errors.join()).toContain("no satisfying");
+    expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "b", needs: ["vision"] }], { config }).errors).toEqual([]);
+  });
+});
+
+describe("ticket verify trust", () => {
+  const config = { ...DEFAULT_CONFIG, verify: [["node", "--test"]] };
+  it("accepts only project prefixes plus paths, separators and plain numbers", () => {
+    expect(resolvePlan([{ id: "checks", title: "Check", verify: [["node", "--test", "--", "tests/a.test.ts", "3"]] }], { config }).errors).toEqual([]);
+  });
+  it.each(["-e", "--require", "..", "../escape", "tests/../escape", "/etc/passwd", "C:\\tests\\a.ts", "\\\\host\\share", "tests/a\0.ts"])("rejects argument %j with the ticket identity", (arg) => {
+    const errors = resolvePlan([{ id: "checks", title: "Check", verify: [["node", "--test", arg]] }], { config }).errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('ticket 1 ("checks")');
+    expect(errors[0]).toContain(JSON.stringify(arg));
+  });
+  it("rejects unrelated executables and changes within the prefix", () => {
+    for (const argv of [["python", "tests/check.py"], ["node", "-e", "code"]]) {
+      expect(resolvePlan([{ id: "checks", title: "Check", verify: [argv] }], { config }).errors[0])
+        .toContain(JSON.stringify(argv[argv[0] === "node" ? 1 : 0]));
+    }
+    expect(resolvePlan([{ title: "Check", verify: [["node", "--test"]] }]).errors).toHaveLength(1);
+  });
+});
+
+describe("exclusive plan locks", () => {
+  it.each([["scenes/main.scene", "scenes/main.scene"], ["assets/**", "assets/hero.png"], ["assets/*/hero.png", "assets/characters/*.png"]])(
+    "rejects independent tickets sharing %s / %s", (left, right) => {
+      const result = resolvePlan([{ id: "first", title: "a", locks: [left] }, { id: "second", title: "b", locks: [right] }]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toMatch(/first.*second.*locks overlap/);
+    });
+
+  it("allows sharing through transitive hard dependencies, but not after preferences", () => {
+    const a = { id: "a", title: "a", locks: ["scenes/**"] };
+    const b = { id: "b", title: "b", dependsOn: ["a"] };
+    const c = { id: "c", title: "c", locks: ["scenes/main.scene"], dependsOn: ["b"] };
+    expect(resolvePlan([a, b, c]).errors).toEqual([]);
+    expect(resolvePlan([a, { ...c, dependsOn: [], after: ["a"] }]).errors.join(" ")).toMatch(/a.*c.*locks overlap/);
+  });
+
+  it("requires nonempty asset locks in parse and resolve and rejects escaping paths", () => {
+    for (const locks of [undefined, []]) {
+      const ticket = { id: "hero", title: "hero", kind: "asset" as const, locks };
+      expect(() => parseTickets(JSON.stringify([ticket]))).toThrow(/hero.*locks.*asset/);
+      expect(resolvePlan([ticket]).errors.join(" ")).toMatch(/hero.*locks.*asset/);
+    }
+    expect(resolvePlan([{ title: "bad", locks: ["../outside"] }]).errors.join(" ")).toMatch(/locks.*repository-relative/);
+    expect(resolvePlan([{ title: "hero", kind: "asset", locks: ["assets/hero.png"] }]).errors).toEqual([]);
+  });
+});
 
 describe("renderTicketBody", () => {
   it("includes body, file-ownership hints, and resolved deps", () => {
@@ -112,7 +177,7 @@ describe("resolvePlan", () => {
       { title: "", id: "a" },
       { title: "B", id: "a" },
     ]);
-    expect(r.errors).toEqual(["ticket 1 needs a title", 'ticket 2: duplicate id "a"']);
+    expect(r.errors).toEqual(['ticket 1 ("a"): title needs a title', 'ticket 2 ("a"): id duplicate id "a"']);
   });
 
   it("warns and drops an unknown/later dependency", () => {
@@ -235,4 +300,41 @@ it.each([
 it("uses configured tier aliases for legacy plan effort", () => {
   const plan = resolvePlan([{ title: "tier", agent: "codex", effort: "easy" }], { tierAliases: { easy: "free" } });
   expect(plan.tickets[0].effort).toBe("free");
+});
+
+
+describe("v2 structural validation", () => {
+  it("reports three independent errors with ticket id and field", () => {
+    const plan = resolvePlan([{ id: "T1", title: "Check fields", kind: "bad", needs: ["telepathy"], verify: ["npm test"] }] as any);
+    expect(plan.errors).toHaveLength(3);
+    for (const field of ["kind", "needs", "verify"]) expect(plan.errors).toContainEqual(expect.stringMatching(new RegExp('T1.*' + field)));
+  });
+
+  it("keeps checking later tickets and semantic errors after malformed fields", () => {
+    const plan = resolvePlan([{ id: "T1", title: "", files: 2 }, null, { id: "T1", title: "Second", budget: { minutes: -1, requests: 0.5 } }] as any);
+    expect(plan.errors.join('; ')).toMatch(/T1.*files/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*title/);
+    expect(plan.errors.join('; ')).toMatch(/ticket 2.*ticket/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*id duplicate/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*budget.minutes/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*budget.requests/);
+  });
+
+  it.each([
+    { role: 3 }, { role: "Bad Role" }, { milestone: "" }, { decisions: ["D-1"] },
+    { context: ["Not an anchor"] }, { locks: [""] }, { locks: ["a", "a"] },
+    { sensitivity: "private" }, { model: [] }, { budget: null }, { budget: { extra: 1 } },
+    { budget: { usd: Infinity } }, { verify: "npm test" }, { verify: [] },
+    { verify: [[]] }, { verify: [["npm", " "]] }, { verify: [["npm", 1]] },
+  ])("rejects malformed v2 fields: %j", (fields) => {
+    expect(resolvePlan([{ title: "Valid title", ...fields }] as any).errors.length).toBeGreaterThan(0);
+    expect(() => parseTickets(JSON.stringify([{ title: "Valid title", ...fields }]))).toThrow();
+  });
+
+  it("preserves argv boundaries and accepts optional empty arrays and zero budgets", () => {
+    const fields = { verify: [["node", "path with spaces/check.js", "literal|argument"]], needs: [], locks: [], budget: { minutes: 0, usd: 0, requests: 0 } };
+    const [ticket] = parseTickets(JSON.stringify([{ title: "A valid title", ...fields }]));
+    expect(resolvePlan([ticket], { config: { ...DEFAULT_CONFIG, verify: [["node"]] } }).errors).toEqual([]);
+    expect(resolvePlan([ticket]).tickets[0]).toMatchObject(fields);
+  });
 });

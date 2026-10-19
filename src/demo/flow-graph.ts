@@ -288,6 +288,7 @@ export const EDGES: readonly FlowEdge[] = [
   edge("step.triage", "step.escalate", "escalate, paused, failed or unparseable", "triage", "escalation"),
   edge("auto.decide", "step.escalate", "budget spent, no triage left (spent or off)", "escalation"),
   edge("auto.decide", "step.escalate", "ticket budget spent", "escalation"),
+  edge("auto.decide", "step.escalate", "worker diff violates scope", "escalation"),
   edge("step.escalate", "auto.handoff", "label + PR comment", "escalation"),
   edge("auto.handoff", "step.none", "loop ignores the task until handed back", "escalation"),
   edge("auto.decide", "auto.report", "drained or plan-complete", "report"),

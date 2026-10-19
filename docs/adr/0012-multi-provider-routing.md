@@ -122,7 +122,7 @@ run configured verify commands, stage changes, commit with
 then use normal submission in [src/tasks/service.ts](../../src/tasks/service.ts).
 Existing worker commits use the ordinary submit path.
 
-Verify commands come only from the coordinator-loaded `orch.config.json` `verify`
+Originally, verify commands came only from the coordinator-loaded `orch.config.json` `verify`
 argv arrays, validated by [src/config.ts](../../src/config.ts), never from issue
 text or worker-provided instructions. This is a trust boundary: orch executes
 them outside any harness sandbox, in the task worktree, through
@@ -131,6 +131,10 @@ timeout per command. Failed verification retains the worktree and claim, marks
 needs-attention, and comments the failing argv/output tail instead of submitting.
 [src/adapters/opencode.ts](../../src/adapters/opencode.ts) allows only safely
 representable literal verify commands in writable profiles and keeps push denied.
+
+[ADR-0013](0013-ticket-verify-trust.md) extends this boundary with constrained
+ticket argv, a cleaned environment for all host checks, and lead review of
+protected verification paths.
 
 ## Budgets and budget-stop reporting
 

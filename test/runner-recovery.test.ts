@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { loadPack } from "../src/pack/load.js";
+import { renderTicketV2 } from "../src/tasks/ticket-metadata.js";
+import { readEvents } from "../src/tasks/events.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
   claimNext: vi.fn(),
+  claimSpecific: vi.fn(),
+  listIssues: vi.fn(),
   submit: vi.fn(),
   buildBrief: vi.fn(() => "brief"),
   makeAdapter: vi.fn(),
@@ -35,6 +40,7 @@ vi.mock("../src/util/exec.js", () => ({ exec: mocks.exec }));
 
 vi.mock("../src/tasks/service.js", () => ({
   claimNext: mocks.claimNext,
+  claimSpecific: mocks.claimSpecific,
   submit: mocks.submit,
 }));
 vi.mock("../src/tasks/brief.js", () => ({ buildBrief: mocks.buildBrief }));
@@ -43,6 +49,7 @@ vi.mock("../src/adapters/index.js", () => ({
 }));
 vi.mock("../src/github/github.js", () => ({
   getIssue: mocks.getIssue,
+  listIssues: mocks.listIssues,
   editIssue: mocks.editIssue,
   ensureLabels: mocks.ensureLabels,
   listOpenPrs: mocks.listOpenPrs,
@@ -64,7 +71,7 @@ vi.mock("../src/git/git.js", () => ({
   countCommitsAhead: mocks.countCommitsAhead,
 }));
 
-const { processNext, recordRun, runLoop } = await import("../src/tasks/runner.js");
+const { dispatchSpecific, processNext, recordRun, runLoop } = await import("../src/tasks/runner.js");
 const { markUnavailable, unavailableUntil } = await import("../src/board/availability.js");
 
 const issue = {
@@ -114,6 +121,80 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
+  it.each([{ needs: ["vision"] as const }, { sensitivity: "secret" as const }])("refuses dispatch filters before claiming or constructing an adapter: %j", async metadata => {
+    const agent = "needs" in metadata ? "codex" : "opencode";
+    const task = { ...issue, body: renderTicketV2({ ...metadata, needs: "needs" in metadata ? [...metadata.needs] : undefined }), labels: ["agent:" + agent, "status:todo"] };
+    mocks.listIssues.mockResolvedValue([task]);
+    const cfg = { ...DEFAULT_CONFIG, agents: [...DEFAULT_CONFIG.agents, "opencode"], adapters: { ...DEFAULT_CONFIG.adapters, opencode: { cmd: "opencode" } } };
+    expect(await dispatchSpecific(35, cfg, cwd)).toMatchObject({ outcome: "needs-attention", reason: "disallowed route" });
+    expect(mocks.claimSpecific).not.toHaveBeenCalled();
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+    expect(mocks.runTask).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs|sensitivity/);
+  });
+
+  it("rechecks filters on an already claimed task without recording a harness run", async () => {
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: renderTicketV2({ needs: ["vision"] }) }, worktree: { path: worktree, branch: "task/35" } });
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention" });
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+  });
+
+  it("leaves an unpinned vision task ready for Claude after Codex skips it", async () => {
+    const candidate = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["status:todo"] };
+    mocks.claimNext.mockImplementation(async (_agent, _cfg, _cwd, opts) => {
+      if (!(await opts.canClaim(candidate))) return null;
+      return { issue: candidate, worktree: { path: worktree, branch: "task/35" } };
+    });
+
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toBeNull();
+    expect(candidate.labels).toEqual(["status:todo"]);
+    expect(mocks.editIssue).not.toHaveBeenCalled();
+    expect(readEvents(cwd)).toEqual([]);
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.countCommitsAhead.mockResolvedValue(1);
+    mocks.getIssue.mockResolvedValue(candidate);
+    expect(await processNext("claude", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "submitted" });
+    expect(mocks.makeAdapter).toHaveBeenCalledWith("claude", DEFAULT_CONFIG);
+    expect(mocks.runTask).toHaveBeenCalledTimes(1);
+    expect(mocks.editIssue.mock.calls.some(([, edit]) => edit.addLabels?.includes("needs-attention"))).toBe(false);
+  });
+
+  it.each(["empty required", "superseded decision", "missing anchor"])("refuses to spawn on %s and preserves the reason", async (problem) => {
+    const pack = loadPack("test/fixtures/pack");
+    mkdirSync(join(cwd, "design"));
+    writeFileSync(join(cwd, "design/decisions.md"), "| D-001 | Old rule | superseded | D-002 | today |");
+    const metadata = renderTicketV2({ role: "gameplay-programmer", kind: "code", verify: [["npm", "test"]],
+      ...(problem === "superseded decision" ? { decisions: ["D-001"] } : {}),
+      ...(problem === "missing anchor" ? { context: ["combat.missing"] } : {}),
+    });
+    const body = (problem === "empty required" ? "Goal.\n\n" : "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n") + metadata;
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd);
+    expect(result?.outcome).toBe("needs-attention");
+    expect(result?.reason).toMatch(problem === "empty required" ? /required ticket.acceptance/ : problem === "superseded decision" ? /D-001 is superseded/ : /anchor combat.missing/);
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+    expect(mocks.runTask).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"], removeLabels: ["status:claimed", "status:in-progress"] }));
+    expect(readEvents(cwd).at(-1)?.detail).toBe(result?.reason);
+  });
+
+  it("passes the stored pack brief to the harness", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    const body = "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n" + renderTicketV2({ role: "gameplay-programmer", verify: [["npm", "test"]] });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1 });
+    await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd);
+    const stored = readFileSync(join(cwd, ".state/briefs/issue-35-1.md"), "utf8");
+    expect(mocks.runTask.mock.calls[0][0].prompt).toBe(stored);
+    expect(mocks.buildBrief).not.toHaveBeenCalled();
+  });
+
   it("reports a ticket time budget cutoff as budget-spent", async () => {
     mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: "Budget: 0.2m" }, worktree: { path: worktree, branch: "task/35" } });
     mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 12_300 });
@@ -144,6 +225,27 @@ describe("processNext recovery", () => {
     expect(await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 0.2 } } }, cwd)).toMatchObject({ outcome: "failed" });
   });
 
+  it.each(["tracked", "untracked"])("rejects forbidden leftover %s output without committing or submitting", async kind => {
+    const pack = loadPack("test/fixtures/pack");
+    const body = "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n" + renderTicketV2({ role: "gameplay-programmer", verify: [["npm", "test"]] });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body, labels: [...issue.labels, "role:gameplay-programmer"] }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M design/game.md" :
+        args[0] === (kind === "tracked" ? "diff" : "ls-files") ? "design/game.md\0" : "" }));
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack, roles: { "gameplay-programmer": { tiers: ["standard", "lead"], families: ["openai", "anthropic"] } }, verify: [["npm", "test"]] }, cwd);
+    expect(result?.outcome).toBe("needs-attention");
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.exec.mock.calls.some(([cmd, argv]) => cmd === "npm" || argv[0] === "add" || argv[0] === "commit")).toBe(false);
+    expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "35", "--body-file", "-"], {
+      cwd, input: expect.stringContaining('"design/game.md": forbidden by design/**'),
+    });
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+  });
+
   it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {
     mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
     mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
@@ -164,7 +266,7 @@ describe("processNext recovery", () => {
       ["git", ["commit", "-m", "Recover runner failures (#35)", "-m",
         `Worker: ${agent}; model: ${agent === "opencode" ? "default" : agent === "codex" ? "gpt-6.1-sol@medium" : "claude-sonnet-5-5@medium"}`]],
     ]);
-    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000 });
+    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object) });
     expect(mocks.submit).toHaveBeenCalledWith(35, agent, cfg, cwd);
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });
@@ -176,6 +278,43 @@ describe("processNext recovery", () => {
       stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M greet.js" : "" }));
     expect((await processNext("codex", DEFAULT_CONFIG, cwd))?.outcome).toBe("submitted");
     expect(mocks.exec.mock.calls.every(([cmd]) => cmd === "git")).toBe(true);
+  });
+
+  it("runs ticket checks after project checks with a cleaned environment in the worktree", async () => {
+    const secrets = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SERVICE_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENCODE_CONFIG", "CODEX_HOME", "github_token", "NODE_AUTH_TOKEN"];
+    for (const key of secrets) vi.stubEnv(key, "test-secret");
+    vi.stubEnv("NODE_ENV", "test");
+    try {
+      const body = '## Ticket metadata (v2)\n\n```json\n' + JSON.stringify({ verify: [["node", "--test", "--", "tests/a.test.ts", "3"]] }) + '\n```';
+      mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+      mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+      mocks.getIssue.mockResolvedValue(issue);
+      mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+        stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M a.ts" : "" }));
+      expect((await processNext("codex", { ...DEFAULT_CONFIG, verify: [["node", "--test"]] }, cwd))?.outcome).toBe("submitted");
+      const checks = mocks.exec.mock.calls.filter(([cmd]) => cmd === "node");
+      expect(checks.map(([, argv]) => argv)).toEqual([["--test"], ["--test", "--", "tests/a.test.ts", "3"]]);
+      for (const [, , opts] of checks) {
+        expect(opts).toMatchObject({ cwd: worktree, timeoutMs: 300_000, env: { NODE_ENV: "test" } });
+        for (const key of secrets) expect(opts.env).not.toHaveProperty(key);
+        const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")!;
+        expect(opts.env[pathKey]).toBe(process.env[pathKey]);
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("revalidates issue verify at runtime before executing host checks", async () => {
+    const body = '## Ticket metadata (v2)\n\n```json\n{"verify":[["node","--test","--require","evil.js"]]}\n```';
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M a.ts" : "" }));
+    expect((await processNext("codex", { ...DEFAULT_CONFIG, verify: [["node", "--test"]] }, cwd))?.outcome).toBe("needs-attention");
+    expect(mocks.exec.mock.calls.some(([cmd]) => cmd === "node")).toBe(false);
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });
 
   it.each([1, 124])("retains output and comments a failed verification (exit %s)", async code => {
@@ -226,10 +365,10 @@ describe("processNext recovery", () => {
     mocks.claimNext.mockResolvedValue(null);
 
     expect(await processNext("codex", DEFAULT_CONFIG, cwd, { requireRouted: true })).toBeNull();
-    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, { requireRouted: true });
+    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, expect.objectContaining({ requireRouted: true, canClaim: expect.any(Function) }));
 
     await processNext("codex", DEFAULT_CONFIG, cwd);
-    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, {});
+    expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, expect.objectContaining({ canClaim: expect.any(Function) }));
   });
 
   it.each(["endpoint-unavailable", "quota"] as const)("cascades %s to a projected member and records one hop", async (outcome) => {

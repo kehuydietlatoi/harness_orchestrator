@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
+import { DEFAULT_CONFIG } from "../src/config.js";
 import type { Issue } from "../src/github/github.js";
-import type { Ticket } from "../src/tasks/plan.js";
+import { parseTickets, ticketV2Fields, type Ticket } from "../src/tasks/plan.js";
 import {
   buildPlanMarkers,
+  parseTicketV2,
   createFromPlan,
   creationLabels,
   neutralizeReferences,
@@ -12,6 +14,7 @@ import {
   type PlanCreateDeps,
 } from "../src/tasks/plan-create.js";
 import { parseAfter, parseDeps } from "../src/board/board.js";
+import { parseBudget } from "../src/tasks/budget.js";
 import { hasDefinitionOfDone } from "../src/tasks/definition-of-done.js";
 
 const CWD = "/repo";
@@ -381,5 +384,79 @@ describe("definition of done in the issue body", () => {
   it("is detectable by the reviewer, and absent when the ticket has none", () => {
     expect(hasDefinitionOfDone(renderTicketBody(ticket, []))).toBe(true);
     expect(hasDefinitionOfDone(renderTicketBody({ title: "x", body: "y" }, []))).toBe(false);
+  });
+});
+
+
+describe("v2 creation", () => {
+  const opts = { config: { ...DEFAULT_CONFIG, verify: [["npm", "test"]],
+    roles: { implementer: { tiers: ["lead" as const], families: ["anthropic"] } },
+    tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", model: "sol" }] },
+  } };
+  const fields = {
+    role: "implementer", kind: "code", milestone: "Phase 2", decisions: ["D-001"],
+    context: ["combat.damage"], locks: ["src/combat/**"], verify: [["npm", "test", "--", "a file.test.ts"]],
+    needs: ["shell", "vision"], sensitivity: "internal", budget: { minutes: 30, usd: 2, requests: 60 }, model: "sol",
+  };
+  const [ticket] = parseTickets(JSON.stringify([{ id: "T1", title: "Round trip", ...fields }]));
+
+  it("round trips every field through fake creation, ensuring labels and milestone first", async () => {
+    const calls: string[] = [];
+    const deps: PlanCreateDeps = {
+      listIssues: async () => [],
+      ensureLabels: async (labels) => {
+        expect(labels.map((l) => l.name)).toEqual(["role:implementer", "kind:code", "sensitivity:internal", "model:sol"]);
+        calls.push("labels");
+      },
+      ensureMilestone: async (title, cwd) => { expect([title, cwd]).toEqual(["Phase 2", CWD]); calls.push("milestone"); },
+      createIssue: async (_title, body, labels, opts) => {
+        expect(calls).toEqual(["labels", "milestone"]);
+        expect(labels).toEqual(["status:todo", "role:implementer", "kind:code", "sensitivity:internal", "model:sol"]);
+        expect(opts).toEqual({ cwd: CWD, milestone: "Phase 2" });
+        expect(body).toContain("Budget: 30m $2 60req");
+        expect(parseBudget(body)).toEqual(fields.budget);
+        expect(parseTicketV2(body)).toEqual(ticketV2Fields(ticket));
+        calls.push("create");
+        return 1;
+      },
+    };
+    expect((await createFromPlan([ticket], CWD, deps, opts)).failed).toEqual([]);
+    expect(calls).toEqual(["labels", "milestone", "create"]);
+  });
+
+  it("keeps identities unchanged after adding or editing every v2 field", () => {
+    const base = { id: "T1", title: "Round trip" };
+    expect(buildPlanMarkers([ticket])).toEqual(buildPlanMarkers([base]));
+    expect(buildPlanMarkers([{ ...ticket, role: "qa", model: "other", budget: { usd: 8 } }])).toEqual(buildPlanMarkers([base]));
+  });
+
+  it("preserves legacy issue bytes and has no metadata on a v1 issue", async () => {
+    const h = harness();
+    await createFromPlan([{ title: "Legacy", body: "Description", files: ["src/a.ts"] }], CWD, h.deps);
+    const markers = buildPlanMarkers([{ title: "Legacy", body: "Description", files: ["src/a.ts"] }]);
+    expect(h.creates[0].body).toBe('Description\n\n**Files (ownership hint):** \u0060src/a.ts\u0060\n\n' + markers.plan + '\n' + markers.tickets[0]);
+    expect(parseTicketV2(h.creates[0].body)).toEqual({});
+  });
+
+  it("retains empty values and decimal budgets without exponent notation", () => {
+    const values = { decisions: [], context: [], locks: [], needs: [], budget: {} };
+    expect(parseTicketV2(renderTicketBody({ title: "Empty", ...values }, []))).toEqual(values);
+    const body = renderTicketBody({ title: "Tiny", budget: { minutes: 1e-8, usd: 1e21, requests: 1e21 } }, []);
+    expect(parseBudget(body)).toEqual({ minutes: 1e-8, usd: 1e21, requests: 1e21 });
+  });
+
+  it("fails before issue creation when milestone setup fails", async () => {
+    const h = harness();
+    h.deps.ensureMilestone = async () => { throw new Error("milestone unavailable"); };
+    const result = await createFromPlan([ticket], CWD, h.deps, opts);
+    expect(result.failed[0].error).toContain("milestone unavailable");
+    expect(h.creates).toEqual([]);
+  });
+
+  it("never creates a milestone for a reused issue", async () => {
+    const markers = buildPlanMarkers([ticket]);
+    const h = harness([issue(1, ticket.title, renderTicketBody(ticket, [], { plan: markers.plan, ticket: markers.tickets[0] }))]);
+    h.deps.ensureMilestone = async () => { throw new Error("should not run"); };
+    expect((await createFromPlan([ticket], CWD, h.deps, opts)).reused).toHaveLength(1);
   });
 });
