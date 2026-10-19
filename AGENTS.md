@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Stale model projections (#195)**: keep `resolveTierModel` strict for execution. `modelProjectionFact` converts only `UnknownModelProjection` into a per-task lifecycle inconsistency for snapshot and repair; unresolved author identity counts no approvals. Claim selection skips stale projections before runner preflight. Repair removes the stale label, then re-observes before repairing resources or projecting reviews.
+
 - **Post-push observations (#159)**: fix/conflict results record `previousHead` and `pushedHead` in `step.finished` events. Observation waits on the superseded head or unknown mergeability for the pushed head. Head-bound `prMergeability` reads REST head/base/result together and rejects a conflicting result when Git proves the head already contains that base; a newer, non-ancestor base remains actionable. Keep the merge strategy as merge, never rebase.
 
 - **Worker credentials (#189)**: `src/util/environment.ts` owns the cleaning rule shared by verify and every harness run. Adapter `env` names restore only set variables; GitHub tokens are always excluded. Codex preserves `CODEX_HOME`; OpenCode applies orch-owned config overrides after cleaning. Keep `PWD` correction in the shared spawn helpers. Profile login files remain readable; see ADR-0013.
