@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Re-claimed task branches (#203)**: claim setup refreshes an unattached existing task branch to the fetched base only when it has no commits beyond their merge-base. `refreshTaskBranch` pins both tips and compare-updates the ref; comparison failures block setup. Branches carrying work retain their tip and warn when missing base commits. Keep this refresh in claim setup, before worktree attachment, rather than in read-only observation or repair.
+
 - **Link-safe worktree cleanup (#201)**: `src/git/worktree.ts` scans all entries with `lstat`, including disposable ignored directories, without entering symlinks or Windows junctions. Both safe removal and explicit discard unlink discovered links non-recursively before invoking Git; scan/unlink failures retain the worktree and identify the path. Keep this guard on every removal path, including `--force`; Git for Windows can empty junction targets during removal. Safe cleanup still retains untracked or non-disposable links under the existing preservation policy.
 
 - **Spawn refusal comments (#190)**: runner incomplete-brief and route refusals post the escalation reason once on the issue before returning, without constructing an adapter or recording a run. Comment failures warn and preserve the refusal outcome.
