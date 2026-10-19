@@ -16,6 +16,7 @@ export interface Board {
     addAssignees?: string[];
     removeAssignees?: string[];
   }): Promise<void>;
+  closeIssue(number: number, opts?: { cwd?: string }): Promise<void>;
   commentOnPr(number: number, body: string, opts?: { cwd?: string }): Promise<void>;
 }
 
@@ -28,5 +29,6 @@ export const ghBoard: Board = {
   prChecksState: (number, opts) => gh.prChecksState(number, opts),
   prMergeability: (number, opts) => gh.prMergeability(number, opts),
   editIssue: (number, opts) => gh.editIssue(number, opts),
+  closeIssue: (number, opts) => gh.closeIssue(number, opts),
   commentOnPr: (number, body, opts) => gh.commentOnPr(number, body, opts),
 };

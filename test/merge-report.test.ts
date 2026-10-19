@@ -16,6 +16,7 @@ vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
 import * as gh from "../src/github/github.js";
 import { removeWorktree } from "../src/git/worktree.js";
 import { merge } from "../src/board/review.js";
+import { log } from "../src/util/log.js";
 
 const head = "a".repeat(40);
 const issue = { number: 65, title: "task", body: "", state: "OPEN", labels: ["agent:claude"], assignees: [] };
@@ -59,8 +60,14 @@ describe("merge cleanup report", () => {
   });
 
   it("still reports a completed merge when closing the issue fails", async () => {
+    const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
     vi.mocked(removeWorktree).mockResolvedValue(true);
     vi.mocked(gh.closeIssue).mockRejectedValue(new Error("gh issue close #65 failed: network"));
-    expect(await merge(72, DEFAULT_CONFIG, "/repo")).toEqual({ issue: 65, worktree: "removed" });
+    try {
+      expect(await merge(72, DEFAULT_CONFIG, "/repo")).toEqual({ issue: 65, worktree: "removed" });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("orch repair 65 --apply"));
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

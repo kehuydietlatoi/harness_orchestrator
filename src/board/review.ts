@@ -12,8 +12,8 @@ import {
   recordPrReview,
   prChecksPass,
   mergePr,
-  closeIssue,
 } from "../github/github.js";
+import { ghBoard } from "../github/board.js";
 import { log } from "../util/log.js";
 import { STATUS, REVIEW_NEEDED, REVIEWED_BY_PREFIX, reviewedByLabel } from "../github/labels.js";
 import { issueAgent, byNumber } from "./board.js";
@@ -283,7 +283,7 @@ export async function merge(
   if (gate.issue !== null) {
     await lockRelease(gate.issue, { cwd });
     try {
-      await editIssue(gate.issue, {
+      await ghBoard.editIssue(gate.issue, {
         cwd,
         addLabels: [STATUS.done],
         removeLabels: [STATUS.inReview],
@@ -295,7 +295,7 @@ export async function merge(
     // `baseBranch` the issue would stay open and keep blocking its dependents. Close it here;
     // a failure is left for `orch repair` (close-issue) rather than failing a completed merge.
     try {
-      await closeIssue(gate.issue, { cwd });
+      await ghBoard.closeIssue(gate.issue, { cwd });
     } catch (err) {
       log.warn(`PR #${prNum} merged but issue #${gate.issue} could not be closed (run \`orch repair ${gate.issue} --apply\`): ${(err as Error).message}`);
     }

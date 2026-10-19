@@ -95,6 +95,8 @@ describe("autopilot scenarios", () => {
   });
 
   it("reports twin PRs without driving either, matching production observation", async () => {
+    // Reload the Board delegate too, so it binds to this test's GitHub mock.
+    vi.resetModules();
     vi.doMock("../src/github/github.js", () => ({
       listIssues: async () => [{ number: 93, title: "Twin PRs", body: "", state: "OPEN", labels: ["agent:codex"], assignees: [] }],
       listOpenPrs: async () => [193, 194].map((number) => ({ number, title: "Twin", body: "Closes #93", state: "OPEN", headRefName: "task/93-twins", headSha: "a".repeat(40), htmlUrl: "" })),

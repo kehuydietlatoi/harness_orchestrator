@@ -4,7 +4,22 @@ const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
-const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff } = await import("../src/github/github.js");
+const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff, closeIssue } = await import("../src/github/github.js");
+
+describe("closeIssue", () => {
+  beforeEach(() => execMock.mockReset());
+
+  it("throws on a non-zero gh exit", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "network error\n" });
+    await expect(closeIssue(65, { cwd: "/repo" })).rejects.toThrow("gh issue close #65 failed: network error");
+    expect(execMock).toHaveBeenCalledWith("gh", ["issue", "close", "65"], { cwd: "/repo" });
+  });
+
+  it("succeeds when gh warns that the issue is already closed", async () => {
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "", stderr: "Issue #65 is already closed" });
+    await expect(closeIssue(65)).resolves.toBeUndefined();
+  });
+});
 
 describe("prDiff", () => {
   beforeEach(() => execMock.mockReset());
