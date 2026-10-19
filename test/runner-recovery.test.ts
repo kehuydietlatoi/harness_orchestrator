@@ -142,6 +142,28 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
+  it("leaves an unpinned vision task ready for Claude after Codex skips it", async () => {
+    const candidate = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["status:todo"] };
+    mocks.claimNext.mockImplementation(async (_agent, _cfg, _cwd, opts) => {
+      if (!(await opts.canClaim(candidate))) return null;
+      return { issue: candidate, worktree: { path: worktree, branch: "task/35" } };
+    });
+
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toBeNull();
+    expect(candidate.labels).toEqual(["status:todo"]);
+    expect(mocks.editIssue).not.toHaveBeenCalled();
+    expect(readEvents(cwd)).toEqual([]);
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.countCommitsAhead.mockResolvedValue(1);
+    mocks.getIssue.mockResolvedValue(candidate);
+    expect(await processNext("claude", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "submitted" });
+    expect(mocks.makeAdapter).toHaveBeenCalledWith("claude", DEFAULT_CONFIG);
+    expect(mocks.runTask).toHaveBeenCalledTimes(1);
+    expect(mocks.editIssue.mock.calls.some(([, edit]) => edit.addLabels?.includes("needs-attention"))).toBe(false);
+  });
+
   it.each(["empty required", "superseded decision", "missing anchor"])("refuses to spawn on %s and preserves the reason", async (problem) => {
     const pack = loadPack("test/fixtures/pack");
     mkdirSync(join(cwd, "design"));

@@ -220,7 +220,14 @@ export async function processNext(
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
     canClaim: async (issue: Issue) => {
-      if (await refuseRoute(issue, agent, cfg, cwd)) return false;
+      try { resolveTaskModel(agent, issue, cfg); }
+      catch (error) {
+        if (!(error instanceof RouteRefusal)) throw error;
+        // An unpinned task may still be runnable by another agent.
+        if (issueAgent(issue) === agent) await refuseRoute(issue, agent, cfg, cwd);
+        else log.warn(error.message);
+        return false;
+      }
       return agent !== "opencode" || preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade);
     },
   });
