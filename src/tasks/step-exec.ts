@@ -1,4 +1,5 @@
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
+import { ScopeRejected } from "./scope-guard.js";
 import { cascadeRequeue } from "./cascade-requeue.js";
 import { appendEvent } from "./events.js";
 import { mkdirSync } from "node:fs";
@@ -99,6 +100,7 @@ export async function executeReview(obs: TaskObservation, cfg: OrchConfig, cwd: 
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (error instanceof ScopeRejected) return { signal: "task.escalated", detail };
     if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
     return error instanceof NoReviewerError ? { signal: "agent.unavailable", detail } : failure(detail);
   }

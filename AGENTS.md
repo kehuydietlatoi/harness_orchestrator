@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Worker scope (#186)**: `src/tasks/scope-guard.ts` checks manifest `write_scope` union ticket `files` when pack + role label are present; `forbidden` wins. Runner leftover commits, submit branch diffs, and autopilot/automated reviews share the guard. Check deletions and both rename names; rejections retain worktree/lock, flag needs-attention, and comment paths. See ADR-0014.
+
 - **Domain packs and ticket v2**: read [ADR-0014](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) when changing pack loading, ticket validation/projections, brief rendering, routing filters, or path claims.
 
 - **Needs and sensitivity (#176)**: `validateRoute` owns capability and sensitivity filters shared by planning, assignment, dispatch, and cascades. Pass ticket metadata to `nextHop`, including PR cascades. Capability overrides replace harness defaults; OpenCode vision requires an explicit declaration. Legacy tickets without either field remain unrestricted unless config `sensitivity` or `pack` opts in; opted-in tickets default to internal. Dispatch refusals mark needs-attention before adapter creation and emit escalation without run telemetry. See ADR-0013 for policy details.

@@ -30,6 +30,7 @@ import { ENDPOINT_COOLDOWN_MS } from "../adapters/usage-limit.js";
 import { exec } from "../util/exec.js";
 import { parseTicketV2 } from "./plan.js";
 import { verifyEnvironment, verifyTrustErrors } from "./verify.js";
+import { issueScope, scopeFailure, ScopeRejected } from "./scope-guard.js";
 
 class VerificationFailed extends Error {}
 class RouteRefusal extends Error {}
@@ -49,6 +50,16 @@ async function commitWorkerOutput(task: ClaimedTask, agent: string, model: Model
   };
   await assertBranch();
   if (!(await git(["status", "--porcelain", "--untracked-files=all"])).trim()) return false;
+  const role = issueScope(task.issue, cfg);
+  const checkScope = async () => {
+    if (!role) return;
+    // No rename detection: both old and new names are checked, as are deletions.
+    const paths = (await git(["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]) +
+      await git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+    const reason = scopeFailure(paths, role, task.issue.body);
+    if (reason) throw new ScopeRejected(reason);
+  };
+  await checkScope();
   const ticketVerify = parseTicketV2(task.issue.body).verify ?? [];
   const trustErrors = verifyTrustErrors(ticketVerify, cfg.verify ?? []);
   if (trustErrors.length) throw new VerificationFailed(`Ticket #${task.issue.number}: ${trustErrors.join("; ")}`);
@@ -60,6 +71,7 @@ async function commitWorkerOutput(task: ClaimedTask, agent: string, model: Model
     }
   }
   await assertBranch();
+  await checkScope();
   await git(["add", "--all"]);
   await git(["commit", "-m", `${task.issue.title} (#${task.issue.number})`, "-m",
     `Worker: ${agent}; model: ${formatModelSpec(model) ?? "default"}`]);
@@ -429,12 +441,12 @@ async function processClaimed(
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
     await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree, disposableIgnored: cfg.disposableIgnored });
-    if (error instanceof VerificationFailed) {
+    if (error instanceof VerificationFailed || error instanceof ScopeRejected) {
       const comment = await exec("gh", ["issue", "comment", String(n), "--body-file", "-"], { cwd, input: error.message });
       if (comment.code !== 0) log.warn(`#${n}: could not comment verification failure: ${comment.stderr}`);
     }
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
-    summary = { issue: n, outcome: error instanceof VerificationFailed ? "needs-attention" : "failed", durationMs };
+    summary = { issue: n, outcome: error instanceof VerificationFailed || error instanceof ScopeRejected ? "needs-attention" : "failed", durationMs };
     telemetryOutcome = summary.outcome;
   }
 

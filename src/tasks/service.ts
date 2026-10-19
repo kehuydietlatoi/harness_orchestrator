@@ -1,4 +1,5 @@
 import { log } from "../util/log.js";
+import { issueScope, scopeFailure, ScopeRejected } from "./scope-guard.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { existsSync } from "node:fs";
 import { exec } from "../util/exec.js";
@@ -410,10 +411,25 @@ export async function submit(
   // Resolve and validate before pushing so an invalid base cannot leave a
   // remote branch behind without a PR.
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
+  const issue = await getIssue(number, { cwd });
+  try {
+    const role = issueScope(issue, cfg);
+    if (role) {
+      const diff = await exec("git", ["diff", "--name-only", "--no-renames", "-z", `${base.ref}...HEAD`, "--"], { cwd: wt });
+      if (diff.code !== 0) throw new ScopeRejected(`Cannot check write_scope: ${diff.stderr.trim()}`);
+      const reason = scopeFailure(diff.stdout.split("\0").filter(Boolean), role, issue.body);
+      if (reason) throw new ScopeRejected(reason);
+    }
+  } catch (error) {
+    if (!(error instanceof ScopeRejected)) throw error;
+    await editIssue(number, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.claimed, STATUS.inProgress] });
+    const comment = await exec("gh", ["issue", "comment", String(number), "--body-file", "-"], { cwd, input: error.message });
+    if (comment.code !== 0) log.warn(`#${number}: could not comment scope rejection: ${comment.stderr}`);
+    throw error;
+  }
   const push = await exec("git", ["push", "-u", "origin", "HEAD"], { cwd: wt });
   if (push.code !== 0) throw new Error(`git push failed: ${push.stderr.trim()}`);
 
-  const issue = await getIssue(number, { cwd });
   const reviewer = cfg.agents.find((a) => a !== agent) ?? "(the other harness)";
   const body =
     `Closes #${number}\n\n` +

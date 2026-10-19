@@ -8,7 +8,9 @@ import { headlessLogFile, lastFencedBlock, runHeadlessAgent } from "../adapters/
 import { makeAdapter } from "../adapters/index.js";
 import { detectUsageLimit } from "../adapters/usage-limit.js";
 import { formatModelSpec, type ModelSpec, type OrchConfig } from "../config.js";
-import { getIssue, getPr, prDiff, type Issue, type Pr } from "../github/github.js";
+import { commentOnPr, editIssue, getIssue, getPr, prChangedPaths, prDiff, type Issue, type Pr } from "../github/github.js";
+import { NEEDS_ATTENTION } from "../github/labels.js";
+import { issueScope, scopeFailure, ScopeRejected } from "../tasks/scope-guard.js";
 import { hasDefinitionOfDone } from "../tasks/definition-of-done.js";
 import { recordRun, resolveTaskModel } from "../tasks/runner.js";
 import { exec } from "../util/exec.js";
@@ -328,6 +330,19 @@ export async function runAutomatedReview(
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
   const head = pr.headSha;
+
+  // Recheck at the actual review boundary: the PR may have moved since loop observation.
+  const role = issueScope(issue, cfg);
+  if (role) {
+    const reason = scopeFailure(await prChangedPaths(prNum, { cwd }), role, issue.body);
+    if ((await getPr(prNum, { cwd })).headSha !== head) throw new Error("PR head moved during write_scope check");
+    if (reason) {
+      await editIssue(n, { cwd, addLabels: [NEEDS_ATTENTION] });
+      try { await commentOnPr(prNum, reason, { cwd }); }
+      catch (error) { log.warn(`#${n}: could not comment scope rejection: ${String(error)}`); }
+      throw new ScopeRejected(reason);
+    }
+  }
 
   // Fetched once, strictly: the head is fixed for this review, and a diff that could not be read must stop the
   // review, not be passed to the reviewer as text. (Nothing to review is not a reason to approve either.)

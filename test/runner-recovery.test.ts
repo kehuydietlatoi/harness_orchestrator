@@ -225,6 +225,27 @@ describe("processNext recovery", () => {
     expect(await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 0.2 } } }, cwd)).toMatchObject({ outcome: "failed" });
   });
 
+  it.each(["tracked", "untracked"])("rejects forbidden leftover %s output without committing or submitting", async kind => {
+    const pack = loadPack("test/fixtures/pack");
+    const body = "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n" + renderTicketV2({ role: "gameplay-programmer", verify: [["npm", "test"]] });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body, labels: [...issue.labels, "role:gameplay-programmer"] }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M design/game.md" :
+        args[0] === (kind === "tracked" ? "diff" : "ls-files") ? "design/game.md\0" : "" }));
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack, roles: { "gameplay-programmer": { tiers: ["standard", "lead"], families: ["openai", "anthropic"] } }, verify: [["npm", "test"]] }, cwd);
+    expect(result?.outcome).toBe("needs-attention");
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.exec.mock.calls.some(([cmd, argv]) => cmd === "npm" || argv[0] === "add" || argv[0] === "commit")).toBe(false);
+    expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "35", "--body-file", "-"], {
+      cwd, input: expect.stringContaining('"design/game.md": forbidden by design/**'),
+    });
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+  });
+
   it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {
     mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
     mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });

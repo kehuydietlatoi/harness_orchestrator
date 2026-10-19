@@ -67,7 +67,8 @@ re-exported by `src/tasks/plan-create.ts`.
 `buildPlanMarkers` in `src/tasks/plan-create.ts` excludes all v2 fields from
 plan/ticket identity. Editing these fields therefore does not duplicate issues
 on a creation retry. Existing fields retain their meanings: in particular,
-`files` is an ownership hint and `after` is advisory ordering.
+`files` is an ownership hint (and an additional write allowance for pack scope
+enforcement below) and `after` is advisory ordering.
 
 ## Validation rules 1-7
 
@@ -216,6 +217,25 @@ is skipped so another agent can claim it; an explicitly assigned disallowed
 route is escalated without a harness invocation. `src/tasks/cascade.ts` and
 `src/tasks/observe.ts` carry requirements into implementation and PR fallback
 selection, so a cascade cannot bypass these filters.
+
+## Worker diff scope (owner decision 2026-10-19, #186)
+
+When `pack` is configured and an issue has a `role:` label,
+`src/tasks/scope-guard.ts` checks concrete changed paths against the manifest's
+`write_scope` union the ticket's `files`. Manifest `forbidden` patterns win over
+both allowances. The runtime guard uses manifest scope; per-project overrides
+are outside this policy. Each violation names the path and either
+`outside write_scope` or `forbidden by <pattern>`.
+
+The runner checks tracked and untracked leftover output before verification and
+again before staging. `submit` checks the merge-base branch diff before pushing
+or opening a PR. Local diffs disable rename detection and use NUL-delimited
+names, preserving deletions and both rename sides. Autopilot observation checks
+the complete PR file list and selects the existing escalation step; automated
+review repeats the check before starting a reviewer. Unreadable or incomplete
+path observations block the handoff. Rejections mark `needs-attention`, comment
+the offending paths on the issue or PR, and preserve the worktree and lock.
+No pack or no role label retains the existing behavior.
 
 ## Enforced path locks
 
