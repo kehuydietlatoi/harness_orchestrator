@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
@@ -11,6 +11,8 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 import {
   addWorktree,
+  externalLinks,
+  assertNoExternalLinks,
   blockingStatusEntries,
   discardWorktree,
   observeWorktree,
@@ -50,6 +52,49 @@ describe("task worktrees", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(base, { recursive: true, force: true });
+  });
+
+  it("reports external links under ignored node_modules without traversing links", () => {
+    const outside = join(base, "outside");
+    mkdirSync(outside);
+    symlinkSync(repo, join(outside, "cycle"), process.platform === "win32" ? "junction" : "dir");
+    const link = join(repo, "node_modules");
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      expect(externalLinks(repo)).toEqual([{ path: "node_modules", target: outside }]);
+      expect(vi.mocked(readdirSync).mock.calls.some(([path]) => String(path) === link || String(path) === outside)).toBe(false);
+    } finally { unlinkSync(link); unlinkSync(join(outside, "cycle")); }
+  });
+
+  it("allows internal links and cycles without entering them", () => {
+    const link = join(repo, "node_modules");
+    symlinkSync(repo, link, process.platform === "win32" ? "junction" : "dir");
+    try { expect(externalLinks(repo)).toEqual([]); }
+    finally { unlinkSync(link); }
+  });
+
+  it("allows internal targets spelled through an ancestor alias", () => {
+    const alias = join(base, "alias");
+    const nested = join(repo, "nested");
+    mkdirSync(nested);
+    symlinkSync(repo, alias, process.platform === "win32" ? "junction" : "dir");
+    const link = join(nested, "node_modules");
+    symlinkSync(join(alias, "nested"), link, process.platform === "win32" ? "junction" : "dir");
+    try { expect(externalLinks(nested)).toEqual([]); }
+    finally { unlinkSync(link); unlinkSync(alias); }
+  });
+
+  it("reports hard links to external files conservatively", () => {
+    const target = join(base, "shared.txt");
+    writeFileSync(target, "keep");
+    linkSync(target, join(repo, "hard.txt"));
+    expect(externalLinks(repo)).toEqual([{ path: "hard.txt", target: expect.stringContaining("link count 2") }]);
+    expect(() => assertNoExternalLinks(repo)).toThrow(/external peers cannot be determined portably/);
+  });
+
+  it("fails closed when a directory cannot be scanned", () => {
+    vi.mocked(readdirSync).mockImplementationOnce(() => { throw new Error("scan denied"); });
+    expect(() => assertNoExternalLinks(repo)).toThrow(/could not be inspected.*retained/);
   });
 
   it("rejects an existing task path that Git does not register as a worktree", async () => {
