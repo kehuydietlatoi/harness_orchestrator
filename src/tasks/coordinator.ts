@@ -1,18 +1,20 @@
+import { BudgetSpentError, issueBudgetStatus } from "./budget-runtime.js";
+import { AGENT_STEPS, applyBudget } from "./steps.js";
 import { eligibleIssues, issueAgent } from "../board/board.js";
 import { listIssues, type Issue } from "../github/github.js";
 import { NEEDS_ATTENTION } from "../github/labels.js";
 import type { OrchConfig } from "../config.js";
-import { unavailableUntil } from "../board/availability.js";
+import { availabilityKey, unavailableUntil } from "../board/availability.js";
 import { appendEvent, type OrchEvent } from "./events.js";
 import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
-import { processNext, type RunSummary } from "./runner.js";
+import { processNext, resolveTaskModel, type RunSummary } from "./runner.js";
 import {
-  executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
+  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
 } from "./step-exec.js";
-import type { Step } from "./steps.js";
+import { decideStep, type Step } from "./steps.js";
 
 /** Steps the coordinator performs (the rest of `Step` is "do nothing, just report"). */
-export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" }>;
+export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" | "cascade" }>;
 
 export interface AutopilotOptions {
   /** Agent runs in flight at once. */
@@ -64,8 +66,10 @@ export interface CoordinatorDeps {
    * `onClaimed` fires as soon as the issue is claimed, before the harness runs: the agent can open its
    * own PR (`orch submit`) while this call is still in progress, and the loop must not act on that PR
    * (review, fix, merge) until the implementation has finished and finalised.
+   * `onCascade` reports a successfully relabelled destination, including hops made before any claim.
    */
-  implement(agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null>;
+  implement(agent: string, onClaimed: (issue: number) => void, onCascade?: (agent: string) => void): Promise<RunSummary | null>;
+  budgetSpent?(issue: Issue): boolean;
   availableAgents(): string[];
   /** Issues that are routed and ready but belong to a harness that is currently paused. */
   blockedBacklog(): Promise<number[]>;
@@ -83,7 +87,7 @@ export interface CoordinatorDeps {
 
 /** Finish work before starting new work, and cheap decisive steps before slow agent runs. */
 const PRIORITY: Record<ActionableStep["kind"], number> = {
-  merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
+  cascade: 0, merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
 };
 
 /** Consecutive failed attempts at a task's step before a human is called in. */
@@ -112,25 +116,42 @@ export function planOutcome(remaining: number[] | null): "plan-complete" | "drai
 export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<number>): CoordinatorDeps {
   const inScope = (n: number): boolean => !scope || scope.has(n);
   return {
+    budgetSpent: (issue) => issueBudgetStatus(issue, cfg, cwd).spent,
     observe: () => observeTasks(cfg, cwd, { issues: scope }),
-    execute: (obs, step) => {
-      switch (step.kind) {
-        case "review": return executeReview(obs, cfg, cwd);
-        case "fix": return executeFix(obs, step.reason, cfg, cwd);
-        case "resolve-conflict": return executeResolveConflict(obs, cfg, cwd);
-        case "merge": return executeMerge(obs, cfg, cwd);
-        case "triage": return executeTriage(obs, step.reason, cfg, cwd);
-        case "escalate": return executeEscalate(obs, step.reason, cwd);
+    execute: async (obs, step) => {
+      try {
+        switch (step.kind) {
+          case "cascade": return await executeCascade(obs, step.route, cfg, cwd);
+          case "review": return await executeReview(obs, cfg, cwd);
+          case "fix": return await executeFix(obs, step.reason, cfg, cwd);
+          case "resolve-conflict": return await executeResolveConflict(obs, cfg, cwd);
+          case "merge": return executeMerge(obs, cfg, cwd);
+          case "triage": return await executeTriage(obs, step.reason, cfg, cwd);
+          case "escalate": return executeEscalate(obs, step.reason, cwd);
+        }
+      } catch (error) {
+        if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
+        throw error;
       }
     },
     // Unrouted backlog is never started by a loop that merges on its own.
-    implement: (agent, onClaimed) => processNext(agent, cfg, cwd, { requireRouted: true, only: scope, onClaimed }),
+    implement: (agent, onClaimed, onCascade) => processNext(agent, cfg, cwd, { requireRouted: true, only: scope, onClaimed, onCascade }),
     availableAgents: () => cfg.agents.filter((a) => unavailableUntil(a, cwd) === null),
     blockedBacklog: async () => {
       const paused = new Set(cfg.agents.filter((a) => unavailableUntil(a, cwd) !== null));
-      if (paused.size === 0) return [];
+      if (paused.size === 0 && !cfg.agents.includes("opencode")) return [];
       const eligible = await eligibleIssues(cwd);
-      return eligible.filter((i) => inScope(i.number) && paused.has(issueAgent(i) ?? "")).map((i) => i.number);
+      return eligible.filter((i) => {
+        if (!inScope(i.number)) return false;
+        const agent = issueAgent(i) ?? "";
+        if (paused.has(agent)) return true;
+        if (agent !== "opencode") return false;
+        try {
+          return unavailableUntil(availabilityKey(agent, resolveTaskModel(agent, i, cfg)?.model), cwd) !== null;
+        } catch {
+          return false; // A disallowed route is not work waiting for a cooldown.
+        }
+      }).map((i) => i.number);
     },
     // One batched open-issue read: a scoped issue absent from it is closed (or gone), i.e. finished.
     remaining: async () => {
@@ -162,7 +183,7 @@ async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): 
 }
 
 function isActionable(step: Step): step is ActionableStep {
-  return step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
+  return step.kind === "cascade" || step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
     step.kind === "merge" || step.kind === "triage" || step.kind === "escalate";
 }
 
@@ -188,7 +209,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const inflight = new Map<string, Promise<void>>();
   /** Consecutive failures of ONE step on an issue. A different step starts a fresh count: a failed review followed
    * by an external approval and one failed merge is a first failure of the merge, not a second failure. */
-  const failing = new Map<number, { count: number; detail: string; step: string }>();
+  const failing = new Map<number, { count: number; detail: string; step: string; head?: string }>();
   /** The step that last ended in `agent.unavailable` per issue: relaunching that same step is a retry after a
    * pause, not new work. A different step on the same issue is real work. */
   const lastUnavailable = new Map<number, string>();
@@ -199,6 +220,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const escalationFailures = new Map<number, number>();
   const escalateRetryAt = new Map<number, number>();
   const drained = new Set<string>();
+  const routeGenerations = new Map<string, number>();
   /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
   const implementing = new Set<number>();
   /**
@@ -212,7 +234,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
    * not from "nothing in flight", because probing a harness for new work is not progress. */
   let lastProgress = deps.now();
 
-  const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step): void => {
+  const settle = (issue: number, step: string, result: StepResult, startedAt: number, identity: string = step, head?: string): void => {
     settledDuringObserve.add(issue);
     if (result.signal === "agent.unavailable") lastUnavailable.set(issue, identity);
     else lastUnavailable.delete(issue);
@@ -237,8 +259,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
           break;
         }
         const previous = failing.get(issue);
-        const count = (previous && previous.step === identity ? previous.count : 0) + 1;
-        failing.set(issue, { count, detail: result.detail ?? "unknown error", step: identity });
+        const count = (previous && previous.step === identity && previous.head === head ? previous.count : 0) + 1;
+        failing.set(issue, { count, detail: result.detail ?? "unknown error", step: identity, head });
         retryAt.set(issue, { at: deps.now() + FAILURE_BACKOFF_MS * count, step: identity });
         summary.failures += 1;
         break;
@@ -287,7 +309,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       } catch (error) {
         result = { signal: "step.failed", detail: error instanceof Error ? error.message : String(error) };
       }
-      settle(n, step.kind, result, startedAt, describe(step));
+      settle(n, step.kind, result, startedAt, describe(step), obs.pr.headSha);
     })().finally(() => inflight.delete(key));
     inflight.set(key, run);
   };
@@ -296,34 +318,42 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     const key = `impl:${agent}`;
     const startedAt = deps.now();
     const claim: { issue: number | null } = { issue: null };
+    const cascadeAgents = new Set<string>();
+    const generation = routeGenerations.get(agent) ?? 0;
+    const markDrained = (): void => {
+      // A concurrent claim read may predate a hop onto this harness.
+      if (generation === (routeGenerations.get(agent) ?? 0)) drained.add(agent);
+    };
     const run = (async (): Promise<void> => {
       let result: RunSummary | null = null;
       try {
         result = await deps.implement(agent, (issue) => {
           claim.issue = issue;
           implementing.add(issue);
-        });
+        }, (destination) => { cascadeAgents.add(destination); });
       } catch (error) {
-        drained.add(agent); // do not hot-loop a claim error
+        markDrained(); // do not hot-loop a claim error
         deps.say(`  ${agent} could not claim work: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
       if (result === null) {
-        drained.add(agent);
+        markDrained();
         return;
       }
       const requeued = result.outcome === "requeued";
+      const budgetEscalated = result.reason === "budget spent";
       // A requeue is the harness running dry, not a failure and not progress: the task is back in the queue and
       // the pause (not the task) decides when it runs again, so it neither counts against us nor resets the idle clock.
       if (!requeued) lastProgress = deps.now();
       const ok = result.outcome === "submitted";
       if (ok) summary.submitted.push(result.issue);
+      else if (budgetEscalated) summary.escalated.push(result.issue);
       else if (!requeued) summary.failures += 1;
-      else drained.add(agent);
+      else markDrained();
       deps.record({
         type: "step.finished", issue: result.issue, step: "implement", agent,
-        signal: ok ? "task.submitted" : requeued ? "agent.unavailable" : "step.failed",
-        detail: result.outcome, durationMs: deps.now() - startedAt,
+        signal: ok ? "task.submitted" : budgetEscalated ? "task.escalated" : requeued ? "agent.unavailable" : "step.failed",
+        detail: result.reason ?? result.outcome, durationMs: deps.now() - startedAt,
       });
       deps.say(`  #${result.issue} implement (${agent}) -> ${result.outcome}${result.prUrl ? ` ${result.prUrl}` : ""}`);
     })().finally(() => {
@@ -332,6 +362,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         settledDuringObserve.add(claim.issue); // ...but an observation already in progress predates that
       }
       inflight.delete(key);
+      // A null claim can have advanced an unclaimed todo, and a requeue can have changed endpoints.
+      // Invalidate only the destinations, after the result's ordinary drained handling has settled.
+      for (const destination of cascadeAgents) {
+        routeGenerations.set(destination, (routeGenerations.get(destination) ?? 0) + 1);
+        drained.delete(destination);
+      }
     });
     inflight.set(key, run);
   };
@@ -397,7 +433,12 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       if (ambiguousPrs.has(n)) continue;
       if (inflight.has(`issue:${n}`) || implementing.has(n)) continue;
       let step = obs.step;
-      const fails = failing.get(n);
+      const previous = failing.get(n);
+      const fails = previous?.head === obs.pr.headSha ? previous : undefined;
+      if (fails && (step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade")) {
+        step = decideStep({ ...obs.facts, failedFixAttempts: fails.count });
+      }
+      if (AGENT_STEPS.has(step.kind)) step = applyBudget(step, deps.budgetSpent?.(obs.issue) ?? false);
       if (fails && isActionable(step) && step.kind !== "escalate" && fails.step === describe(step) && fails.count >= MAX_STEP_FAILURES) {
         step = { kind: "escalate", reason: `${describe(step)} failed ${fails.count} times in a row (${fails.detail})` };
       }

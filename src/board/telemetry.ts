@@ -3,6 +3,8 @@ import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { log } from "../util/log.js";
+import { EFFORT_TIERS, type CascadeRoute } from "../config.js";
+import { reduceOpencode } from "../adapters/opencode-events.js";
 
 /** Which part of the task loop produced a run record (absent on records written before the loop). */
 export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "triage";
@@ -11,6 +13,8 @@ export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "tr
 export const RUN_PHASES: readonly RunPhase[] = ["implement", "fix", "resolve-conflict", "review", "triage"];
 
 export interface RunRecord {
+  cascadeFrom?: CascadeRoute;
+  cascadeTo?: CascadeRoute;
   /** Loop phase and 1-based fix round, so cost and rounds-to-approval can be measured. */
   phase?: RunPhase;
   round?: number;
@@ -22,6 +26,8 @@ export interface RunRecord {
   model: string | null;
   outcome: string;
   durationMs: number;
+  /** Harness invocations; older records imply one. */
+  requests?: number;
   tokensIn: number | null;
   tokensOut: number | null;
   tokensTotal: number | null;
@@ -29,6 +35,7 @@ export interface RunRecord {
 }
 
 export interface RunUsage {
+  requests?: number;
   tokensIn: number | null;
   tokensOut: number | null;
   tokensTotal: number | null;
@@ -145,6 +152,15 @@ function parseLine(line: string): JsonObject | null {
 export function parseUsage(logText: string, agent: string): RunUsage {
   try {
     const normalizedAgent = agent.toLowerCase();
+    if (normalizedAgent === "opencode") {
+      const usage = reduceOpencode({ lines: logText, stderr: "", exitCode: 0, timedOut: false }).usage;
+      return {
+        tokensIn: usage.tokensIn, tokensOut: usage.tokensOut,
+        tokensTotal: usage.tokensIn + usage.tokensOut,
+          cachedInputTokens: usage.cachedInputTokens, costUsd: usage.costUsd,
+          requests: usage.requests,
+      };
+    }
     let latest = emptyUsage();
 
     for (const line of logText.split(/\r?\n/)) {
@@ -225,6 +241,8 @@ function parseRunRecord(value: unknown): RunRecord | null {
     ? (obj.phase as RunPhase)
     : undefined;
   return {
+    ...(parseCascadeRoute(obj.cascadeFrom) ? { cascadeFrom: parseCascadeRoute(obj.cascadeFrom)! } : {}),
+    ...(parseCascadeRoute(obj.cascadeTo) ? { cascadeTo: parseCascadeRoute(obj.cascadeTo)! } : {}),
     ...(phase ? { phase } : {}),
     ...(Number.isInteger(obj.round) ? { round: obj.round as number } : {}),
     ts: obj.ts,
@@ -235,11 +253,19 @@ function parseRunRecord(value: unknown): RunRecord | null {
     model: typeof obj.model === "string" ? obj.model : null,
     outcome: obj.outcome,
     durationMs: obj.durationMs as number,
+    ...(Number.isInteger(obj.requests) && (obj.requests as number) >= 0 ? { requests: obj.requests as number } : {}),
     tokensIn: nullableNumber(obj.tokensIn),
     tokensOut: nullableNumber(obj.tokensOut),
     tokensTotal: nullableNumber(obj.tokensTotal),
     costUsd: nullableNumber(obj.costUsd),
   };
+}
+
+function parseCascadeRoute(value: unknown): CascadeRoute | undefined {
+  const route = objectValue(value);
+  if (!route || typeof route.agent !== "string" || !EFFORT_TIERS.includes(route.tier as CascadeRoute["tier"])) return;
+  if (["model", "effort", "family"].some((key) => route[key] !== undefined && typeof route[key] !== "string")) return;
+  return route as unknown as CascadeRoute;
 }
 
 /** Read valid JSONL run records. Missing/malformed telemetry is always non-fatal. */

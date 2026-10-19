@@ -9,12 +9,14 @@ const paths = vi.hoisted(() => ({ worktree: "" }));
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
+  closeIssue: vi.fn(),
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => paths.worktree, removeWorktree: vi.fn() }));
 vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
 import * as gh from "../src/github/github.js";
 import { removeWorktree } from "../src/git/worktree.js";
 import { merge } from "../src/board/review.js";
+import { log } from "../src/util/log.js";
 
 const head = "a".repeat(40);
 const issue = { number: 65, title: "task", body: "", state: "OPEN", labels: ["agent:claude"], assignees: [] };
@@ -47,5 +49,25 @@ describe("merge cleanup report", () => {
     expect((await merge(72, DEFAULT_CONFIG, "/repo")).worktree).toBe("removed");
     paths.worktree = join(base, "missing");
     expect((await merge(72, DEFAULT_CONFIG, "/repo")).worktree).toBe("none");
+  });
+
+  it("closes the issue itself, since GitHub auto-closes only for default-branch merges", async () => {
+    vi.mocked(removeWorktree).mockResolvedValue(true);
+    await merge(72, { ...DEFAULT_CONFIG, baseBranch: "studio" }, "/repo");
+    expect(gh.closeIssue).toHaveBeenCalledWith(65, { cwd: "/repo" });
+    expect(vi.mocked(gh.closeIssue).mock.invocationCallOrder[0])
+      .toBeGreaterThan(vi.mocked(gh.mergePr).mock.invocationCallOrder[0]);
+  });
+
+  it("still reports a completed merge when closing the issue fails", async () => {
+    const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+    vi.mocked(removeWorktree).mockResolvedValue(true);
+    vi.mocked(gh.closeIssue).mockRejectedValue(new Error("gh issue close #65 failed: network"));
+    try {
+      expect(await merge(72, DEFAULT_CONFIG, "/repo")).toEqual({ issue: 65, worktree: "removed" });
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining("orch repair 65 --apply"));
+    } finally {
+      warning.mockRestore();
+    }
   });
 });

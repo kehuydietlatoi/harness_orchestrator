@@ -1,6 +1,8 @@
-import { describe, it, expect } from "vitest";
-import { byNumber, claimableBy, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
+import { describe, it, expect, vi } from "vitest";
+import { byNumber, claimableBy, isEligible, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
 import type { Issue } from "../src/github/github.js";
+
+vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
   return {
@@ -13,6 +15,22 @@ function issue(number: number, over: Partial<Issue> = {}): Issue {
     ...over,
   };
 }
+
+describe("isEligible", () => {
+  it.each([[], ["status:todo"], ["status:claimed"], ["status:in-progress"]].map((labels) => ({ labels })))(
+    "refuses needs-attention with status labels $labels", async ({ labels }) => {
+      const target = issue(1, { labels: ["needs-attention", ...labels] });
+      expect(await isEligible(target, undefined, byNumber([target]))).toBe(false);
+    },
+  );
+
+  it("allows a human to clear needs-attention on an otherwise eligible issue", async () => {
+    const target = issue(1, { labels: ["needs-attention"] });
+    expect(await isEligible(target, undefined, byNumber([target]))).toBe(false);
+    target.labels = [];
+    expect(await isEligible(target, undefined, byNumber([target]))).toBe(true);
+  });
+});
 
 describe("parseDeps", () => {
   it("parses `Depends-on: #1, #2` and dedupes", () => {
@@ -28,8 +46,8 @@ describe("parseDeps", () => {
 
 describe("issueEffort", () => {
   it.each([
-    ["easy", "easy"],
-    ["hard", "hard"],
+    ["easy", "standard"],
+    ["hard", "lead"],
   ])("parses effort:%s", (tier, expected) => {
     expect(issueEffort(issue(1, { labels: [`effort:${tier}`] }))).toBe(expected);
   });

@@ -40,7 +40,7 @@ class Walk {
     this.to("auto.decide", "Re-observe the current head, review, CI and budgets; signals alone never authorize work.", observation);
     const result = decide("decideStep", decideStep, input);
     this.to(`step.${result.output.kind}`, `decideStep chooses ${JSON.stringify(result.output)}.`, result.decision,
-      result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
+      result.output.kind === "escalate" ? input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
     return result.output;
   }
   review(changes: boolean): void {
@@ -120,22 +120,22 @@ function waitScenario(id: string, unknown: boolean): Scenario {
 }
 
 function triageScenario(id: string, retry: boolean, disabled = false): Scenario {
-  const w = new Walk(id, disabled ? "Triage disabled" : retry ? "Lead grants a guided hard retry" : "Lead escalates", ["triage", "escalation"],
+  const w = new Walk(id, disabled ? "Triage disabled" : retry ? "Lead grants a guided lead retry" : "Lead escalates", ["triage", "escalation"],
     "Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.");
   const input = facts({ rounds: 3, maxTriages: disabled ? 0 : 1, review: { approved: false, changesRequested: true } });
   w.step(input);
   if (disabled) { w.handoff(input); return w.b.build(); }
   const verdict = decide("parseTriageDecision", parseTriageDecision, `\`\`\`json\n${JSON.stringify(retry
-    ? { decision: "retry", effort: "hard", guidance: GUIDANCE }
+    ? { decision: "retry", effort: "raise", guidance: GUIDANCE }
     : { decision: "escalate", diagnosis: "The spec has contradictory boundary requirements.", question: "Which boundary behavior should win?" })}\n\`\`\``);
   if (verdict.output?.decision !== "retry") {
     w.to("step.escalate", "Record the diagnosis; the human must resolve the conflicting requirements.", verdict.decision);
     w.handoff(input);
     return w.b.build();
   }
-  const comments = [{ id: 1, body: formatTriageComment({ pr: PR, head: HEAD, timestamp: "2026-01-01T00:00:00.000Z", decision: "retry", extraRounds: 1, effort: verdict.output.effort },
+  const comments = [{ id: 1, body: formatTriageComment({ pr: PR, head: HEAD, timestamp: "2026-01-01T00:00:00.000Z", decision: "retry", extraRounds: 1, effort: "lead" },
     { issue: ISSUE, reason: "round budget spent", text: verdict.output.guidance }) }];
-  w.to("auto.observe", "Write the durable triage comment, replace effort:easy with effort:hard, then re-observe.", verdict.decision);
+  w.to("auto.observe", "Write the durable triage comment, replace effort:standard with effort:lead, then re-observe.", verdict.decision);
   const recovered = decide("triageFacts", (i: { comments: typeof comments; pr: number; maxTriages: number }) => triageFacts(i.comments, i.pr, i.maxTriages), { comments, pr: PR, maxTriages: 1 });
   w.step({ ...input, triages: recovered.output.triages, extraRounds: recovered.output.extraRounds }, recovered.decision);
   w.push();
@@ -154,11 +154,24 @@ human.step(facts({ requireHumanMerge: true, review: { approved: true, changesReq
 const ambiguous = new ScenarioBuilder({ id: "autopilot-ambiguous", title: "Ambiguous twin PRs", flows: ["autopilot-fix"], summary: "Twin PRs are reported and neither is driven." }, [{ ...baseTask(ISSUE), status: "status:in-review", agent: "codex" }])
   .add({ node: "auto.observe", narration: "Observation reports issue #93 with open PRs #193 and #194 as ambiguous before per-PR reads. Neither gets a decideStep call; a human must choose." }).build();
 
+const capped = new Walk("autopilot-budget-spent", "Ticket budget spent", ["escalation"],
+  "Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.");
+const cappedFacts = facts({ budgetSpent: true });
+capped.step(cappedFacts);
+capped.handoff(cappedFacts);
+
+const cascade = new Walk("autopilot-cascade", "Cascade after a failed fix", ["autopilot-fix"], "One failed fix switches to the next configured model before retrying.");
+cascade.step(facts({ failedFixAttempts: 1, nextCascade: { agent: "claude", tier: "lead" }, review: { approved: false, changesRequested: true } }));
+cascade.b.patch(ISSUE, { agent: "claude" });
+cascade.to("auto.observe", "Replace the routing labels and record cascade.hop, retaining the PR and worktree.");
+cascade.step(facts({ review: { approved: false, changesRequested: true } }));
+cascade.push();
+
 export const AUTOPILOT_SCENARIOS: readonly Scenario[] = [
   fixScenario("autopilot-review-fix", "Changes, resumed fix, re-review, merge", "review"),
   fixScenario("autopilot-ci-fix", "Fix failing CI", "ci"),
   fixScenario("autopilot-conflict", "Merge the base to resolve conflict", "conflict"),
   waitScenario("autopilot-wait-ci", false), waitScenario("autopilot-wait-mergeability", true),
-  human.b.build(), triageScenario("autopilot-triage-retry", true),
+  capped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
   triageScenario("autopilot-triage-escalate", false), triageScenario("autopilot-triage-disabled", false, true), ambiguous,
 ];

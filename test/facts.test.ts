@@ -4,6 +4,7 @@ import { telemetryFact } from "../src/tasks/facts.js";
 describe("telemetryFact", () => {
   it("maps the latest run outcome for the issue", () => {
     expect(telemetryFact([{ issue: 1, outcome: "failed" }], 1)).toBe("failed");
+    expect(telemetryFact([{ issue: 1, outcome: "budget-spent" }], 1)).toBe("failed");
     expect(telemetryFact([{ issue: 1, outcome: "auto-submitted" }], 1)).toBe("submitted");
     expect(telemetryFact([{ issue: 1, outcome: "needs-attention" }], 1)).toBe("no-commits");
     expect(telemetryFact([{ issue: 2, outcome: "failed" }], 1)).toBe("none");

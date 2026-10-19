@@ -63,7 +63,7 @@ describe("autopilot scenarios", () => {
   });
 
   it("recovers a hard retry's round and guidance from its durable comment", () => {
-    expect(decisions("triage-retry", "parseTriageDecision")[0]!.output).toMatchObject({ decision: "retry", effort: "hard" });
+    expect(decisions("triage-retry", "parseTriageDecision")[0]!.output).toMatchObject({ decision: "retry", effort: "raise" });
     const recovered = decisions("triage-retry", "triageFacts")[0]!;
     expect(recovered.output).toMatchObject({ triages: 1, extraRounds: 1, guidance: expect.stringContaining("regression test") });
     expect(decisions("triage-retry", "decideStep").map((d) => (d.output as Step).kind)).toEqual(["triage", "fix", "review", "merge"]);
@@ -95,6 +95,8 @@ describe("autopilot scenarios", () => {
   });
 
   it("reports twin PRs without driving either, matching production observation", async () => {
+    // Reload the Board delegate too, so it binds to this test's GitHub mock.
+    vi.resetModules();
     vi.doMock("../src/github/github.js", () => ({
       listIssues: async () => [{ number: 93, title: "Twin PRs", body: "", state: "OPEN", labels: ["agent:codex"], assignees: [] }],
       listOpenPrs: async () => [193, 194].map((number) => ({ number, title: "Twin", body: "Closes #93", state: "OPEN", headRefName: "task/93-twins", headSha: "a".repeat(40), htmlUrl: "" })),

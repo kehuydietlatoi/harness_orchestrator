@@ -5,6 +5,8 @@
  * every time, so a lost or duplicated signal can never put a task in the wrong place.
  */
 
+import type { CascadeRoute } from "../config.js";
+
 export type ChecksFact = "pass" | "fail" | "pending" | "none";
 export type MergeableFact = "clean" | "conflicting" | "unknown";
 
@@ -16,8 +18,14 @@ export interface PrStepFacts {
 }
 
 export interface StepFacts {
+  /** Failed fix-type attempts on this head and route, supplied by the coordinator. */
+  failedFixAttempts?: number;
+  /** Policy-validated next member; absent preserves the existing retry policy. */
+  nextCascade?: CascadeRoute | null;
   /** The issue carries `needs-attention`: a human owns it until they clear it. */
   attention: boolean;
+  /** Cumulative ticket spend blocks agent runs, including lead triage. */
+  budgetSpent?: boolean;
   /** The task's open pull request, or null before submission / after merge. */
   pr: PrStepFacts | null;
   review: {
@@ -39,6 +47,8 @@ export interface StepFacts {
 }
 
 export type Step =
+  /** A failed fix switches to the next configured member before another writable run. */
+  | { kind: "cascade"; route: CascadeRoute }
   /** Nothing for orch to do (no PR yet, or a human owns it). */
   | { kind: "none"; reason: string }
   /** Run a read-only review of the current head. */
@@ -58,7 +68,12 @@ export type Step =
   | { kind: "escalate"; reason: string };
 
 /** Steps that spend an agent run (and count toward the round budget when they change code). */
-export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["review", "fix", "resolve-conflict", "triage"]);
+export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["cascade", "review", "fix", "resolve-conflict", "triage"]);
+
+/** Budget exhaustion bypasses triage; merge and external waits need no new run. */
+export function applyBudget(step: Step, spent: boolean): Step {
+  return spent && AGENT_STEPS.has(step.kind) ? { kind: "escalate", reason: "budget spent" } : step;
+}
 
 /**
  * Precedence, highest first:
@@ -69,6 +84,10 @@ export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["review", "fix", 
  * while its triage budget lasts, and to a human after that.
  */
 export function decideStep(f: StepFacts): Step {
+  return applyBudget(decidePrStep(f), f.budgetSpent ?? false);
+}
+
+function decidePrStep(f: StepFacts): Step {
   if (f.attention) return { kind: "none", reason: "needs-attention: a human owns this task" };
   const pr = f.pr;
   if (!pr) return { kind: "none", reason: "no open pull request" };
@@ -80,6 +99,17 @@ export function decideStep(f: StepFacts): Step {
     reason: `${what} after ${f.rounds} fix round${f.rounds === 1 ? "" : "s"} ` +
       `(limit ${f.maxRounds}${extra ? ` + ${extra} granted by triage` : ""})`,
   });
+
+  // A CI fix that could not change the failing head needs a human, not a pricier run.
+  // Review feedback retains its precedence when both gates are red.
+  if ((f.failedFixAttempts ?? 0) >= 1 && !f.review.changesRequested && pr.checks === "fail") {
+    return { kind: "escalate", reason: "CI is still failing after a failed fix attempt; a human needs to investigate" };
+  }
+
+  if ((f.failedFixAttempts ?? 0) >= 1 && f.nextCascade &&
+      (f.review.changesRequested || pr.checks === "fail" || pr.mergeable === "conflicting")) {
+    return { kind: "cascade", route: f.nextCascade };
+  }
 
   if (f.review.changesRequested) {
     return exhausted ? spent("review feedback is still unresolved") : { kind: "fix", reason: "review" };

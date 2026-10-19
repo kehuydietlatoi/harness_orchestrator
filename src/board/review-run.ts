@@ -1,3 +1,5 @@
+import { runBudget } from "../tasks/budget-runtime.js";
+import { reviewIdentity } from "./review-identity.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
@@ -13,7 +15,7 @@ import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { logSize } from "../util/log-file.js";
 import { normalizeFollowups, withFollowups, type ReviewMode } from "./approval.js";
-import { markUnavailable, unavailableAgents } from "./availability.js";
+import { availabilityKey, markUnavailable, unavailableAgents, unavailableUntil } from "./availability.js";
 import { issueAgent } from "./board.js";
 import { approve, prIssueNumber, requestChanges } from "./review.js";
 import { pickReviewer } from "./reviewer.js";
@@ -268,6 +270,7 @@ export interface ReviewRunDeps {
     runCwd: string;
     logName: string;
     timeoutMs: number;
+    maxBudgetUsd?: number;
   }): Promise<HeadlessResult>;
   /** An exact checkout of the PR head for the reviewer to read. */
   checkout(pr: Pick<Pr, "number" | "headSha">): Promise<ReviewCheckout>;
@@ -290,9 +293,10 @@ export interface ReviewOutcome {
 
 function defaultDeps(cfg: OrchConfig, cwd: string): ReviewRunDeps {
   return {
-    runner: ({ reviewer, prompt, model, runCwd, logName, timeoutMs }) =>
+    runner: ({ reviewer, prompt, model, runCwd, logName, timeoutMs, maxBudgetUsd }) =>
       runHeadlessAgent(makeAdapter(reviewer, cfg), prompt, model, cwd, logName, timeoutMs, {
         readOnly: true,
+        ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
         runCwd,
       }),
     checkout: (pr) => prepareReviewCheckout(pr, cwd),
@@ -330,16 +334,23 @@ export async function runAutomatedReview(
   const diff = await prDiff(prNum, { cwd, strict: true });
   if (diff.trim().length === 0) throw new Error(`PR #${prNum} has an empty diff; there is nothing to review`);
 
+  const identities = Object.fromEntries(cfg.agents.map((agent) => [agent, reviewIdentity(agent, issue, cfg)]));
+  const authorFamily = author ? reviewIdentity(author, issue, cfg, "author").family : undefined;
   const tried = new Set<string>();
   for (;;) {
     const now = deps.now();
     const pick = opts.reviewer
       ? { reviewer: opts.reviewer, mode: (opts.reviewer === author ? "self" : "cross") as ReviewMode }
       : pickReviewer({
-          author,
+          author, identities, authorFamily,
           agents: cfg.agents,
           policy: cfg.reviewPolicy,
-          unavailable: new Set([...unavailableAgents(cfg.agents, cwd, now), ...tried]),
+          unavailable: new Set([
+            ...unavailableAgents(cfg.agents, cwd, now), ...tried,
+            ...cfg.agents.filter(a => a === "opencode" && unavailableUntil(
+              availabilityKey(a, resolveTaskModel(a, issue, cfg, { purpose: "review" })?.model), cwd, now,
+            ) !== null),
+          ]),
         });
     if (!pick) {
       throw new NoReviewerError(
@@ -348,10 +359,20 @@ export async function runAutomatedReview(
       );
     }
     if (!cfg.agents.includes(pick.reviewer)) throw new Error(`'${pick.reviewer}' is not a configured agent.`);
+    const validPick = pickReviewer({ author, agents: opts.reviewer ? [opts.reviewer] : cfg.agents,
+      identities, authorFamily, policy: cfg.reviewPolicy, unavailable: new Set() });
+    if (!validPick) throw new Error("reviewer is not eligible for premium, different-family review");
     tried.add(pick.reviewer);
 
-    const model = resolveTaskModel(pick.reviewer, issue, cfg);
+    const { tier, family } = identities[pick.reviewer];
+    if (!family) throw new Error("reviewer has no model family");
+    const model = resolveTaskModel(pick.reviewer, issue, cfg, { purpose: "review" });
+    const key = availabilityKey(pick.reviewer, model?.model);
+    if (pick.reviewer === "opencode" && unavailableUntil(key, cwd, now)) {
+      throw new Error(`'${key}' is paused (endpoint cooldown)`);
+    }
     log.info(`reviewing PR #${prNum} with '${pick.reviewer}' (${pick.mode}${model ? `, ${formatModelSpec(model)}` : ""})`);
+    const limits = runBudget(issue, cfg, cwd, cfg.reviewTimeoutMs);
     const checkout = await deps.checkout(pr); // fail closed: no exact-head checkout, no review
     const logName = `review-${prNum}-${pick.reviewer}`;
     const logFile = headlessLogFile(cwd, logName);
@@ -368,7 +389,7 @@ export async function runAutomatedReview(
         model,
         runCwd: checkout.path,
         logName,
-        timeoutMs: cfg.reviewTimeoutMs,
+        ...limits,
       });
     } finally {
       await checkout.release().catch((error: unknown) =>
@@ -383,7 +404,7 @@ export async function runAutomatedReview(
     if (!verdict) {
       const limit = detectUsageLimit(run.raw, now);
       if (limit) {
-        const until = markUnavailable(pick.reviewer, { resetAt: limit.resetAt, reason: limit.message }, cwd, now);
+        const until = markUnavailable(key, { resetAt: limit.resetAt, reason: limit.message }, cwd, now);
         log.warn(`'${pick.reviewer}' hit its usage limit; unavailable until ${until.toISOString()}`);
         if (opts.reviewer) throw new Error(`'${pick.reviewer}' is out of usage until ${until.toISOString()}`);
         continue; // re-pick: another harness, or the author's own fresh session
@@ -403,7 +424,7 @@ export async function runAutomatedReview(
     const current = await getPr(prNum, { cwd });
     if (current.headSha !== head) throw new Error(`PR #${prNum} changed during review; run it again`);
 
-    const recordOpts = { mode: pick.mode, cfg, head };
+    const recordOpts = { mode: pick.mode, cfg, head, identity: { tier, family } };
     if (verdict.decision === "approve") {
       await approve(prNum, pick.reviewer, cwd, withFollowups(verdict.notes, verdict.followups), head, recordOpts);
     } else {

@@ -1,5 +1,6 @@
+import { normalizeEffort, type EffortTier, type TierAliases } from "../config.js";
 import { type Issue, listIssues, getIssue } from "../github/github.js";
-import { STATUS } from "../github/labels.js";
+import { NEEDS_ATTENTION, STATUS } from "../github/labels.js";
 import { isLocked } from "../git/lock.js";
 
 export function issueStatus(i: Issue): string {
@@ -12,10 +13,11 @@ export function issueAgent(i: Issue): string | null {
   return a ? a.slice("agent:".length) : null;
 }
 
-export function issueEffort(i: Issue): "easy" | "hard" | null {
+export function issueEffort(i: Issue, aliases?: TierAliases): EffortTier | null {
   for (const label of i.labels) {
-    if (label === "effort:easy") return "easy";
-    if (label === "effort:hard") return "hard";
+    if (!label.startsWith("effort:")) continue;
+    const tier = normalizeEffort(label.slice("effort:".length), aliases);
+    if (tier) return tier;
   }
   return null;
 }
@@ -84,6 +86,7 @@ export async function isEligible(
   cwd?: string,
   open?: Map<number, Issue>,
 ): Promise<boolean> {
+  if (i.labels.includes(NEEDS_ATTENTION)) return false;
   const claimed = i.labels.some((l) => l.startsWith("status:") && l !== STATUS.todo);
   if (claimed) return false;
   if (await isLocked(i.number, { cwd })) return false;

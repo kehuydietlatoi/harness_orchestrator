@@ -8,12 +8,15 @@ export interface RunContext {
   model?: ModelSpec; // resolved agent-specific model + effort
   logFile?: string;
   timeoutMs?: number;
+  maxBudgetUsd?: number;
   /** Continue this earlier conversation (so a fix round keeps the author's context)
    * instead of starting a new one. Absent = fresh session. */
   resumeSession?: string;
 }
 
 export interface RunResult {
+  /** Structured endpoint failure classification, when the adapter exposes one. */
+  outcome?: import("./opencode-events.js").OpencodeOutcome;
   ok: boolean;
   code: number;
   durationMs: number;
@@ -30,6 +33,7 @@ export interface HeadlessContext {
   model?: ModelSpec;
   logFile: string;
   timeoutMs?: number;
+  maxBudgetUsd?: number;
   /** Run without any ability to modify the workspace (reviewers). */
   readOnly?: boolean;
 }

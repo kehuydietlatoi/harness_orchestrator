@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
 const mocks = vi.hoisted(() => ({
+  exec: vi.fn(),
   claimNext: vi.fn(),
   submit: vi.fn(),
   buildBrief: vi.fn(() => "brief"),
@@ -12,10 +13,12 @@ const mocks = vi.hoisted(() => ({
   runTask: vi.fn(),
   getIssue: vi.fn(),
   editIssue: vi.fn(),
+  ensureLabels: vi.fn(),
   listOpenPrs: vi.fn(),
   lockRelease: vi.fn(),
   removeWorktree: vi.fn(),
   discardWorktree: vi.fn(),
+  readRuns: vi.fn(() => []),
   appendRun: vi.fn(),
   parseUsage: vi.fn(() => ({
     tokensIn: null,
@@ -28,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   resolveBaseBranch: vi.fn(),
   countCommitsAhead: vi.fn(),
 }));
+vi.mock("../src/util/exec.js", () => ({ exec: mocks.exec }));
 
 vi.mock("../src/tasks/service.js", () => ({
   claimNext: mocks.claimNext,
@@ -40,6 +44,7 @@ vi.mock("../src/adapters/index.js", () => ({
 vi.mock("../src/github/github.js", () => ({
   getIssue: mocks.getIssue,
   editIssue: mocks.editIssue,
+  ensureLabels: mocks.ensureLabels,
   listOpenPrs: mocks.listOpenPrs,
 }));
 vi.mock("../src/git/lock.js", () => ({ release: mocks.lockRelease }));
@@ -48,6 +53,7 @@ vi.mock("../src/git/worktree.js", () => ({
   discardWorktree: mocks.discardWorktree,
 }));
 vi.mock("../src/board/telemetry.js", () => ({
+  readRuns: mocks.readRuns,
   appendRun: mocks.appendRun,
   parseUsage: mocks.parseUsage,
   projectId: mocks.projectId,
@@ -59,7 +65,7 @@ vi.mock("../src/git/git.js", () => ({
 }));
 
 const { processNext, recordRun, runLoop } = await import("../src/tasks/runner.js");
-const { unavailableUntil } = await import("../src/board/availability.js");
+const { markUnavailable, unavailableUntil } = await import("../src/board/availability.js");
 
 const issue = {
   number: 35,
@@ -76,6 +82,10 @@ describe("processNext recovery", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.exec.mockReset();
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({
+      code: 0, stderr: "", stdout: args[0] === "symbolic-ref" ? "task/35\n" : "",
+    }));
     cwd = mkdtempSync(join(tmpdir(), "orch-runner-recovery-"));
     worktree = join(cwd, "worktree");
     mkdirSync(worktree);
@@ -96,6 +106,122 @@ describe("processNext recovery", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("hands an exhausted budget to a human without a harness invocation or run record", async () => {
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { requests: 0 } } }, cwd);
+    expect(result).toMatchObject({ issue: 35, outcome: "needs-attention", reason: "budget spent" });
+    expect(mocks.runTask).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+  });
+
+  it("reports a ticket time budget cutoff as budget-spent", async () => {
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: "Budget: 0.2m" }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 12_300 });
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention", reason: "budget spent" });
+      expect(mocks.runTask).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 12_000 }));
+      expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "budget-spent", requests: 1 }), cwd);
+      expect(output.mock.calls.flat().join("\n")).toContain("time budget spent");
+      expect(output.mock.calls.flat().join("\n")).not.toContain("timed out");
+    } finally { output.mockRestore(); }
+  });
+
+  it.each([undefined, 0, 3])("records at least one request per invocation (reported %s)", requests => {
+    mocks.parseUsage.mockReturnValueOnce({ tokensIn: null, tokensOut: null, tokensTotal: null, costUsd: null, ...{ requests } });
+    recordRun(35, "codex", undefined, "failed", 1, join(cwd, "missing.jsonl"), cwd, DEFAULT_CONFIG, { phase: "implement" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ requests: Math.max(1, requests ?? 1) }), cwd);
+  });
+
+  it("keeps an ordinary timeout when the harness deadline is shorter than the ticket budget", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: true, durationMs: 1000 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, taskTimeoutMs: 1000, budgets: { default: { minutes: 1 } } }, cwd)).toMatchObject({ outcome: "failed" });
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ outcome: "failed", requests: 1 }), cwd);
+  });
+
+  it("does not call a non-timeout failure a budget stop", async () => {
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, timedOut: false, durationMs: 1 });
+    expect(await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { minutes: 0.2 } } }, cwd)).toMatchObject({ outcome: "failed" });
+  });
+
+  it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {
+    mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
+    mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-progress"] });
+    mocks.submit.mockResolvedValue("https://example.test/pull/1");
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({
+      code: 0, stderr: "", stdout: args[0] === "symbolic-ref" ? "task/35\n" : args[0] === "status" ? "?? greet.js\n" : "",
+    }));
+    const cfg = { ...DEFAULT_CONFIG, verify: [["node", "--test"], ["npm", "test"]] };
+    const result = await processNext(agent, cfg, cwd);
+    expect(result?.outcome).toBe("submitted");
+    const calls = mocks.exec.mock.calls;
+    expect(calls.map(([cmd, argv]) => [cmd, argv])).toEqual([
+      ["git", ["symbolic-ref", "--short", "HEAD"]],
+      ["git", ["status", "--porcelain", "--untracked-files=all"]],
+      ["node", ["--test"]], ["npm", ["test"]],
+      ["git", ["symbolic-ref", "--short", "HEAD"]],
+      ["git", ["add", "--all"]],
+      ["git", ["commit", "-m", "Recover runner failures (#35)", "-m",
+        `Worker: ${agent}; model: ${agent === "opencode" ? "default" : agent === "codex" ? "gpt-6.1-sol@medium" : "claude-sonnet-5-5@medium"}`]],
+    ]);
+    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000 });
+    expect(mocks.submit).toHaveBeenCalledWith(35, agent, cfg, cwd);
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("commits and submits without checks when verify is omitted", async () => {
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M greet.js" : "" }));
+    expect((await processNext("codex", DEFAULT_CONFIG, cwd))?.outcome).toBe("submitted");
+    expect(mocks.exec.mock.calls.every(([cmd]) => cmd === "git")).toBe(true);
+  });
+
+  it.each([1, 124])("retains output and comments a failed verification (exit %s)", async code => {
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (cmd: string, args: string[]) => ({
+      code: cmd === "node" ? code : 0, stderr: cmd === "node" ? "check failed" : "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? "?? greet.js" : "x".repeat(7000),
+    }));
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, verify: [["node", "--test"], ["npm", "test"]] }, cwd);
+    expect(result?.outcome).toBe("needs-attention");
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.exec.mock.calls.some(([, argv]) => argv[0] === "add" || argv[0] === "commit")).toBe(false);
+    expect(mocks.exec).not.toHaveBeenCalledWith("npm", expect.anything(), expect.anything());
+    expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "35", "--body-file", "-"], {
+      cwd, input: expect.stringContaining('Command (argv): ["node","--test"]'),
+    });
+    expect(mocks.exec.mock.calls.at(-1)?.[2].input).toContain("check failed");
+    expect(mocks.exec.mock.calls.at(-1)?.[2].input.length).toBeLessThan(6500);
+    expect(mocks.editIssue).toHaveBeenLastCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+    expect(mocks.appendRun).toHaveBeenCalledOnce();
+  });
+
+  it("flags a completed run with a clean worktree and no commits", async () => {
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    expect((await processNext("codex", DEFAULT_CONFIG, cwd))?.outcome).toBe("needs-attention");
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.exec.mock.calls.some(([, argv]) => argv[0] === "commit")).toBe(false);
+  });
+
+  it.each(["status", "commit", "branch"])("retains worker output on %s failure", async failure => {
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({
+      code: args[0] === failure ? 1 : 0, stderr: "git failed",
+      stdout: args[0] === "symbolic-ref" ? failure === "branch" ? "other-branch" : "task/35" : args[0] === "status" ? "?? greet.js" : "",
+    }));
+    expect((await processNext("codex", DEFAULT_CONFIG, cwd))?.outcome).toBe("failed");
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+  });
+
   it("passes the routing requirement through to the claim", async () => {
     mocks.claimNext.mockResolvedValue(null);
 
@@ -104,6 +230,69 @@ describe("processNext recovery", () => {
 
     await processNext("codex", DEFAULT_CONFIG, cwd);
     expect(mocks.claimNext).toHaveBeenLastCalledWith("codex", DEFAULT_CONFIG, cwd, {});
+  });
+
+  it.each(["endpoint-unavailable", "quota"] as const)("cascades %s to a projected member and records one hop", async (outcome) => {
+    const from = { agent: "opencode", tier: "free" as const, model: "zen/free", family: "openai" };
+    const cooled = { ...from, model: "zen/cooled" };
+    const to = { agent: "opencode", tier: "cheap" as const, model: "zen/cheap", family: "openai", effort: "high" };
+    const cfg = {
+      ...DEFAULT_CONFIG, agents: [...DEFAULT_CONFIG.agents, "opencode"],
+      adapters: { ...DEFAULT_CONFIG.adapters, opencode: { cmd: "opencode" } },
+      tierMembers: { free: [from, cooled], cheap: [to], standard: [], lead: [] },
+    };
+    markUnavailable("opencode:zen/cooled", { resetAt: null, reason: "known outage" }, cwd);
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, labels: ["agent:opencode", "effort:free", "status:claimed"] }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, outcome, code: 1, durationMs: 1, timedOut: false });
+    const started = Date.now();
+    const onCascade = vi.fn();
+    const result = await processNext("opencode", cfg, cwd, { onCascade });
+    expect(onCascade).toHaveBeenCalledOnce();
+    expect(onCascade).toHaveBeenCalledWith("opencode");
+    const cooldownMs = outcome === "endpoint-unavailable" ? 10 * 60_000 : 60 * 60_000;
+    const until = unavailableUntil("opencode:zen/free", cwd)!.getTime();
+    expect(until).toBeGreaterThanOrEqual(started + cooldownMs);
+    expect(until).toBeLessThanOrEqual(Date.now() + cooldownMs);
+    expect(result?.outcome).toBe("requeued");
+    expect(mocks.editIssue).toHaveBeenLastCalledWith(35, {
+      cwd, addLabels: ["status:todo", "agent:opencode", "effort:cheap", "model:zen/cheap"],
+      removeLabels: ["status:claimed", "status:in-progress", "effort:free", "needs-attention"],
+    });
+    expect(mocks.ensureLabels).toHaveBeenCalledOnce();
+    expect(mocks.appendRun).toHaveBeenCalledOnce();
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.objectContaining({ cascadeFrom: from, cascadeTo: to, outcome: "usage-limited" }), cwd);
+    const { readEvents } = await import("../src/tasks/events.js");
+    expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([
+      expect.objectContaining({ issue: 35, cascadeFrom: from, cascadeTo: to }),
+    ]);
+    // The relabelled task selects the new model rather than its old adapter default.
+    const { resolveTaskModel } = await import("../src/tasks/runner.js");
+    expect(resolveTaskModel("opencode", { ...issue, labels: ["effort:cheap", "model:zen/cheap"] }, cfg)).toMatchObject({ model: "zen/cheap", effort: "high" });
+  });
+
+  it.each(["commits", "retained", "lock", "labels"])("does not record a hop when cascade requeue fails at %s", async (failure) => {
+    const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }, { agent: "claude" }] } };
+    mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
+    if (failure === "commits") mocks.countCommitsAhead.mockResolvedValue(1);
+    if (failure === "retained") mocks.removeWorktree.mockResolvedValue(false);
+    if (failure === "lock") mocks.lockRelease.mockResolvedValue(false);
+    if (failure === "labels") mocks.ensureLabels.mockRejectedValueOnce(new Error("labels unavailable"));
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("failed");
+    expect(onCascade).not.toHaveBeenCalled();
+    expect(mocks.appendRun).toHaveBeenCalledWith(expect.not.objectContaining({ cascadeTo: expect.anything() }), cwd);
+    const { readEvents } = await import("../src/tasks/events.js");
+    expect(readEvents(cwd).filter((event) => event.type === "cascade.hop")).toEqual([]);
+  });
+
+  it("keeps today's requeue/wait behavior when the ladder is exhausted", async () => {
+    const cfg = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex" }] } };
+    mocks.runTask.mockResolvedValue({ ok: false, outcome: "quota", code: 1, durationMs: 1, timedOut: false });
+    const onCascade = vi.fn();
+    expect((await processNext("codex", cfg, cwd, { onCascade }))?.outcome).toBe("requeued");
+    expect(onCascade).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenLastCalledWith(35, { cwd, addLabels: ["status:todo"], removeLabels: ["status:claimed", "status:in-progress"] });
+    expect(mocks.ensureLabels).not.toHaveBeenCalled();
   });
 
   describe("judging a failed run by its own log (the issue log is shared by every retry)", () => {
@@ -315,6 +504,19 @@ describe("processNext recovery", () => {
     expect(mocks.lockRelease).toHaveBeenCalledOnce();
     expect(mocks.appendRun).toHaveBeenCalledOnce();
     expect(mocks.appendRun.mock.calls[0][0]).toMatchObject({ issue: 35, outcome: "failed" });
+  });
+
+  it.each([false, true])("clears active labels after a failed implement (timedOut=%s)", async (timedOut) => {
+    let labels = ["agent:codex", "status:claimed", "status:in-progress"];
+    mocks.editIssue.mockImplementation(async (_n: number, edit: { addLabels?: string[]; removeLabels?: string[] }) => {
+      labels = [...new Set([...labels.filter((label) => !edit.removeLabels?.includes(label)), ...(edit.addLabels ?? [])])];
+    });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1, timedOut });
+
+    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "failed" });
+    expect(labels).toEqual(["agent:codex", "needs-attention"]);
+    expect(mocks.removeWorktree).toHaveBeenCalledOnce();
+    expect(mocks.lockRelease).toHaveBeenCalledOnce();
   });
 
   it("returns one failed outcome when the child process cannot start", async () => {

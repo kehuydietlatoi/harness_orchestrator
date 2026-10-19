@@ -14,8 +14,10 @@ export const STATUS_LABELS: string[] = Object.values(STATUS);
 
 /** Abstract model-effort tiers assigned to tasks. */
 export const EFFORT = {
-  easy: "effort:easy",
-  hard: "effort:hard",
+  free: "effort:free",
+  cheap: "effort:cheap",
+  standard: "effort:standard",
+  lead: "effort:lead",
 } as const;
 
 export const EFFORT_LABELS: string[] = Object.values(EFFORT);
@@ -54,8 +56,10 @@ export const LABELS: GhLabel[] = [
   { name: "reviewed-by:claude", color: "c5def5", description: "Cross-reviewed and approved by Claude" },
   { name: "reviewed-by:codex", color: "c5def5", description: "Cross-reviewed and approved by Codex" },
   { name: NEEDS_ATTENTION, color: "d93f0b", description: "Failed run — needs a human" },
-  { name: EFFORT.easy, color: "c2e0c6", description: "Use the agent's easy model tier" },
-  { name: EFFORT.hard, color: "f9d0c4", description: "Use the agent's hard model tier" },
+  { name: EFFORT.free, color: "c2e0c6", description: "Use the agent's free model tier" },
+  { name: EFFORT.cheap, color: "c2e0c6", description: "Use the agent's cheap model tier" },
+  { name: EFFORT.standard, color: "c2e0c6", description: "Use the agent's standard model tier" },
+  { name: EFFORT.lead, color: "f9d0c4", description: "Use the agent's lead model tier" },
   { name: ASSIGNED_BY_BRAIN, color: "bfd4f2", description: "Routing chosen by the judge, not a human" },
 ];
 

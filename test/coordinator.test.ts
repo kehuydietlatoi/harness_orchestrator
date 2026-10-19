@@ -6,10 +6,15 @@ import type { OrchEvent } from "../src/tasks/events.js";
 import type { Observation, TaskObservation } from "../src/tasks/observe.js";
 import type { RunSummary } from "../src/tasks/runner.js";
 import type { StepResult } from "../src/tasks/step-exec.js";
-import { decideStep, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
+import { decideStep, type StepFacts, type ChecksFact, type MergeableFact } from "../src/tasks/steps.js";
+import { byNumber, isEligible } from "../src/board/board.js";
+import type { Issue } from "../src/github/github.js";
+
+vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
 
 /** A tiny fake GitHub: PR state that the fake executors mutate and `observe` reads back. */
 interface SimPr {
+  nextCascade?: StepFacts["nextCascade"];
   issue: number;
   author: string;
   version: number;
@@ -74,6 +79,7 @@ class World {
     }
     const tasks = open.map((p) => {
       const facts = {
+        nextCascade: p.nextCascade,
         attention: p.attention,
         pr: { number: 1000 + p.issue, head: `h${p.version}`, checks: p.checks, mergeable: p.mergeable },
         review: { approved: p.approved, changesRequested: p.changes },
@@ -100,6 +106,7 @@ class World {
     const scripted = p.overrides[step.kind]?.shift();
     if (scripted) return scripted;
     switch (step.kind) {
+      case "cascade": p.nextCascade = null; return { signal: "cascade.hop" };
       case "review": {
         if ((p.verdicts.shift() ?? "approve") === "approve") { p.approved = true; return { signal: "review.approved" }; }
         p.changes = true;
@@ -173,8 +180,56 @@ async function drive(world: World, opts: Partial<AutopilotOptions> = {}) {
 }
 
 describe("runAutopilot", () => {
+  it("escalates a spent ticket budget without launching an agent step", async () => {
+    const w = new World();
+    w.add(pr(38));
+    const deps = w.deps();
+    deps.budgetSpent = () => true;
+    const executed = deps.execute;
+    deps.execute = async (obs, step) => {
+      expect(step).toEqual({ kind: "escalate", reason: "budget spent" });
+      return executed(obs, step);
+    };
+    const result = await runAutopilot({ ...OPTS, claim: "none" }, deps);
+    expect(result.escalated).toEqual([38]);
+    expect(w.calls).toEqual(["escalate:38"]);
+  });
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
+
+  it("does not reclaim a failed implement on later polls until a human clears needs-attention", async () => {
+    const w = new World();
+    // Keep polling for another task's CI while the failed implement has no PR, worktree, or lock.
+    w.add(pr(99, { checks: "pending" }));
+    const target: Issue = {
+      number: 8, title: "Failing endpoint", body: "", state: "OPEN",
+      labels: ["status:todo", "agent:codex"], assignees: [],
+    };
+    const starts: number[] = [];
+    const attempts = vi.fn(async (_agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null> => {
+      if (!(await isEligible(target, undefined, byNumber([target])))) return null;
+      starts.push(Date.now());
+      onClaimed(target.number);
+      await new Promise((resolve) => setTimeout(resolve, 20_000));
+      target.labels = ["agent:codex", "needs-attention"]; // failed-run recovery projection
+      return { issue: target.number, outcome: "failed", durationMs: 1 };
+    });
+    const deps = { ...w.deps(), availableAgents: () => ["codex"], implement: attempts };
+    const abort = new AbortController();
+    const run = runAutopilot({ ...OPTS, pollMs: 20_000, signal: abort.signal }, deps);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(attempts.mock.calls.length).toBeGreaterThan(1);
+    expect(starts).toHaveLength(1);
+
+    // Human handback during the same autopilot run makes it claimable again.
+    target.labels = ["agent:codex"];
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(starts).toHaveLength(2);
+    abort.abort();
+    await vi.advanceTimersByTimeAsync(20_000);
+    await run;
+    expect(w.events.filter((e) => e.type === "step.finished" && e.issue === 8 && e.signal === "step.failed")).toHaveLength(2);
+  });
 
   it("drives a task from implementation through review feedback, a resumed fix, and merge", async () => {
     const w = new World();
@@ -634,8 +689,9 @@ describe("runAutopilot", () => {
       for (let i = 0; i < 2000 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
 
       expect(done).toBe(true);
-      expect(w.calls.slice(0, 2)).toEqual(["fix:review:38", "fix:ci:38"]);
-      expect((await run).escalated).toEqual([]); // two failures, but of two different steps
+      // A failed review fix must not skip the first CI attempt; that CI failure then hands off.
+      expect(w.calls).toEqual(["fix:review:38", "fix:ci:38", "escalate:38"]);
+      expect((await run).escalated).toEqual([38]);
     });
   });
 
@@ -1264,5 +1320,135 @@ describe("runAutopilot with lead triage", () => {
     expect(w.calls.filter((c) => c === "triage:38")).toHaveLength(MAX_STEP_FAILURES);
     expect(w.calls.at(-1)).toBe("escalate:38");
     expect(summary.escalated).toEqual([38]);
+  });
+});
+
+describe("cascade scheduling", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it("red-ci-probe escalates after a failed fix without raising tier or model", async () => {
+    const w = new World();
+    w.maxTriages = 1;
+    const route = { agent: "codex", tier: "lead", model: "gpt-6.1-sol" } as const;
+    w.add(pr(38, { checks: "fail", nextCascade: route,
+      overrides: { fix: [{ signal: "step.failed", detail: "the new commits change no files" }] },
+    }));
+    const summary = await drive(w);
+    expect(w.calls).toEqual(["fix:ci:38", "escalate:38"]);
+    expect(w.prs.get(38)?.nextCascade).toEqual(route);
+    expect(w.events.some((event) => event.type === "cascade.hop" || event.type === "fix.pushed")).toBe(false);
+    expect(summary).toMatchObject({ merged: [], escalated: [38], triaged: [] });
+  });
+
+  it.each([
+    ["in-run", "codex"], ["pre-claim", "codex"],
+    ["in-run", "claude"], ["pre-claim", "claude"],
+  ])("retries a healthy route in the same run after an %s hop to %s", async (path, destination) => {
+    const w = new World();
+    w.todo.push({ issue: 20, agent: "codex", pr: { approved: true } });
+    const base = w.deps();
+    const attempts: string[] = [];
+    let hopped = false;
+    const deps: CoordinatorDeps = {
+      ...base,
+      // Claude is probed first and drained before a cross-harness hop targets it.
+      availableAgents: () => ["claude", "codex"],
+      implement: async (agent, onClaimed, onCascade) => {
+        if (agent !== (hopped ? destination : "codex")) return null;
+        attempts.push(hopped ? "healthy" : "dead");
+        if (!hopped) {
+          hopped = true;
+          w.todo[0].agent = destination;
+          onCascade?.(destination);
+          if (path === "pre-claim") return null;
+          onClaimed(20);
+          return { issue: 20, outcome: "requeued", durationMs: 1 };
+        }
+        return base.implement(agent, onClaimed);
+      },
+    };
+    let done = false;
+    const run = runAutopilot({ ...OPTS, max: 1 }, deps).finally(() => { done = true; });
+    for (let i = 0; i < 20 && !done; i += 1) await vi.advanceTimersByTimeAsync(1000);
+    expect(done).toBe(true);
+    expect((await run).merged).toEqual([20]);
+    expect(attempts.slice(0, 2)).toEqual(["dead", "healthy"]);
+  });
+
+  it("waits without hot-looping when a requeue has no hop and every endpoint is cooling", async () => {
+    const w = new World();
+    const base = w.deps();
+    let requeued = false;
+    const attempts = vi.fn(async (_agent: string, onClaimed: (issue: number) => void): Promise<RunSummary | null> => {
+      if (requeued) return null; // the endpoint cooldown prevents another claim
+      requeued = true;
+      onClaimed(20);
+      return { issue: 20, outcome: "requeued", durationMs: 1 };
+    });
+    const sleep = vi.fn(base.sleep);
+    const start = Date.now();
+    const run = runAutopilot({ ...OPTS, maxIdleMs: 5000 }, {
+      ...base, availableAgents: () => ["codex"], implement: attempts,
+      blockedBacklog: async () => requeued ? [20] : [], sleep,
+    });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(await run).toMatchObject({ stopped: "idle-timeout", failures: 0, submitted: [] });
+    expect(Date.now() - start).toBeGreaterThanOrEqual(5000);
+    expect(attempts.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(sleep.mock.calls.filter(([, opts]) => !opts?.unref).length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("ignores a concurrent empty claim that started before a hop to its harness", async () => {
+    const w = new World();
+    w.todo.push({ issue: 20, agent: "claude", pr: { approved: true } });
+    const base = w.deps();
+    let hopped = false;
+    let firstClaude = true;
+    const run = runAutopilot(OPTS, {
+      ...base,
+      implement: async (agent, onClaimed, onCascade) => {
+        if (agent === "claude" && firstClaude) {
+          firstClaude = false;
+          await base.sleep(1000); // its empty inventory was read before the relabel
+          return null;
+        }
+        if (agent === "codex" && !hopped) {
+          hopped = true;
+          onCascade?.("claude");
+          return null;
+        }
+        return base.implement(agent, onClaimed);
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect((await run).merged).toEqual([20]);
+  });
+
+  it("switches members after one failed fix, then retries on the preserved PR", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: { fix: [{ signal: "step.failed", detail: "no commits" }] } }));
+    await drive(w);
+    expect(w.calls.slice(0, 3)).toEqual(["fix:review:38", "cascade:38", "fix:review:38"]);
+  });
+  it("retries a failed cascade write and escalates repeated failures", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: {
+      fix: [{ signal: "step.failed" }], cascade: [{ signal: "step.failed" }, { signal: "step.failed" }],
+    } }));
+    await drive(w);
+    expect(w.calls).toEqual(["fix:review:38", "cascade:38", "cascade:38", "escalate:38"]);
+  });
+  it("does not cascade a failure from a previous head", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true, nextCascade: { agent: "claude", tier: "lead" }, overrides: { fix: [{ signal: "step.failed" }] } }));
+    const inner = w.execute;
+    w.execute = async (obs, step) => {
+      const result = await inner(obs, step);
+      if (result.signal === "step.failed") w.prs.get(38)!.version += 1;
+      return result;
+    };
+    await drive(w);
+    expect(w.calls).not.toContain("cascade:38");
+    expect(w.calls.slice(0, 2)).toEqual(["fix:review:38", "fix:review:38"]);
   });
 });

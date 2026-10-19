@@ -29,7 +29,7 @@ export interface ClaudeSession {
   resume: boolean;
 }
 
-export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession): string[] {
+export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession, maxBudgetUsd?: number): string[] {
   const args = [
     "-p",
     "--output-format",
@@ -40,6 +40,7 @@ export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession):
     "--allowedTools",
     "Read,Edit,Write,Bash",
   ];
+  if (maxBudgetUsd !== undefined) args.push("--max-budget-usd", String(maxBudgetUsd));
   if (session) args.push(session.resume ? "--resume" : "--session-id", session.id);
   return [...args, ...claudeModelArgs(model)];
 }
@@ -48,7 +49,7 @@ export function buildClaudeTaskArgs(model?: ModelSpec, session?: ClaudeSession):
  * Claude argv for a read-only reviewer session. Edit/Write/Bash are denied outright
  * (not merely un-allowed) so a user-level allow rule cannot re-enable them. Pure.
  */
-export function buildClaudeReviewArgs(model?: ModelSpec): string[] {
+export function buildClaudeReviewArgs(model?: ModelSpec, maxBudgetUsd?: number): string[] {
   return [
     "-p",
     "--output-format",
@@ -59,6 +60,7 @@ export function buildClaudeReviewArgs(model?: ModelSpec): string[] {
     "--disallowedTools",
     "Edit,Write,Bash,NotebookEdit",
     ...claudeModelArgs(model),
+    ...(maxBudgetUsd !== undefined ? ["--max-budget-usd", String(maxBudgetUsd)] : []),
   ];
 }
 
@@ -99,7 +101,7 @@ export class ClaudeAdapter implements HarnessAdapter {
     const session: ClaudeSession = ctx.resumeSession
       ? { id: ctx.resumeSession, resume: true }
       : { id: randomUUID(), resume: false };
-    const args = buildClaudeTaskArgs(ctx.model, session);
+    const args = buildClaudeTaskArgs(ctx.model, session, ctx.maxBudgetUsd);
     const r = await spawnLogged(this.cfg.cmd, args, {
       cwd: ctx.worktree,
       input: ctx.prompt,
@@ -118,7 +120,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 
   runHeadless(ctx: HeadlessContext): Promise<HeadlessResult> {
-    const args = ctx.readOnly ? buildClaudeReviewArgs(ctx.model) : buildClaudeTaskArgs(ctx.model);
+    const args = ctx.readOnly ? buildClaudeReviewArgs(ctx.model, ctx.maxBudgetUsd) : buildClaudeTaskArgs(ctx.model, undefined, ctx.maxBudgetUsd);
     return runStructuredHeadless(this.cfg.cmd, args, ctx, resultTextFromClaudeStreamJson);
   }
 

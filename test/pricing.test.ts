@@ -8,10 +8,32 @@ const usage = (over: Partial<Parameters<typeof estimateCost>[0]> = {}) => ({
   ...over,
 });
 
+describe("DEFAULT_PRICING", () => {
+  it("defines Claude 5.5 input, cache-read, and output rates", () => {
+    expect(DEFAULT_PRICING["claude-sonnet-5-5"]).toEqual({ input: 2, cachedInput: 0.1, output: 10 });
+    expect(DEFAULT_PRICING["claude-opus-5-5"]).toEqual({ input: 4, cachedInput: 0.2, output: 20 });
+  });
+
+  it("preserves the generic aliases for older models", () => {
+    expect(DEFAULT_PRICING.opus).toEqual({ input: 5, cachedInput: 0.5, output: 25 });
+    expect(DEFAULT_PRICING.sonnet).toEqual({ input: 3, cachedInput: 0.3, output: 15 });
+  });
+});
+
 describe("estimateCost", () => {
-  it("prices the default Sonnet 5.5 model id at the sonnet rates", () => {
-    // 1M input @ $3 + 100k output @ $15/M = 3 + 1.5 = 4.5
-    expect(estimateCost(usage(), "claude-sonnet-5-5", DEFAULT_PRICING)).toBeCloseTo(4.5, 6);
+  it("returns zero for quota mode even when usage, model, and prices are unknown", () => {
+    expect(estimateCost(usage({ tokensIn: null }), null, {}, "quota")).toBe(0);
+    expect(estimateCost(usage(), "opus", DEFAULT_PRICING, "subscription")).toBeNull();
+  });
+  it("prices the default Sonnet 5.5 model id", () => {
+    // 1M input @ $2 + 100k output @ $10/M = $3.
+    expect(estimateCost(usage(), "claude-sonnet-5-5", DEFAULT_PRICING)).toBeCloseTo(3, 6);
+  });
+
+  it("estimates the default Opus 5.5 lead cost including cache reads", () => {
+    // 800k cached @ $0.2/M + 200k uncached @ $4/M + 100k output @ $20/M = $2.96.
+    expect(estimateCost(usage({ cachedInputTokens: 800_000 }), "claude-opus-5-5", DEFAULT_PRICING))
+      .toBeCloseTo(2.96, 6);
   });
 
   it("prices opus at the published input/output rates", () => {

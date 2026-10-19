@@ -20,7 +20,7 @@ const unmarkedAuthorApproval = () => review({ reviewer: "claude" });
 describe("acceptedReviewers: who counts as approved", () => {
   const state = (reviewers: string[], selfReviewers: string[] = []) => ({ reviewers, selfReviewers });
 
-  it("always counts another harness", () => {
+  it("keeps legacy different-family harness approvals", () => {
     for (const policy of [undefined, "cross", "cross-or-self"] as const) {
       expect(acceptedReviewers(state(["codex"]), "claude", policy)).toEqual(["codex"]);
     }
@@ -59,6 +59,15 @@ describe("repair's label projection counts a valid self-approval (it used to str
     branch: "ahead", prs: [pr], reviews, telemetry: "submitted", ...(reviewPolicy ? { reviewPolicy } : {}),
   });
   const labelActions = (o: RepairObservation) => planRepairs(o).actions.filter((a) => a.kind === "sync-labels");
+
+  it("removes low-tier and same-family approvals and restores review-needed", () => {
+    for (const metadata of [{ tier: "free" as const, family: "openai" },
+      { tier: "cheap" as const, family: "openai" }, { tier: "lead" as const, family: "anthropic" }]) {
+      expect(labelActions(observe(["reviewed-by:codex"], [review({ reviewer: "codex", ...metadata })], "cross"))).toEqual([
+        { kind: "sync-labels", issue: 36, add: [REVIEW_NEEDED], remove: ["reviewed-by:codex"] },
+      ]);
+    }
+  });
 
   it("leaves a current self-approval's projection alone under cross-or-self", () => {
     expect(labelActions(observe(["reviewed-by:claude"], [selfApproval()], "cross-or-self"))).toEqual([]);
@@ -100,6 +109,11 @@ describe("the board shows a valid self-approval's reviewer", () => {
   const pr: Pr = { number: 62, title: "t", body: "Closes #36", state: "OPEN", headSha: HEAD, headRefName: "task/36-t", htmlUrl: "" };
   const reviewedBy = (reviews: ReturnType<typeof review>[], policy?: "cross" | "cross-or-self") =>
     assemble([issue], [pr], [36], [], [], "now", null, new Map(), new Map(), new Map([[62, reviews]]), policy).tasks[0].reviewedBy;
+
+  it("hides low-tier and same-family approvals", () => {
+    expect(reviewedBy([review({ reviewer: "codex", tier: "cheap", family: "openai" })])).toEqual([]);
+    expect(reviewedBy([review({ reviewer: "opencode", tier: "standard", family: "anthropic" })])).toEqual([]);
+  });
 
   it("lists the author's marked self-review under cross-or-self only", () => {
     expect(reviewedBy([selfApproval()], "cross-or-self")).toEqual(["claude"]);

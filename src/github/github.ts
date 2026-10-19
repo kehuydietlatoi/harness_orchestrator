@@ -178,8 +178,10 @@ export async function editIssue(
   if (r.code !== 0) throw new Error(`gh issue edit #${number} failed: ${r.stderr.trim()}`);
 }
 
+/** Close an issue. Closing an already-closed issue succeeds (gh only warns); any other failure throws. */
 export async function closeIssue(number: number, opts: { cwd?: string } = {}): Promise<void> {
-  await exec("gh", ["issue", "close", String(number)], { cwd: opts.cwd });
+  const r = await exec("gh", ["issue", "close", String(number)], { cwd: opts.cwd });
+  if (r.code !== 0) throw new Error(`gh issue close #${number} failed: ${r.stderr.trim()}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,8 +338,9 @@ export async function listPrs(
  * throws instead, so a missing diff can never be mistaken for "nothing suspicious in it".
  */
 export async function prDiff(number: number, opts: { cwd?: string; strict?: boolean } = {}): Promise<string> {
-  const r = await exec("gh", ["pr", "diff", String(number)], { cwd: opts.cwd });
-  if (r.code === 0) return r.stdout;
+  const r = await exec("gh", ["pr", "diff", String(number), "--allow-escape-sequences"], { cwd: opts.cwd });
+  // Preserve escape sequences for review without letting them control a terminal.
+  if (r.code === 0) return r.stdout.replaceAll("\u001b", "<ESC>");
   if (opts.strict) throw new Error(`could not fetch the diff of PR #${number}: ${r.stderr.trim() || `exit ${r.code}`}`);
   return `(diff unavailable: ${r.stderr.trim()})`;
 }

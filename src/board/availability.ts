@@ -17,6 +17,11 @@ export interface Unavailability {
 
 type Store = Record<string, Unavailability>;
 
+/** OpenCode budgets belong to the resolved provider/model; other harnesses share a budget. */
+export function availabilityKey(agent: string, model?: string): string {
+  return agent === "opencode" ? `opencode:${model ?? "default"}` : agent;
+}
+
 export function availabilityPath(cwd: string): string {
   return join(projectStateDir(cwd), "availability.json");
 }

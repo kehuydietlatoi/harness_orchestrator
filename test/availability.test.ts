@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   availabilityPath,
+  availabilityKey,
   DEFAULT_COOLDOWN_MS,
   markUnavailable,
   noteUsageLimitFromLog,
@@ -29,6 +30,16 @@ describe("harness availability store", () => {
     expect(unavailableAgents(["claude", "codex"], cwd, now).size).toBe(0);
   });
 
+  it("isolates OpenCode endpoint cooldowns from other models and harness budgets", () => {
+    const key = availabilityKey("opencode", "zen/free");
+    noteUsageLimitFromLog(key, '{"type":"error","error":{"data":{"statusCode":503}}}', cwd, now);
+    expect(unavailableUntil(key, cwd, now)?.toISOString()).toBe(minutes(10));
+    expect(unavailableUntil(availabilityKey("opencode", "zen/cheap"), cwd, now)).toBeNull();
+    expect(unavailableUntil("opencode", cwd, now)).toBeNull();
+    expect(availabilityKey("codex", "any")).toBe("codex");
+    expect(availabilityKey("claude", "any")).toBe("claude");
+  });
+
   it("marks an agent unavailable until its reset and then lets it back in", () => {
     markUnavailable("codex", { resetAt: minutes(90), reason: "usage limit" }, cwd, now);
 
@@ -41,6 +52,11 @@ describe("harness availability store", () => {
   it("falls back to the default cooldown when no reset time is known", () => {
     const until = markUnavailable("codex", { resetAt: null, reason: "limit" }, cwd, now);
     expect(until.getTime()).toBe(now.getTime() + DEFAULT_COOLDOWN_MS);
+  });
+
+  it("falls back to the default cooldown when a Codex reset is unparseable", () => {
+    const log = JSON.stringify({ type: "error", message: "Usage limit reached. try again at Oct 19th, 2026 sometime" });
+    expect(noteUsageLimitFromLog("codex", log, cwd, now)?.getTime()).toBe(now.getTime() + DEFAULT_COOLDOWN_MS);
   });
 
   it("clamps a reset that is implausibly far away or already past", () => {

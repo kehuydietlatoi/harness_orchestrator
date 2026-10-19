@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { commandExists, exec } from "../src/util/exec.js";
 
 // Real subprocesses (no mocks) via the current Node binary, so these run the
@@ -6,6 +9,11 @@ import { commandExists, exec } from "../src/util/exec.js";
 const node = process.execPath;
 
 describe("exec", () => {
+  it("kills a command at its timeout and reports failure", async () => {
+    const result = await exec(node, ["-e", "setInterval(() => {}, 1000)"], { timeoutMs: 100 });
+    expect(result.code).toBe(124);
+    expect(result.stderr).toContain("timed out");
+  });
   it("captures stdout and a zero exit code", async () => {
     const r = await exec(node, ["-e", "process.stdout.write('hello')"]);
     expect(r).toEqual({ code: 0, stdout: "hello", stderr: "" });
@@ -59,6 +67,34 @@ describe("exec", () => {
 });
 
 describe("commandExists", () => {
+  it("recognizes an existing absolute executable path", async () => {
+    expect(await commandExists(node)).toBe(true);
+  });
+
+  it("rejects a missing absolute executable path", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orch-command-"));
+    try {
+      expect(await commandExists(join(dir, "missing.exe"))).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an absolute directory path", async () => {
+    expect(await commandExists(tmpdir())).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a file without execute permission on POSIX", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "orch-command-"));
+    try {
+      const file = join(dir, "not-executable");
+      await writeFile(file, "", { mode: 0o600 });
+      expect(await commandExists(file)).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("is true for a binary on PATH and false otherwise", async () => {
     // `node` is on PATH in CI (actions/setup-node) and local dev environments.
     expect(await commandExists("node")).toBe(true);

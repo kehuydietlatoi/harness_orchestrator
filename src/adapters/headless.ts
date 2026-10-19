@@ -78,7 +78,7 @@ export async function runHeadlessAgent(
   cwd: string,
   logName: string,
   timeoutMs?: number,
-  opts: { readOnly?: boolean; runCwd?: string } = {},
+  opts: { readOnly?: boolean; runCwd?: string; maxBudgetUsd?: number } = {},
 ): Promise<HeadlessResult> {
   if (!adapter.runHeadless) {
     throw new Error(`lead adapter '${adapter.id}' does not support planner/judge execution`);
@@ -90,6 +90,7 @@ export async function runHeadlessAgent(
     model,
     logFile,
     timeoutMs,
+    ...(opts.maxBudgetUsd !== undefined ? { maxBudgetUsd: opts.maxBudgetUsd } : {}),
     ...(opts.readOnly ? { readOnly: true } : {}),
   });
 }

@@ -42,6 +42,10 @@ it("packs reproducibly, excludes private files, and installs a working CLI with 
     for (const file of ["dist/cli.js", "public/index.html", "assets/skills/orch-plan/SKILL.md", "tickets.example.json", "docs/WORKFLOW.md"]) {
       expect(files).toContain(file);
     }
+    const readme = readFileSync(path.join(root, "README.md"), "utf8");
+    for (const match of readme.matchAll(/\]\((docs\/[^)#]+)(?:#[^)]*)?\)/g)) {
+      expect(files, `README link: ${match[1]}`).toContain(match[1]);
+    }
     expect(files.some((f) => /^(?:src\/|test\/|node_modules\/|\.claude\/|\.env|private-key)/.test(f))).toBe(false);
     for (const file of files) {
       expect(/^(?:dist\/|public\/|assets\/|docs\/|README.md$|LICENSE$|package.json$|tickets.example.json$|demo.md$|CONTEXT.md$)/.test(file), file).toBe(true);
