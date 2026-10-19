@@ -31,6 +31,8 @@ describe("path claim lifecycle with real git refs", () => {
     cwd = mkdtempSync(join(tmpdir(), "orch-path-lifecycle-"));
     await exec("git", ["init", "-qb", "main"], { cwd });
     await exec("git", ["-c", "user.name=test", "-c", "user.email=test@test", "commit", "--allow-empty", "-qm", "init"], { cwd });
+    // Claims fetch their base; keep this lifecycle fixture entirely local.
+    await exec("git", ["remote", "add", "origin", cwd], { cwd });
     issue = { number: 42, title: "Assets", body: '## Ticket metadata (v2)\n\n```json\n{"kind":"asset","locks":["assets/**","scenes/main.scene"]}\n```',
       state: "OPEN", labels: ["status:todo", "agent:codex"], assignees: [] };
     vi.mocked(gh.getIssue).mockImplementation(async () => structuredClone(issue));
@@ -83,6 +85,8 @@ describe("path claim lifecycle with real git refs", () => {
 
   it("releases the full claim on abandon", async () => {
     await claimSpecific(42, "codex", cfg, cwd);
+    expect(wt.addWorktree).toHaveBeenCalledWith(42, "Assets", cfg.worktreeRoot,
+      { cwd, baseRef: "refs/remotes/origin/main" });
     vi.spyOn(config, "loadConfig").mockReturnValue(cfg);
     vi.spyOn(process, "cwd").mockReturnValue(cwd);
     await abandonCommand("42", { agent: "codex" });

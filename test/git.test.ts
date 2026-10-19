@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const execMock = vi.fn();
 vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(...args) }));
@@ -11,6 +14,8 @@ const {
 
 const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const missing = () => ({ code: 1, stdout: "", stderr: "" });
+const { exec: realExec } = await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js");
+const { addWorktree } = await import("../src/git/worktree.js");
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -19,6 +24,7 @@ describe("resolveBaseBranch", () => {
     execMock.mockImplementation(async (_cmd: string, args: string[]) => {
       if (args[0] === "check-ref-format") return ok();
       if (args.at(-1) === `refs/heads/${name}`) return ok();
+      if (args.at(-1) === `refs/remotes/origin/${name}`) return missing();
       throw new Error(`unexpected command: ${args.join(" ")}`);
     });
 
@@ -121,5 +127,60 @@ describe("compareBranchToBase", () => {
       .mockResolvedValueOnce(ok("abc123\n"))
       .mockResolvedValueOnce(ok("1\n"));
     await expect(compareBranchToBase("task/37-base", base, "/repo")).resolves.toBe("ahead");
+  });
+});
+
+describe("repository base with real Git refs", () => {
+  let root: string;
+  let origin: string;
+  let repo: string;
+  async function git(cwd: string, ...args: string[]): Promise<string> {
+    const result = await realExec("git", args, { cwd });
+    if (result.code !== 0) throw new Error(result.stderr);
+    return result.stdout.trim();
+  }
+  async function commit(cwd: string, message: string): Promise<string> {
+    await git(cwd, "-c", "user.name=Test", "-c", "user.email=test@example.com",
+      "commit", "--allow-empty", "-qm", message);
+    return git(cwd, "rev-parse", "HEAD");
+  }
+  beforeEach(async () => {
+    execMock.mockImplementation(realExec);
+    root = mkdtempSync(join(tmpdir(), "orch-base-"));
+    origin = join(root, "origin");
+    repo = join(root, "repo");
+    mkdirSync(origin);
+    await git(origin, "init", "-q", "-b", "studio");
+    await commit(origin, "initial");
+    await git(root, "clone", "-q", origin, repo);
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("fetches the current origin head and starts a worktree there while local base stays behind", async () => {
+    const local = await git(repo, "rev-parse", "studio");
+    const latest = await commit(origin, "merged work");
+    expect(await git(repo, "rev-parse", "origin/studio")).toBe(local);
+    const base = await resolveBaseBranch("studio", repo, { fetch: true });
+    expect(base).toEqual({ name: "studio", ref: "refs/remotes/origin/studio" });
+    const worktree = await addWorktree(167, "Fresh base", "../wt", { cwd: repo, baseRef: base.ref });
+    expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(latest);
+    expect(await git(repo, "rev-parse", "studio")).toBe(local);
+    expect(await countCommitsAhead(base.ref, "HEAD", worktree.path)).toBe(0);
+    await commit(worktree.path, "task work");
+    expect(await countCommitsAhead(base.ref, "HEAD", worktree.path)).toBe(1);
+    expect(await resolveBaseBranch("studio", repo)).toEqual(base);
+  });
+
+  it.each(["ahead", "diverged"])("rejects a local base that is %s of origin", async relation => {
+    await commit(repo, "local work");
+    if (relation === "diverged") await commit(origin, "remote work");
+    await expect(resolveBaseBranch("studio", repo, { fetch: true })).rejects.toThrow(
+      new RegExp(`local base branch 'studio' is ${relation}`),
+    );
+  });
+
+  it("fails closed when fetching fails even with cached base refs", async () => {
+    await git(repo, "remote", "set-url", "origin", join(root, "missing"));
+    await expect(resolveBaseBranch("studio", repo, { fetch: true })).rejects.toThrow(/git fetch.*failed/);
   });
 });
