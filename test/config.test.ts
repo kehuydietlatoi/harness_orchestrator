@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_FILE, DEFAULT_CONFIG, formatModelSpec, loadConfig, resolveLeadModel } from "../src/config.js";
+import { CONFIG_FILE, DEFAULT_CONFIG, formatModelSpec, loadConfig, resolveLeadModel, resolveCapabilities, resolveTierModel } from "../src/config.js";
 
 describe("loadConfig", () => {
   let dir = "";
@@ -16,6 +16,27 @@ describe("loadConfig", () => {
     writeFileSync(join(dir, CONFIG_FILE), JSON.stringify(config), "utf8");
     return dir;
   }
+
+  it("defaults proven capabilities without web and preserves explicit replacements", () => {
+    const config = loadConfig(writeConfig({ adapters: { codex: { models: { lead: { capabilities: ["vision"] } } } },
+      tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", capabilities: [] }] } }));
+    expect(resolveCapabilities("claude")).toEqual(["shell", "vision"]);
+    expect(resolveCapabilities("codex")).toEqual(["shell"]);
+    expect(resolveCapabilities("opencode")).toEqual(["shell"]);
+    expect(resolveCapabilities("codex", config.adapters.codex.models!.lead)).toEqual(["vision"]);
+    expect(resolveCapabilities("claude", resolveTierModel("claude", "lead", config))).toEqual([]);
+  });
+  it.each([null, "vision", [1], [""]])("rejects malformed capabilities %j", capabilities => {
+    expect(() => loadConfig(writeConfig({ adapters: { codex: { models: { lead: { capabilities } } } } }))).toThrow(/capabilities/);
+    expect(() => loadConfig(writeConfig({ tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex", capabilities }] } }))).toThrow(/capabilities/);
+  });
+  it("loads sensitivity policy and validates its shapes", () => {
+    const sensitivity = { default: "secret", secret: { families: ["openai"] }, internal: { families: [], allow: ["zen/vl"] } };
+    expect(loadConfig(writeConfig({ sensitivity })).sensitivity).toEqual(sensitivity);
+    for (const bad of [null, [], { default: "private" }, { secret: [] }, { internal: { allow: "zen/a" } }, { secret: { families: [1] } }]) {
+      expect(() => loadConfig(writeConfig({ sensitivity: bad }))).toThrow(/sensitivity/);
+    }
+  });
 
   it("overrides one model's pricing while retaining the other defaults", () => {
     const override = { input: 7, cachedInput: 0.7, output: 35 };

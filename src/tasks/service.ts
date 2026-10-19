@@ -319,6 +319,7 @@ export async function claimSpecific(
   if (observation.lockOwner !== null) return null;
   decideClaim(number, observation);
   const route = validateRoute({
+    ...parseTicketV2(observation.issue.body),
     role: issueRole(observation.issue), agent,
     tier: issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
     model: resolveTierModel(agent, issueEffort(observation.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, observation.issue.labels),
@@ -373,6 +374,7 @@ export async function claimNext(
   };
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
+    if (opts.canClaim && !(await opts.canClaim(candidate))) continue;
     const route = validateRoute({
       role: issueRole(candidate), agent, tier: issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
       model: resolveTierModel(agent, issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, candidate.labels),
@@ -381,7 +383,6 @@ export async function claimNext(
       log.warn(`#${candidate.number}: disallowed route: ${route.reason}`);
       continue;
     }
-    if (opts.canClaim && !(await opts.canClaim(candidate))) continue;
     try {
       const task = await claimSpecific(candidate.number, agent, cfg, cwd, deps);
       if (task) return task;

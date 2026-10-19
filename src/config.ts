@@ -8,6 +8,8 @@ import { loadPack, type DomainPack } from "./pack/load.js";
 /** What an adapter is told to run for one effort tier. Either field may be omitted
  * to defer to the harness's own configured default (e.g. `~/.codex/config.toml`). */
 export interface ModelSpec {
+  /** Explicit replacement for the harness's default capabilities. */
+  capabilities?: string[];
   /** Harness-specific model id or alias (`claude-sonnet-5-5`, a Codex model id). */
   model?: string;
   /** Provider identity, overriding the adapter default. Required for OpenCode. */
@@ -70,11 +72,13 @@ function normalizeModelSpec(agent: string, value: unknown, field = "models entri
   if (value === undefined || value === null) return undefined;
   if (typeof value === "string") return agent === "codex" ? { effort: value } : { model: value };
   if (typeof value === "object") {
-    const { model, effort, family } = value as ModelSpec;
+    const { model, effort, family, capabilities } = value as ModelSpec;
+    validateCapabilities(capabilities, `adapters.${agent}.${field}.capabilities`);
     if (family !== undefined && (typeof family !== "string" || !family.trim())) {
       throw new Error(`adapters.${agent}.${field}.family must be a non-empty string`);
     }
     return {
+      ...(capabilities !== undefined ? { capabilities } : {}),
       ...(family !== undefined ? { family } : {}),
       ...(typeof model === "string" ? { model } : {}),
       ...(typeof effort === "string" ? { effort } : {}),
@@ -103,7 +107,23 @@ export function resolveFamily(
     ({ claude: "anthropic", codex: "openai" } as Record<string, string>)[agent];
 }
 
+function validateCapabilities(value: unknown, field: string): void {
+  if (value !== undefined && (!Array.isArray(value) || !value.every(v => typeof v === "string" && v.trim().length > 0))) {
+    throw new Error(`${field} must be an array of non-empty strings`);
+  }
+}
+
+/** Defaults describe proven headless worker tools, never inferred from model names. */
+export function resolveCapabilities(agent: string, spec?: ModelSpec): readonly string[] {
+  return spec?.capabilities ?? ({ claude: ["shell", "vision"], codex: ["shell"], opencode: ["shell"] } as Record<string, string[]>)[agent] ?? [];
+}
+
 export interface OrchConfig {
+  sensitivity?: {
+    default?: "public" | "internal" | "secret";
+    secret?: { families?: string[] };
+    internal?: { families?: string[]; allow?: string[] };
+  };
   /** Domain pack path, relative to the project config directory. */
   pack?: string;
   /** Loaded by loadConfig; never read from serialized config. */
@@ -232,6 +252,21 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  if (raw.sensitivity !== undefined) {
+    const s = raw.sensitivity;
+    if (!s || typeof s !== "object" || Array.isArray(s) ||
+        (s.default !== undefined && !["public", "internal", "secret"].includes(s.default))) {
+      throw new Error("sensitivity must be an object with a public, internal, or secret default");
+    }
+    for (const key of ["secret", "internal"] as const) {
+      const policy = s[key];
+      if (policy !== undefined && (!policy || typeof policy !== "object" || Array.isArray(policy))) {
+        throw new Error(`sensitivity.${key} must be an object`);
+      }
+      validateCapabilities(policy?.families, `sensitivity.${key}.families`);
+    }
+    validateCapabilities(s.internal?.allow, "sensitivity.internal.allow");
+  }
   if (raw.protectedPaths !== undefined && (!Array.isArray(raw.protectedPaths) ||
       !raw.protectedPaths.every((path) => typeof path === "string" && path.trim().length > 0 &&
         ![...path].some((char) => char.charCodeAt(0) < 32) && !/^(?:[\\/]|[a-z]:)/i.test(path) && !path.split(/[\\/]/).includes("..")))) {
@@ -392,6 +427,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
       if (!Array.isArray(members)) throw new Error(`tierMembers.${tier} must be an array`);
       const seen = new Set<string>();
       for (const member of members) {
+        validateCapabilities(member?.capabilities, `tierMembers.${tier}.capabilities`);
         if (!member || !(raw.agents ?? DEFAULT_CONFIG.agents).includes(member.agent) || !adapters[member.agent]) {
           throw new Error(`tierMembers.${tier} requires a configured agent`);
         }
@@ -434,6 +470,7 @@ export function resolveTierModel(agent: string, tier: EffortTier, cfg: OrchConfi
   if (!member) return base;
   return {
     ...base,
+    ...(member.capabilities !== undefined ? { capabilities: member.capabilities } : {}),
     ...(member.model !== undefined ? { model: member.model } : {}),
     ...(member.effort !== undefined ? { effort: member.effort } : {}),
     ...(member.family !== undefined ? { family: member.family } : {}),

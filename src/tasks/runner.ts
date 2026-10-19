@@ -32,6 +32,7 @@ import { parseTicketV2 } from "./plan.js";
 import { verifyEnvironment, verifyTrustErrors } from "./verify.js";
 
 class VerificationFailed extends Error {}
+class RouteRefusal extends Error {}
 
 /** Finish a worker's uncommitted output using only coordinator-loaded configuration. */
 async function commitWorkerOutput(task: ClaimedTask, agent: string, model: ModelSpec | undefined, cfg: OrchConfig): Promise<boolean> {
@@ -84,8 +85,10 @@ export function resolveTaskModel(
     resolveTierModel(agent, tier, cfg, issueAgent(issue) === agent ? issue.labels : []);
   // Role allowances constrain writable implementation, not independent review.
   if (opts.purpose !== "review") {
-    const route = validateRoute({ role: issueRole(issue), agent, tier, model }, cfg);
-    if (!route.ok) throw new Error(`#${issue.number}: disallowed route: ${route.reason}`);
+    try {
+      const route = validateRoute({ ...parseTicketV2(issue.body), role: issueRole(issue), agent, tier, model }, cfg);
+      if (!route.ok) throw new Error(route.reason);
+    } catch (error) { throw new RouteRefusal(`#${issue.number}: disallowed route: ${(error as Error).message}`); }
   }
   return model;
 }
@@ -216,9 +219,10 @@ export async function processNext(
   }
   const task = await claimNext(agent, cfg, cwd, {
     requireRouted: opts.requireRouted, only: opts.only,
-    ...(agent === "opencode" ? {
-      canClaim: (issue: Issue) => preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade),
-    } : {}),
+    canClaim: async (issue: Issue) => {
+      if (await refuseRoute(issue, agent, cfg, cwd)) return false;
+      return agent !== "opencode" || preClaimHealthy(issue, agent, cfg, cwd, opts.onCascade);
+    },
   });
   if (!task) return null;
   opts.onClaimed?.(task.issue.number);
@@ -240,7 +244,13 @@ export async function dispatchSpecific(
   const issue = open.get(number);
   if (!issue) throw new Error(`#${number} is not an open issue.`);
 
-  const agent = resolveDispatchAgent(issue, open, cfg);
+  let agent: string;
+  try { agent = resolveDispatchAgent(issue, open, cfg); }
+  catch (error) {
+    if (!(error instanceof RouteRefusal)) throw error;
+    await refuseRoute(issue, issueAgent(issue)!, cfg, cwd);
+    return { issue: number, outcome: "needs-attention", reason: "disallowed route", durationMs: 0 };
+  }
   const key = availabilityKey(agent, resolveTaskModel(agent, issue, cfg)?.model);
   const pausedUntil = unavailableUntil(key, cwd);
   if (pausedUntil) {
@@ -254,13 +264,25 @@ export async function dispatchSpecific(
   return processClaimed(task, agent, cfg, cwd);
 }
 
+/** A refusal spends no request budget and never constructs an adapter. */
+async function refuseRoute(issue: Issue, agent: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
+  try { resolveTaskModel(agent, issue, cfg); return false; }
+  catch (error) {
+    if (!(error instanceof RouteRefusal)) throw error;
+    await editIssue(issue.number, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.todo] });
+    appendEvent({ type: "task.escalated", issue: issue.number, agent, detail: error.message }, cwd);
+    log.warn(error.message);
+    return true;
+  }
+}
+
 /** No harness or claim resources have been created: only advance the todo's route. */
 async function preClaimHealthy(issue: Issue, agent: string, cfg: OrchConfig, cwd: string, onCascade?: (agent: string) => void): Promise<boolean> {
   const model = resolveTaskModel(agent, issue, cfg);
   if (await endpointHealthy(agent, model?.model, cwd, cfg.adapters[agent])) return true;
   const current: CascadeRoute = { agent, ...model, tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
   const hop = nextHop(current, [], issueRole(issue), cfg,
-    member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd));
+    member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd), parseTicketV2(issue.body));
   if (hop) {
     // Failed relabels must not report a hop. Keep this path free of run telemetry:
     // no implementation harness ran and no ticket request budget was consumed.
@@ -300,6 +322,10 @@ async function processClaimed(
       log.warn(`#${n}: ${reason}`);
       return { issue: n, outcome: "needs-attention", reason, durationMs: 0 };
     }
+  }
+  if (await refuseRoute(task.issue, agent, cfg, cwd)) {
+    await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+    return { issue: n, outcome: "needs-attention", reason: "disallowed route", durationMs: 0 };
   }
   const model = resolveTaskModel(agent, task.issue, cfg);
   const startedAt = Date.now();
@@ -350,7 +376,7 @@ async function processClaimed(
           }, cwd) : null);
       const current: CascadeRoute = { agent, ...model, tier: issueEffort(task.issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead" };
       const hop = limitedUntil ? nextHop(current, [], issueRole(task.issue), cfg,
-        member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd)) : null;
+        member => !unavailableUntil(availabilityKey(member.agent, member.model), cwd), parseTicketV2(task.issue.body)) : null;
       // Running out of usage says nothing about the task: put it back in the queue for when the harness
       // returns, instead of parking it as needs-attention for a human. Only when nothing was left behind.
       if (limitedUntil && (await requeueClaim(n, task.worktree.path, cfg, cwd, hop ? { issue: task.issue, route: hop } : undefined))) {

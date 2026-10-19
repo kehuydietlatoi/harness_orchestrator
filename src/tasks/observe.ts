@@ -1,4 +1,5 @@
 import { nextHop } from "./cascade.js";
+import { parseTicketV2 } from "./plan.js";
 import { availabilityKey, unavailableUntil } from "../board/availability.js";
 import { resolveTaskModel } from "./runner.js";
 import { issueRole } from "../routing/route-policy.js";
@@ -64,7 +65,7 @@ export function assembleFacts(params: {
     nextCascade: nextHop({
       agent: author, ...resolveTaskModel(author, issue, cfg),
       tier: issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",
-    }, [], issueRole(issue), cfg, params.isRouteAvailable),
+    }, [], issueRole(issue), cfg, params.isRouteAvailable, parseTicketV2(issue.body)),
     attention: issue.labels.includes(NEEDS_ATTENTION),
     pr: { number: pr.number, head: pr.headSha, checks, mergeable },
     review: { approved, changesRequested: rs.changesRequested },

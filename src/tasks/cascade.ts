@@ -1,5 +1,5 @@
 import { EFFORT_TIERS, type CascadeRoute, type OrchConfig } from "../config.js";
-import { validateRoute } from "../routing/route-policy.js";
+import { validateRoute, type RouteRequirements } from "../routing/route-policy.js";
 
 function routeKey(route: CascadeRoute, cfg: OrchConfig): string {
   // Config validation makes agent/model unique within a tier. Resolve inherited
@@ -14,6 +14,7 @@ export function nextHop(
   role: string | undefined,
   cfg: OrchConfig,
   isAvailable: (route: CascadeRoute) => boolean = () => true,
+  requirements: RouteRequirements = {},
 ): CascadeRoute | null {
   if (!cfg.tierMembers) return null;
   const visited = new Set([current, ...tried].map((route) => routeKey(route, cfg)));
@@ -26,7 +27,7 @@ export function nextHop(
     if (tier === current.tier && start === 0) continue;
     for (const member of members.slice(start)) {
       if (!cfg.agents.includes(member.agent) || !cfg.adapters[member.agent] || visited.has(routeKey(member, cfg))) continue;
-      if (validateRoute({ ...member, role, model: member }, cfg).ok && isAvailable(member)) return member;
+      if (validateRoute({ ...member, ...requirements, role, model: member }, cfg).ok && isAvailable(member)) return member;
     }
   }
   return null;

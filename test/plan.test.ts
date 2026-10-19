@@ -3,6 +3,23 @@ import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js
 import { renderTicketBody } from "../src/tasks/plan-create.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
+describe("needs and sensitivity planning", () => {
+  it("permits vision on Claude, refusing default Codex and web everywhere", () => {
+    expect(resolvePlan([{ title: "See", agent: "claude", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors).toEqual([]);
+    expect(resolvePlan([{ id: "see", title: "See", agent: "codex", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/ticket 1.*see.*needs.*vision/);
+    expect(resolvePlan([{ title: "Search", needs: ["web"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/no satisfying.*web/);
+  });
+  it.each(["engine", "image-gen", "audio-gen"] as const)("defers %s to Phases 3-4", need => {
+    expect(resolvePlan([{ title: "Future", needs: [need] }]).errors.join()).toContain("Phases 3-4");
+  });
+  it("finds a capable later member but rejects an explicit incapable selection", () => {
+    const config = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex", model: "a" }, { agent: "codex", model: "b", capabilities: ["vision"] }] } };
+    expect(resolvePlan([{ title: "See", needs: ["vision"] }], { config }).errors).toEqual([]);
+    expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "a", needs: ["vision"] }], { config }).errors.join()).toContain("no satisfying");
+    expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "b", needs: ["vision"] }], { config }).errors).toEqual([]);
+  });
+});
+
 describe("ticket verify trust", () => {
   const config = { ...DEFAULT_CONFIG, verify: [["node", "--test"]] };
   it("accepts only project prefixes plus paths, separators and plain numbers", () => {

@@ -2,11 +2,11 @@ import { designReferenceErrors, type DesignContext } from "./brief-context.js";
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
-import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
+import { DEFAULT_CONFIG, EFFORT_TIERS, normalizeEffort, resolveTierModel, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
 import type { Budget } from "./budget.js";
 import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
-import { routeFamily } from "../routing/route-policy.js";
+import { routeFamily, validateRoute } from "../routing/route-policy.js";
 import { verifyTrustErrors } from "./verify.js";
 
 export interface TicketV2 {
@@ -207,6 +207,28 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     if (!t.title.trim()) errors.push(`${who}: title needs a title`);
     if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
     const cfg = opts.config;
+    if (t.needs !== undefined || t.sensitivity !== undefined || cfg?.sensitivity !== undefined || cfg?.pack !== undefined) {
+      const policy = cfg ?? DEFAULT_CONFIG;
+      const tiers = t.effort ? [normalizeEffort(t.effort, policy.tierAliases)].filter((tier): tier is EffortTier => !!tier)
+        : t.agent ? [policy.defaultEffort ?? "lead"] : EFFORT_TIERS;
+      const agents = t.agent ? [t.agent.trim()] : opts.agents ?? policy.agents;
+      const results = agents.filter(agent => policy.agents.includes(agent) && policy.adapters[agent]).flatMap(agent => tiers.flatMap(tier => {
+        // Unassigned tickets may choose any configured ladder member; explicit routes
+        // must validate the exact model that dispatch would select.
+        const members = t.agent || t.model ? [undefined] : policy.tierMembers?.[tier].filter(m => m.agent === agent) ?? [];
+        return (members.length ? members : [undefined]).map(member => {
+          try {
+            const model = member ? { ...policy.adapters[agent]?.models?.[tier], ...member } : resolveTierModel(agent, tier, policy, t.model ? [`model:${t.model}`] : []);
+            return validateRoute({ ...t, agent, tier, model }, policy);
+          } catch (error) { return { ok: false as const, reason: (error as Error).message }; }
+        });
+      }));
+      if (!results.some(result => result.ok)) {
+        errors.push(`${who}: needs/sensitivity have no satisfying allowed route: ${[...new Set(results.flatMap(result => result.ok ? [] : [result.reason]))].join("; ")}`);
+      }
+    }
+    const future = t.needs?.filter(need => ["engine", "image-gen", "audio-gen"].includes(need));
+    if (future?.length) errors.push(`${who}: needs ${future.join(", ")} require tooling from Phases 3-4`);
     errors.push(...verifyTrustErrors(t.verify ?? [], cfg?.verify ?? []).map((error) => `${who}: ${error}`));
     if (cfg?.pack !== undefined) {
       errors.push(...designReferenceErrors(t, opts.design).map(error => `${who}: ${error}`));
