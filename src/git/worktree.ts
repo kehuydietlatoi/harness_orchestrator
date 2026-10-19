@@ -149,7 +149,8 @@ export async function addWorktree(
  * --ignored=matching` that make a worktree unsafe to remove — every dirty or
  * untracked entry, plus ignored paths outside the `disposable` allowlist.
  * Allowlist entries are worktree-relative; a trailing `/` covers a directory and
- * its contents. Quoted (unusual-character) paths are never guessed safe.
+ * its contents. Filename globs support `*` and `?` at the root only.
+ * Quoted (unusual-character) paths are never guessed safe.
  */
 export function blockingStatusEntries(porcelain: string, disposable: readonly string[]): string[] {
   return porcelain
@@ -159,9 +160,14 @@ export function blockingStatusEntries(porcelain: string, disposable: readonly st
       if (!line.startsWith("!! ")) return true;
       const path = line.slice(3);
       if (path.startsWith('"')) return true;
-      return !disposable.some((entry) =>
-        entry.endsWith("/") ? path === entry || path.startsWith(entry) : path === entry,
-      );
+      return !disposable.some((entry) => {
+        if (entry.endsWith("/")) return path === entry || path.startsWith(entry);
+        if (path === entry) return true;
+        if (entry.includes("/") || entry.includes("\\") || path.includes("/") || path.includes("\\")) return false;
+        const pattern = entry.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*").replace(/\?/g, ".");
+        return new RegExp(`^${pattern}$`).test(path);
+      });
     });
 }
 
