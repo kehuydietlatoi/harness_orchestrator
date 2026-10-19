@@ -15,6 +15,15 @@ function issue(labels: string[] = []): Issue {
 }
 
 describe("resolveTaskModel", () => {
+  it("refuses stale model projections until the label is removed", () => {
+    const cfg = { ...DEFAULT_CONFIG, agents: [...DEFAULT_CONFIG.agents, "opencode"] };
+    const task = issue(["agent:opencode", "effort:free", "model:outage/sim-free"]);
+    expect(() => resolveTaskModel("opencode", task, cfg)).toThrow("model:outage/sim-free");
+    expect(() => resolveDispatchAgent(task, new Map([[task.number, task]]), cfg)).toThrow("model:outage/sim-free");
+    task.labels = task.labels.filter((label) => !label.startsWith("model:"));
+    expect(resolveDispatchAgent(task, new Map([[task.number, task]]), cfg)).toBe("opencode");
+  });
+
   it("refuses a disallowed role route before dispatch", () => {
     const cfg: OrchConfig = { ...DEFAULT_CONFIG, roles: { coder: { tiers: ["lead"], families: ["openai"] } } };
     const task = issue(["role:coder", "agent:claude", "effort:lead"]);

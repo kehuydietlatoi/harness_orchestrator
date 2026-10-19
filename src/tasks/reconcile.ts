@@ -1,6 +1,6 @@
 import { reviewIdentity } from "../board/review-identity.js";
 import { acceptedReviewers } from "../board/approval.js";
-import { prFact, reviewFact, telemetryFact } from "./facts.js";
+import { modelProjectionFact, prFact, reviewFact, telemetryFact } from "./facts.js";
 import { issueAgent } from "../board/board.js";
 import { existsSync, realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -87,6 +87,7 @@ export interface RepairObservation {
   /** How approvals are counted (`cfg.reviewPolicy`); absent means cross-review only. */
   reviewPolicy?: OrchConfig["reviewPolicy"];
   authorFamily?: string;
+  staleModel?: { label: string; detail: string };
   telemetry: TaskFacts["telemetry"];
   /** Set only when an open PR targets an existing local expected branch. */
   prHead?: PrHeadRelation;
@@ -229,6 +230,7 @@ export function factsFromObservation(observation: RepairObservation): TaskFacts 
     pr: prFact(observation.prs),
     changesRequested: reviewFact(observation.prs.find((pr) => pr.state === "OPEN"), observation.reviews).changesRequested,
     telemetry: observation.telemetry,
+    modelProjectionError: observation.staleModel?.detail,
   };
 }
 
@@ -272,6 +274,16 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
       projectedState: state,
       actions: [],
       blocked: [observation.prHead.detail],
+    };
+  }
+
+  // Fix routing first, then re-observe before deriving approvals or repairing resources.
+  if (observation.staleModel) {
+    return {
+      issue: observation.number, observation, state: initialState,
+      projectedState: deriveTaskState({ ...initialFacts, modelProjectionError: undefined }),
+      actions: [{ kind: "sync-labels", issue: observation.number, add: [], remove: [observation.staleModel.label] }],
+      blocked: [],
     };
   }
 
@@ -517,6 +529,7 @@ async function observeRepair(
   const worktree = expectedBranch
     ? await observeWorktreeForRepair(number, expectedBranch, cfg, cwd)
     : { kind: "absent" as const };
+  const staleModel = issue ? modelProjectionFact(issue, cfg) : undefined;
   return {
     number,
     issue,
@@ -528,7 +541,8 @@ async function observeRepair(
     prs,
     reviews,
     reviewPolicy: cfg.reviewPolicy,
-    authorFamily: issue && issueAgent(issue) ? reviewIdentity(issueAgent(issue)!, issue, cfg, "author").family : undefined,
+    staleModel,
+    authorFamily: !staleModel && issue && issueAgent(issue) ? reviewIdentity(issueAgent(issue)!, issue, cfg, "author").family : undefined,
     telemetry: telemetryFact(records, number),
     ...(prHead ? { prHead } : {}),
   };

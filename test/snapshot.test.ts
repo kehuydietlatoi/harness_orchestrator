@@ -4,6 +4,7 @@ import { assemble } from "../src/board/snapshot.js";
 import type { Issue, Pr } from "../src/github/github.js";
 import type { SnapshotRun } from "../src/board/snapshot.js";
 import type { Worktree } from "../src/git/worktree.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
   return {
@@ -31,6 +32,20 @@ function pr(number: number, over: Partial<Pr> = {}): Pr {
 }
 
 describe("assemble", () => {
+  it("isolates an unknown model label and keeps observing other tasks", () => {
+    const snapshot = assemble([
+      issue(9, { labels: ["agent:opencode", "effort:free", "model:outage/sim-free"] }),
+      issue(10, { labels: ["agent:codex"] }),
+    ], [], [], [], [], undefined, null, undefined, undefined, undefined, undefined, DEFAULT_CONFIG);
+    expect(snapshot.tasks).toHaveLength(2);
+    expect(snapshot.tasks[0]).toMatchObject({
+      status: "status:inconsistent", recoveryCommand: "orch repair 9",
+      health: { kind: "inconsistent", violations: [expect.objectContaining({ detail: expect.stringContaining("model:outage/sim-free") })] },
+      reviewedBy: [],
+    });
+    expect(snapshot.tasks[1].health).toEqual({ kind: "ready" });
+  });
+
   it("projects issues, PRs, locks, worktrees, reviews, dependencies, and latest runs", () => {
     const issues = [
       issue(13, {

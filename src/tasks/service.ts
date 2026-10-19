@@ -33,6 +33,7 @@ import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../b
 import { resolveTierModel, type OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
 import { parseTicketV2 } from "./plan.js";
+import { modelProjectionFact } from "./facts.js";
 
 export interface ClaimedTask {
   issue: Issue;
@@ -375,6 +376,11 @@ export async function claimNext(
   };
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
+    const staleModel = modelProjectionFact(candidate, cfg, agent);
+    if (staleModel) {
+      log.warn(`#${candidate.number}: ${staleModel.detail}`);
+      continue;
+    }
     if (opts.canClaim && !(await opts.canClaim(candidate))) continue;
     const route = validateRoute({
       role: issueRole(candidate), agent, tier: issueEffort(candidate, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead",

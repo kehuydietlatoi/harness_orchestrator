@@ -54,7 +54,11 @@ The runner first proves no commits ahead and no open PR, safely removes the work
 and releases the lock; only then does it relabel `status:todo` without `needs-attention`.
 If the ladder is exhausted or absent, existing requeue/wait behavior applies.
 `model:` is cleared by abandon and tier-raising triage; independent review uses the
-reviewer's own premium model, while author identity uses the projected member.
+  reviewer's own premium model, while author identity uses the projected member.
+  A `model:` label whose member has been removed from configuration makes that task
+  inconsistent and blocks claiming; other tasks remain observable and claimable.
+  `orch repair <issue>` previews removal of the stale label; `--apply` removes it
+  and re-observes before further repairs, restoring normal configured tier selection.
 Autopilot also cascades a review fix or conflict-resolution step after one failed attempt
 on the current PR head when a next member exists. It replaces routing labels while
 retaining the PR, claim and worktree, then re-observes before retrying with a fresh

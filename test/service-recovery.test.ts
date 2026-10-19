@@ -126,6 +126,15 @@ function expectReadyProjection(h: Harness): void {
 beforeEach(() => vi.restoreAllMocks());
 
 describe("recoverable claim setup saga", () => {
+  it("rejects a stale model before acquiring claim resources", async () => {
+    const h = harness();
+    h.state.issue.labels.push("model:removed/member");
+    await expect(claim(h)).rejects.toThrow("model:removed/member");
+    expect(h.deps.acquireLock).not.toHaveBeenCalled();
+    expect(h.deps.editIssue).not.toHaveBeenCalled();
+    expect(h.deps.addWorktree).not.toHaveBeenCalled();
+  });
+
   it("passes path claims into the atomic acquisition and rolls back the owned claim on setup failure", async () => {
     const h = harness({ worktree: "before" });
     h.state.issue.body = '## Ticket metadata (v2)\n\n```json\n{"locks":["assets/**","scenes/main.scene"]}\n```';

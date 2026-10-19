@@ -6,6 +6,7 @@ import * as github from "../src/github/github.js";
 import * as telemetry from "../src/board/telemetry.js";
 import { exec } from "../src/util/exec.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { modelProjectionFact } from "../src/tasks/facts.js";
 import { formatReview } from "../src/board/approval.js";
 import type { Issue, Pr } from "../src/github/github.js";
 import { NEEDS_ATTENTION, REVIEW_NEEDED, STATUS } from "../src/github/labels.js";
@@ -306,6 +307,37 @@ describe("repair observation of an open PR", () => {
     vi.restoreAllMocks();
     if (root) rmSync(root, { recursive: true, force: true });
     root = undefined;
+  });
+
+  it("observes and removes a stale model label, then converges after apply", async () => {
+    root = mkdtempSync(join(tmpdir(), "orch-reconcile-model-"));
+    for (const args of [["init", "-q", "-b", "main"],
+      ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "base"]]) {
+      const result = await exec("git", args, { cwd: root });
+      expect(result.code).toBe(0);
+    }
+    const task = issue({ labels: [STATUS.todo, "agent:opencode", "effort:free", "model:outage/sim-free"] });
+    vi.spyOn(github, "getIssue").mockResolvedValue(task);
+    vi.spyOn(github, "listPrs").mockResolvedValue([]);
+    vi.spyOn(telemetry, "readRuns").mockReturnValue([]);
+    const cfg = { ...DEFAULT_CONFIG, baseBranch: "main", worktreeRoot: "./wt" };
+    const initial = await reconcileDeps.observe(36, cfg, root);
+    const harness = fakeDeps(initial);
+    // Recompute routing facts on each observation, as the production observer does.
+    harness.deps.observe = vi.fn(async () => {
+      const current = harness.current();
+      return { ...current, staleModel: current.issue ? modelProjectionFact(current.issue, cfg) : undefined };
+    });
+    const preview = await reconcileIssue(36, cfg, root, {}, harness.deps);
+    expect(preview.state).toMatchObject({ kind: "inconsistent", violations: [
+      { invariant: "model-projection-must-resolve", detail: expect.stringContaining("model:outage/sim-free") },
+    ] });
+    expect(preview.actions).toEqual([{ kind: "sync-labels", issue: 36, add: [], remove: ["model:outage/sim-free"] }]);
+    expect(harness.executed).toEqual([]);
+    const applied = await reconcileIssue(36, cfg, root, { apply: true }, harness.deps);
+    expect(applied.state.kind).toBe("ready");
+    expect(applied.actions).toEqual([]);
+    expect(harness.current().issue?.labels).toEqual([STATUS.todo, "agent:opencode", "effort:free"]);
   });
 
   it.each([
