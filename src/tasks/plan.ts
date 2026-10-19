@@ -7,6 +7,7 @@ import { definitionOfDoneWarnings } from "./definition-of-done.js";
 import type { Budget } from "./budget.js";
 import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
 import { routeFamily } from "../routing/route-policy.js";
+import { verifyTrustErrors } from "./verify.js";
 
 export interface TicketV2 {
   role?: string;
@@ -206,6 +207,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     if (!t.title.trim()) errors.push(`${who}: title needs a title`);
     if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
     const cfg = opts.config;
+    errors.push(...verifyTrustErrors(t.verify ?? [], cfg?.verify ?? []).map((error) => `${who}: ${error}`));
     if (cfg?.pack !== undefined) {
       errors.push(...designReferenceErrors(t, opts.design).map(error => `${who}: ${error}`));
       for (const field of ["role", "kind", "verify"] as const) {

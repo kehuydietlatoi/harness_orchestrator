@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
+import { DEFAULT_CONFIG } from "../src/config.js";
 import type { Issue } from "../src/github/github.js";
 import { parseTickets, ticketV2Fields, type Ticket } from "../src/tasks/plan.js";
 import {
@@ -388,6 +389,7 @@ describe("definition of done in the issue body", () => {
 
 
 describe("v2 creation", () => {
+  const opts = { config: { ...DEFAULT_CONFIG, verify: [["npm", "test"]] } };
   const fields = {
     role: "implementer", kind: "code", milestone: "Phase 2", decisions: ["D-001"],
     context: ["combat.damage"], locks: ["src/combat/**"], verify: [["npm", "test", "--", "a file.test.ts"]],
@@ -415,7 +417,7 @@ describe("v2 creation", () => {
         return 1;
       },
     };
-    expect((await createFromPlan([ticket], CWD, deps)).failed).toEqual([]);
+    expect((await createFromPlan([ticket], CWD, deps, opts)).failed).toEqual([]);
     expect(calls).toEqual(["labels", "milestone", "create"]);
   });
 
@@ -443,7 +445,7 @@ describe("v2 creation", () => {
   it("fails before issue creation when milestone setup fails", async () => {
     const h = harness();
     h.deps.ensureMilestone = async () => { throw new Error("milestone unavailable"); };
-    const result = await createFromPlan([ticket], CWD, h.deps);
+    const result = await createFromPlan([ticket], CWD, h.deps, opts);
     expect(result.failed[0].error).toContain("milestone unavailable");
     expect(h.creates).toEqual([]);
   });
@@ -452,6 +454,6 @@ describe("v2 creation", () => {
     const markers = buildPlanMarkers([ticket]);
     const h = harness([issue(1, ticket.title, renderTicketBody(ticket, [], { plan: markers.plan, ticket: markers.tickets[0] }))]);
     h.deps.ensureMilestone = async () => { throw new Error("should not run"); };
-    expect((await createFromPlan([ticket], CWD, h.deps)).reused).toHaveLength(1);
+    expect((await createFromPlan([ticket], CWD, h.deps, opts)).reused).toHaveLength(1);
   });
 });

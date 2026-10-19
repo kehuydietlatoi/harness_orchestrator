@@ -27,6 +27,7 @@ describe("path claim lifecycle with real git refs", () => {
   const cfg = { ...config.DEFAULT_CONFIG, baseBranch: "main" };
   beforeEach(async () => {
     vi.resetAllMocks();
+    vi.mocked(gh.prChangedPaths).mockResolvedValue([]);
     cwd = mkdtempSync(join(tmpdir(), "orch-path-lifecycle-"));
     await exec("git", ["init", "-qb", "main"], { cwd });
     await exec("git", ["-c", "user.name=test", "-c", "user.email=test@test", "commit", "--allow-empty", "-qm", "init"], { cwd });

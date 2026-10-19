@@ -7,6 +7,7 @@ import { formatReview, parseReview } from "../src/board/approval.js";
 
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), prDiff: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
+  prChangedPaths: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/no/such/worktree", removeWorktree: vi.fn() }));
@@ -206,6 +207,7 @@ describe("runAutomatedReview", () => {
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "orch-review-run-"));
     vi.resetAllMocks();
+    vi.mocked(gh.prChangedPaths).mockResolvedValue([]);
     vi.mocked(gh.getPr).mockResolvedValue(pr);
     vi.mocked(gh.getIssue).mockResolvedValue(issue);
     vi.mocked(gh.prDiff).mockResolvedValue("diff --git a b");

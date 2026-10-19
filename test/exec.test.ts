@@ -3,12 +3,28 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandExists, exec } from "../src/util/exec.js";
+import { verifyEnvironment } from "../src/tasks/verify.js";
 
 // Real subprocesses (no mocks) via the current Node binary, so these run the
 // same on Linux and Windows.
 const node = process.execPath;
 
 describe("exec", () => {
+  it("replaces inherited environment for verify subprocesses and uses the supplied worktree cwd", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch-verify-env-"));
+    try {
+      const env = verifyEnvironment({ ...process.env, GH_TOKEN: "test-secret", SERVICE_API_KEY: "test-secret",
+        OPENCODE_CONFIG: "test-secret", CODEX_HOME: "test-secret", OPENAI_BASE_URL: "test-secret", NODE_ENV: "test" });
+      const result = await exec(node, ["-e", "console.log(JSON.stringify({env:process.env,cwd:process.cwd()}))"], { cwd, env });
+      expect(result.code).toBe(0);
+      const child = JSON.parse(result.stdout);
+      expect(child.cwd).toBe(cwd);
+      expect(child.env.NODE_ENV).toBe("test");
+      for (const key of ["GH_TOKEN", "SERVICE_API_KEY", "OPENCODE_CONFIG", "CODEX_HOME", "OPENAI_BASE_URL"]) {
+        expect(child.env).not.toHaveProperty(key);
+      }
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
   it("kills a command at its timeout and reports failure", async () => {
     const result = await exec(node, ["-e", "setInterval(() => {}, 1000)"], { timeoutMs: 100 });
     expect(result.code).toBe(124);

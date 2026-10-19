@@ -5,6 +5,26 @@ vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(.
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
 const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff, closeIssue } = await import("../src/github/github.js");
+const { prChangedPaths } = await import("../src/github/github.js");
+
+describe("prChangedPaths", () => {
+  beforeEach(() => execMock.mockReset());
+  it("paginates and retains both sides of renames and deleted paths", async () => {
+    execMock.mockResolvedValueOnce({ code: 0, stderr: "", stdout: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ filename: `src/${i}.ts` }))) });
+    execMock.mockResolvedValueOnce({ code: 0, stderr: "", stdout: JSON.stringify([
+      { filename: "old-config.txt", previous_filename: "vitest.config.ts", status: "renamed" },
+      { filename: "orch.config.json", status: "removed" },
+    ]) });
+    const paths = await prChangedPaths(7, { cwd: "/repo" });
+    expect(paths).toHaveLength(103);
+    expect(paths.slice(-3)).toEqual(["old-config.txt", "vitest.config.ts", "orch.config.json"]);
+    expect(execMock.mock.calls[1][1][1]).toContain("page=2");
+  });
+  it("throws instead of treating a failed file read as no protected changes", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    await expect(prChangedPaths(7)).rejects.toThrow(/offline/);
+  });
+});
 
 describe("closeIssue", () => {
   beforeEach(() => execMock.mockReset());
