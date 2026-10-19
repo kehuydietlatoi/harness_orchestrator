@@ -15,7 +15,7 @@ import { prIssueNumber } from "../board/review.js";
 import { byNumber, issueAgent, issueEffort, issueStatus, openDepsFromMap, type ClaimFilter } from "../board/board.js";
 import { STATUS, NEEDS_ATTENTION, labelDefs } from "../github/labels.js";
 import { release as lockRelease } from "../git/lock.js";
-import { removeWorktree } from "../git/worktree.js";
+import { assertNoExternalLinks, ExternalLinksRejected, removeWorktree } from "../git/worktree.js";
 import { log } from "../util/log.js";
 import { countCommitsAhead, resolveBaseBranch } from "../git/git.js";
 import { appendRun, parseUsage, projectId, type RunPhase, type RunRecord } from "../board/telemetry.js";
@@ -389,6 +389,10 @@ async function processClaimed(
     harnessDurationMs = result.durationMs;
     if (result.sessionId) writeSession(n, { agent, sessionId: result.sessionId }, cwd);
 
+    // Reject before recovery can remove evidence, including on failed runs.
+    try { assertNoExternalLinks(task.worktree.path); }
+    catch (error) { preserveWorktree = true; throw error; }
+
     // A ticket time cap shortens the ordinary harness timeout. Preserve that cause
     // before generic failure/usage-limit handling loses it.
     if (result.timedOut && limits.timeoutMs < cfg.taskTimeoutMs) {
@@ -452,12 +456,12 @@ async function processClaimed(
   } catch (error) {
     const durationMs = harnessDurationMs ?? Date.now() - startedAt;
     await recoverClaim(n, task.worktree.path, cwd, { preserveWorktree, disposableIgnored: cfg.disposableIgnored });
-    if (error instanceof VerificationFailed || error instanceof ScopeRejected) {
+    if (error instanceof VerificationFailed || error instanceof ScopeRejected || error instanceof ExternalLinksRejected) {
       const comment = await exec("gh", ["issue", "comment", String(n), "--body-file", "-"], { cwd, input: error.message });
       if (comment.code !== 0) log.warn(`#${n}: could not comment verification failure: ${comment.stderr}`);
     }
     log.error(`✗ #${n} runner failed: ${error instanceof Error ? error.message : String(error)}`);
-    summary = { issue: n, outcome: error instanceof VerificationFailed || error instanceof ScopeRejected ? "needs-attention" : "failed", durationMs };
+    summary = { issue: n, outcome: error instanceof VerificationFailed || error instanceof ScopeRejected || error instanceof ExternalLinksRejected ? "needs-attention" : "failed", durationMs };
     telemetryOutcome = summary.outcome;
   }
 

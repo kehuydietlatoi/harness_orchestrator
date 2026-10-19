@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { log } from "../src/util/log.js";
@@ -9,6 +9,7 @@ import * as board from "../src/board/board.js";
 import type { Issue } from "../src/github/github.js";
 
 const mocks = vi.hoisted(() => ({
+  assertNoExternalLinks: vi.fn(),
   resolveBaseBranch: vi.fn(),
   exec: vi.fn(),
   getIssue: vi.fn(),
@@ -17,6 +18,10 @@ const mocks = vi.hoisted(() => ({
   currentLogin: vi.fn(),
 }));
 
+vi.mock("../src/git/worktree.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/git/worktree.js")>(),
+  assertNoExternalLinks: mocks.assertNoExternalLinks,
+}));
 vi.mock("../src/git/git.js", async (importOriginal) => ({
   ...await importOriginal<typeof import("../src/git/git.js")>(),
   resolveBaseBranch: mocks.resolveBaseBranch,
@@ -48,6 +53,7 @@ it("skips stale models before runner preflight and continues to the next candida
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.assertNoExternalLinks.mockReset();
   mocks.resolveBaseBranch.mockResolvedValue({
     name: "release/v2",
     ref: "refs/remotes/origin/release/v2",
@@ -66,6 +72,27 @@ beforeEach(() => {
 });
 
 describe("submit base branch", () => {
+  it("refuses a real external node_modules link and posts the shared refusal", async () => {
+    const { assertNoExternalLinks } = await vi.importActual<typeof import("../src/git/worktree.js")>("../src/git/worktree.js");
+    const root = mkdtempSync(join(tmpdir(), "orch-submit-links-"));
+    const wt = join(root, "worktree");
+    const outside = join(root, "outside");
+    mkdirSync(wt); mkdirSync(outside);
+    const link = join(wt, "node_modules");
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    mocks.assertNoExternalLinks.mockImplementation(assertNoExternalLinks);
+    try {
+      let reason = "";
+      try { assertNoExternalLinks(wt); } catch (error) { reason = (error as Error).message; }
+      await expect(submit(37, "codex", DEFAULT_CONFIG, wt)).rejects.toThrow(reason);
+      expect(mocks.exec).toHaveBeenCalledTimes(1);
+      expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "37", "--body-file", "-"], { cwd: wt, input: reason });
+      expect(reason).toContain(JSON.stringify(outside));
+      expect(mocks.createPr).not.toHaveBeenCalled();
+      expect(mocks.editIssue).toHaveBeenCalledWith(37, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    } finally { unlinkSync(link); rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("uses the GitHub branch name rather than its local comparison ref", async () => {
     const cfg = { ...DEFAULT_CONFIG, baseBranch: "release/v2" };
 
