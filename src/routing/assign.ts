@@ -1,4 +1,5 @@
 import { issueRole, validateRoute, type RoutePolicyConfig } from "./route-policy.js";
+import { parseTicketV2 } from "../tasks/plan.js";
 import { parseDeps } from "../board/board.js";
 import { normalizeEffort, type EffortTier, type OrchConfig } from "../config.js";
 import type { Issue } from "../github/github.js";
@@ -180,7 +181,12 @@ export function applyPlan(
       skips.push({ issue: entry.issue, reason: `invalid effort '${entry.effort}' (expected free, cheap, standard, or lead)` });
       continue;
     }
-    const route = validateRoute({ role: issueRole(issue), agent: entry.agent, tier: effort }, cfg);
+    let route;
+    try {
+      const { needs, sensitivity } = parseTicketV2(issue.body);
+      route = validateRoute({ needs, sensitivity, role: issueRole(issue), agent: entry.agent, tier: effort }, cfg);
+    }
+    catch (error) { route = { ok: false, reason: (error as Error).message }; }
     if (!route.ok) {
       skips.push({ issue: entry.issue, reason: `disallowed route: ${route.reason}` });
       continue;

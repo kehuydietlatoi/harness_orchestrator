@@ -389,7 +389,10 @@ describe("definition of done in the issue body", () => {
 
 
 describe("v2 creation", () => {
-  const opts = { config: { ...DEFAULT_CONFIG, verify: [["npm", "test"]] } };
+  const opts = { config: { ...DEFAULT_CONFIG, verify: [["npm", "test"]],
+    roles: { implementer: { tiers: ["lead" as const], families: ["anthropic"] } },
+    tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", model: "sol" }] },
+  } };
   const fields = {
     role: "implementer", kind: "code", milestone: "Phase 2", decisions: ["D-001"],
     context: ["combat.damage"], locks: ["src/combat/**"], verify: [["npm", "test", "--", "a file.test.ts"]],

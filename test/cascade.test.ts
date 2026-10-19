@@ -15,6 +15,15 @@ const cfg: OrchConfig = {
 };
 
 describe("nextHop", () => {
+  it("skips secret and internal OpenCode members and respects needs", () => {
+    const claude: CascadeRoute = { agent: "claude", tier: "standard" };
+    const codex: CascadeRoute = { agent: "codex", tier: "cheap" };
+    const policy = { ...cfg, tierMembers: { ...cfg.tierMembers!, cheap: [c, codex], standard: [d, claude] } };
+    expect(nextHop(a, [], undefined, policy, undefined, { sensitivity: "secret" })).toEqual({ ...DEFAULT_CONFIG.adapters.codex.models!.cheap, ...codex });
+    expect(nextHop(a, [], undefined, { ...policy, sensitivity: { internal: { allow: ["zen/c"] } } }, undefined, { sensitivity: "internal" })).toEqual(c);
+    expect(nextHop(a, [], undefined, policy, undefined, { needs: ["vision"] })).toEqual({ ...DEFAULT_CONFIG.adapters.claude.models!.standard, ...claude });
+    expect(nextHop(a, [], undefined, policy, undefined, { needs: ["web"] })).toBeNull();
+  });
   it.each([
     ["same-tier next member", a, [], undefined, b],
     ["next tier up", b, [], undefined, c],
