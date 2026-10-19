@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Ticket v2 metadata (#171)**: `plan.ts` shares structural validation between parse and resolve and reports ticket id + field for all errors. Creation stores optional v2 fields in the `Ticket metadata (v2)` JSON section (`parseTicketV2` in `plan-create.ts`), alongside label/milestone projections and the existing `Budget:` line. V2 fields stay outside marker identities; issue verify argv remains data until a separate trust check authorizes execution.
+
 - **Multi-provider routing**: when changing model selection, cascades, billing, budgets, or provider permissions, read [ADR-0012](docs/adr/0012-multi-provider-routing.md) for Phase 1 decisions and known gaps.
 - **Claude 5.5 pricing (#163)**: model-specific defaults follow claude.com/pricing as verified 2026-10-19; generic `opus`/`sonnet` aliases retain older-model rates. Pricing models cache reads only (`input`, `cachedInput`, `output`); config overrides merge over defaults.
 

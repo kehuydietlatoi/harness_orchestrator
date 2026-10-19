@@ -315,3 +315,46 @@ describe("listLabels", () => {
     expect(await listLabels()).toEqual([]);
   });
 });
+
+
+describe("milestones for plan creation", () => {
+  beforeEach(() => execMock.mockReset());
+
+  it("finds an existing milestone beyond the first page without creating it", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify(Array.from({ length: 100 }, (_, i) => ({ title: 'Other ' + i }))) });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify([{ title: "Phase 2" }]) });
+    await ensureMilestone("Phase 2", "/repo");
+    expect(execMock).toHaveBeenCalledTimes(2);
+    expect(execMock.mock.calls[1][1][1]).toContain("page=2");
+  });
+
+  it("creates a missing milestone with literal title argv", async () => {
+    const { ensureMilestone, createIssue } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "{}" });
+    await ensureMilestone("Phase 2", "/repo");
+    expect(execMock.mock.calls[1]).toEqual(["gh", ["api", "repos/{owner}/{repo}/milestones", "--method", "POST", "--raw-field", "title=Phase 2"], { cwd: "/repo" }]);
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "https://github.com/o/r/issues/10" });
+    await expect(createIssue("Ticket", "Body", ["status:todo"], { cwd: "/repo", milestone: "Phase 2" })).resolves.toBe(10);
+    expect(execMock.mock.calls[2][1]).toContain("--milestone");
+    expect(execMock.mock.calls[2][1]).toContain("Phase 2");
+  });
+
+  it("reconciles a concurrent create or lost response without retrying the write", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 1, stderr: "response lost" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: JSON.stringify([{ title: "Phase 2" }]) });
+    await expect(ensureMilestone("Phase 2")).resolves.toBeUndefined();
+    expect(execMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("fails closed when the milestone cannot be created", async () => {
+    const { ensureMilestone } = await import("../src/github/github.js");
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    execMock.mockResolvedValueOnce({ code: 1, stderr: "permission denied" });
+    execMock.mockResolvedValueOnce({ code: 0, stdout: "[]" });
+    await expect(ensureMilestone("Phase 2")).rejects.toThrow("permission denied");
+  });
+});
