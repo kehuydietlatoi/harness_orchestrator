@@ -132,6 +132,23 @@ describe("processNext recovery", () => {
     expect(mocks.runTask).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
     expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs|sensitivity/);
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "35", "--body-file", "-"], {
+      cwd, input: readEvents(cwd).at(-1)?.detail,
+    });
+  });
+
+  it.each(["nonzero", "rejected"])("preserves a spawn refusal when commenting fails: %s", async failure => {
+    const task = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["agent:codex", "status:todo"] };
+    mocks.listIssues.mockResolvedValue([task]);
+    if (failure === "nonzero") mocks.exec.mockResolvedValue({ code: 1, stdout: "", stderr: "GitHub unavailable" });
+    else mocks.exec.mockRejectedValue(new Error("GitHub unavailable"));
+    expect(await dispatchSpecific(35, DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention", reason: "disallowed route" });
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs vision/);
   });
 
   it("rechecks filters on an already claimed task without recording a harness run", async () => {
@@ -182,6 +199,10 @@ describe("processNext recovery", () => {
     expect(mocks.appendRun).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"], removeLabels: ["status:claimed", "status:in-progress"] }));
     expect(readEvents(cwd).at(-1)?.detail).toBe(result?.reason);
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+    expect(mocks.exec).toHaveBeenCalledWith("gh", ["issue", "comment", "35", "--body-file", "-"], {
+      cwd, input: result?.reason,
+    });
   });
 
   it("passes the stored pack brief to the harness", async () => {

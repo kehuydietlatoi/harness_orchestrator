@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
+import { log } from "../src/util/log.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const fs = await importOriginal<typeof import("node:fs")>();
+  return { ...fs, unlinkSync: vi.fn(fs.unlinkSync), readdirSync: vi.fn(fs.readdirSync) };
+});
 import {
   addWorktree,
   blockingStatusEntries,
@@ -42,6 +48,7 @@ describe("task worktrees", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     rmSync(base, { recursive: true, force: true });
   });
 
@@ -175,6 +182,118 @@ describe("task worktrees", () => {
     expect(await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`)).toEqual({ removable: true });
     expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
     expect(existsSync(worktree.path)).toBe(false);
+  });
+
+  // POSIX Git treats a top-level symlink as a file, so node_modules/ does
+  // not ignore it. A junction is a directory to Windows Git. The nested case
+  // exercises default disposable-directory cleanup on both platforms.
+  for (const location of [
+    ...(process.platform === "win32" ? ["node_modules"] : []),
+    "node_modules/pkg/external",
+  ]) {
+    it(`preserves the target of a real directory link at ${location} during safe removal`, async () => {
+      const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+      const target = join(base, "external");
+      mkdirSync(target);
+      writeFileSync(join(target, "sentinel.txt"), "keep all contents\n");
+      const link = join(worktree.path, location);
+      mkdirSync(join(link, ".."), { recursive: true });
+      symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+
+      expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
+      expect(readFileSync(join(target, "sentinel.txt"), "utf8")).toBe("keep all contents\n");
+      expect(existsSync(worktree.path)).toBe(false);
+    });
+  }
+
+  for (const location of ["node_modules", "node_modules/pkg/external", "external"]) {
+    it(`preserves a real link target at ${location} during forced discard`, async () => {
+      const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+      const target = join(base, "external");
+      mkdirSync(join(target, "nested"), { recursive: true });
+      writeFileSync(join(target, "nested", "sentinel.txt"), "keep all contents\n");
+      const link = join(worktree.path, location);
+      mkdirSync(join(link, ".."), { recursive: true });
+      symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+
+      expect(await discardWorktree(worktree.path, { cwd: repo })).toBe(true);
+      expect(readFileSync(join(target, "nested", "sentinel.txt"), "utf8")).toBe("keep all contents\n");
+      expect(existsSync(worktree.path)).toBe(false);
+    });
+  }
+
+  it("retains and names links outside disposable paths during safe cleanup", async () => {
+    const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+    const target = join(base, "external");
+    mkdirSync(target);
+    writeFileSync(join(target, "sentinel.txt"), "keep me\n");
+    for (const name of ["external", "ignored.txt"]) {
+      symlinkSync(target, join(worktree.path, name), process.platform === "win32" ? "junction" : "dir");
+    }
+
+    const safety = await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`);
+    expect(safety.removable).toBe(false);
+    expect(safety.reason).toContain("external");
+    expect(safety.reason).toContain("ignored.txt");
+    expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(false);
+    expect(readFileSync(join(target, "sentinel.txt"), "utf8")).toBe("keep me\n");
+    expect(lstatSync(join(worktree.path, "external")).isSymbolicLink()).toBe(true);
+  });
+
+  for (const remove of [removeWorktree, discardWorktree]) {
+    it(`${remove.name} retains the worktree and names a link that cannot be unlinked`, async () => {
+      const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+      const target = join(base, "external");
+      mkdirSync(target);
+      writeFileSync(join(target, "sentinel.txt"), "keep me\n");
+      mkdirSync(join(worktree.path, "node_modules"));
+      const link = join(worktree.path, "node_modules", "external");
+      symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+      const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+      vi.mocked(unlinkSync).mockImplementationOnce(() => { throw new Error("access denied"); });
+
+      expect(await remove(worktree.path, { cwd: repo })).toBe(false);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining(`cannot safely unlink ${link}`));
+      expect(existsSync(worktree.path)).toBe(true);
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      expect(readFileSync(join(target, "sentinel.txt"), "utf8")).toBe("keep me\n");
+    });
+  }
+
+  it("retains the worktree and names an unreadable directory during inspection", async () => {
+    const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+    vi.mocked(readdirSync).mockImplementationOnce(() => { throw new Error("access denied"); });
+    const safety = await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`);
+    expect(safety.removable).toBe(false);
+    expect(safety.reason).toContain(`cannot safely inspect ${worktree.path}`);
+    expect(existsSync(worktree.path)).toBe(true);
+  });
+
+  it("does not enter cyclic or dangling links inside disposable output", async () => {
+    const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+    const output = join(worktree.path, "node_modules");
+    mkdirSync(output);
+    const type = process.platform === "win32" ? "junction" : "dir";
+    symlinkSync(worktree.path, join(output, "cycle"), type);
+    symlinkSync(join(base, "missing"), join(output, "dangling"), type);
+
+    expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
+    expect(existsSync(worktree.path)).toBe(false);
+  });
+
+  it("retains a worktree root that is itself a link", async () => {
+    const worktree = await addWorktree(29, "Link safe", "../wt", options(repo));
+    const original = readFileSync(join(worktree.path, "README.md"), "utf8");
+    const alias = join(base, "alias");
+    symlinkSync(worktree.path, alias, process.platform === "win32" ? "junction" : "dir");
+    const warning = vi.spyOn(log, "warn").mockImplementation(() => {});
+
+    const safety = await worktreeRemovalSafety(alias, `refs/heads/${worktree.branch}`);
+    expect(safety.removable).toBe(false);
+    expect(safety.reason).toContain("worktree root is a link");
+    expect(await discardWorktree(alias, { cwd: repo })).toBe(false);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining(alias));
+    expect(readFileSync(join(worktree.path, "README.md"), "utf8")).toBe(original);
   });
 
   it("keeps a worktree with disposable output plus a non-disposable ignored file, naming it", async () => {

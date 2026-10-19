@@ -1,6 +1,21 @@
 import type { TaskFacts } from "./lifecycle.js";
 import type { Pr, PrReview } from "../github/github.js";
 import { reviewState } from "../board/approval.js";
+import { UnknownModelProjection, resolveTierModel, type OrchConfig } from "../config.js";
+import { issueAgent, issueEffort } from "../board/board.js";
+import type { Issue } from "../github/github.js";
+
+/** Observe stale projections without weakening the strict dispatch resolver. Pure. */
+export function modelProjectionFact(issue: Issue, cfg: OrchConfig, agent = issueAgent(issue)) {
+  if (!agent) return undefined;
+  try {
+    resolveTierModel(agent, issueEffort(issue, cfg.tierAliases) ?? cfg.defaultEffort ?? "lead", cfg, issue.labels);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof UnknownModelProjection)) throw error;
+    return { label: error.label, detail: error.message };
+  }
+}
 
 export function reviewFact(pr: Pr | undefined, reviews: readonly PrReview[]) {
   return reviewState(pr?.state === "OPEN" ? reviews : [], pr?.number ?? 0, pr?.headSha ?? "");

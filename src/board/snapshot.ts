@@ -26,7 +26,7 @@ import { loadConfig } from "../config.js";
 import { deriveTaskState, type TaskFacts, type TaskState } from "../tasks/lifecycle.js";
 import { acceptedReviewers } from "./approval.js";
 import type { OrchConfig, ReviewPolicy } from "../config.js";
-import { prFact, reviewFact, telemetryFact } from "../tasks/facts.js";
+import { modelProjectionFact, prFact, reviewFact, telemetryFact } from "../tasks/facts.js";
 import { existsSync } from "node:fs";
 
 export interface TaskView {
@@ -137,6 +137,7 @@ export function assemble(
   }).filter((i) => i.state !== "CLOSED" || locked.has(i.number) || worktreeByIssue.has(i.number));
   const open = byNumber(issues.filter((i) => i.state === "OPEN"));
   const tasks = sortedIssues.map((issue): TaskView => {
+    const staleModel = reviewConfig ? modelProjectionFact(issue, reviewConfig) : undefined;
     const pr = prByIssue.get(issue.number);
     const run = latestRunByIssue.get(issue.number);
     const branch = branches.get(issue.number);
@@ -149,6 +150,7 @@ export function assemble(
       pr: prFact(prs.filter((p) => prIssueNumber(p) === issue.number)),
       changesRequested: review.changesRequested,
       telemetry: telemetryFact(runs, issue.number),
+      modelProjectionError: staleModel?.detail,
     });
     const errors = [branch?.error,
       relatedWorktrees.some((w) => !w.branch) ? "task worktree is detached" : undefined,
@@ -171,7 +173,7 @@ export function assemble(
       prNumber: pr?.number ?? null,
       prUrl: pr?.htmlUrl || null,
       prChecks: pr ? (checks.get(pr.number) ?? null) : null,
-      reviewedBy: acceptedReviewers(review, issueAgent(issue), reviewPolicy, reviewConfig && issueAgent(issue) ? reviewIdentity(issueAgent(issue)!, issue, reviewConfig, "author").family : undefined),
+      reviewedBy: staleModel ? [] : acceptedReviewers(review, issueAgent(issue), reviewPolicy, reviewConfig && issueAgent(issue) ? reviewIdentity(issueAgent(issue)!, issue, reviewConfig, "author").family : undefined),
       locked: locked.has(issue.number),
       worktree: worktreeByIssue.get(issue.number) ?? null,
       latestRun: run

@@ -11,6 +11,8 @@ export interface TaskFacts {
   changesRequested?: boolean;
   /** The latest run that has not been superseded by an explicit reset/recovery. */
   telemetry: "none" | "submitted" | "failed" | "no-commits";
+  /** Explicit routing projection no longer resolves against the loaded config. */
+  modelProjectionError?: string;
 }
 
 export const TASK_STATE_KINDS = [
@@ -49,6 +51,7 @@ export type TaskInvariant =
   | "failed-run-forbids-open-pr"
   | "finished-run-requires-released-resources"
   | "local-branch-matches-pr-head"
+  | "model-projection-must-resolve"
   | "unrecognized-fact-combination";
 
 export interface TaskInvariantViolation {
@@ -137,6 +140,7 @@ function invariantViolations(facts: TaskFacts): TaskInvariantViolation[] {
  */
 export function deriveTaskState(facts: TaskFacts): TaskState {
   const violations = invariantViolations(facts);
+  if (facts.modelProjectionError) violations.push(violation("model-projection-must-resolve", facts.modelProjectionError));
   if (violations.length > 0) return { kind: "inconsistent", violations, recovery: "reconcile-facts" };
 
   if (facts.issue === "closed") return { kind: "done" };

@@ -182,6 +182,21 @@ async function drive(world: World, opts: Partial<AutopilotOptions> = {}) {
 }
 
 describe("runAutopilot", () => {
+  it("persists both heads of a successful push for subsequent observations", async () => {
+    const w = new World();
+    w.add(pr(38, { changes: true }));
+    const execute = w.execute;
+    w.execute = async (obs, step) => {
+      const result = await execute(obs, step);
+      return result.signal === "fix.pushed"
+        ? { ...result, previousHead: obs.pr.headSha, pushedHead: "h2" }
+        : result;
+    };
+    await drive(w, { claim: "none" });
+    expect(w.events).toContainEqual(expect.objectContaining({
+      type: "step.finished", issue: 38, signal: "fix.pushed", previousHead: "h1", pushedHead: "h2",
+    }));
+  });
   it("hands a scope violation to a human without launching review or a fix", async () => {
     const w = new World();
     const task = w.add(pr(38, { scopeFailure: "design/game.md: forbidden by design/**" }));

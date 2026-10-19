@@ -23,13 +23,15 @@ async function refExists(ref: string, cwd: string): Promise<boolean> {
 
 /**
  * Resolve the configured base branch, or ask GitHub for the repository default,
- * then prove that it has a usable local or origin-tracking ref. Keeping the
+ * then prefer its origin-tracking ref, rejecting unpushed local base history.
+ * Claims request a fetch; read-only observers use the cached refs. Keeping the
  * GitHub name separate from the Git ref prevents `origin/main` from leaking into
  * the PR base while still supporting clones without a local base branch.
  */
 export async function resolveBaseBranch(
   configured: string | undefined,
   cwd: string = process.cwd(),
+  opts: { fetch?: boolean } = {},
 ): Promise<RepositoryBase> {
   let name: string;
   if (configured !== undefined) {
@@ -54,10 +56,30 @@ export async function resolveBaseBranch(
   if (valid.code !== 0) throw new Error(`invalid base branch '${name}'`);
 
   const local = `refs/heads/${name}`;
-  if (await refExists(local, cwd)) return { name, ref: local };
-
   const remote = `refs/remotes/origin/${name}`;
-  if (await refExists(remote, cwd)) return { name, ref: remote };
+  if (opts.fetch) {
+    // Explicit destination also works in single-branch clones whose configured
+    // fetch refspec does not include this base. Never alter the operator's branch.
+    const fetched = await exec("git", [
+      "fetch", "--no-tags", "origin", `+${local}:${remote}`,
+    ], { cwd });
+    if (fetched.code !== 0) throw commandFailure(`git fetch origin ${name}`, fetched.stderr);
+  }
+  const hasLocal = await refExists(local, cwd);
+  if (await refExists(remote, cwd)) {
+    if (hasLocal) {
+      const tip = await exec("git", ["rev-parse", "--verify", `${remote}^{commit}`], { cwd });
+      if (tip.code !== 0) throw commandFailure("git rev-parse", tip.stderr);
+      const relation = await relateBranchToCommit(name, tip.stdout.trim(), cwd);
+      if (relation === "ahead" || relation === "diverged") {
+        throw new Error(
+          `local base branch '${name}' is ${relation} relative to origin/${name}; reconcile it before continuing`,
+        );
+      }
+    }
+    return { name, ref: remote };
+  }
+  if (hasLocal && !opts.fetch) return { name, ref: local };
 
   throw new Error(
     `base branch '${name}' is missing: expected '${local}' or '${remote}'`,

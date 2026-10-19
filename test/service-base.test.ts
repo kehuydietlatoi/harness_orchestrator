@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { loadPack } from "../src/pack/load.js";
+import * as board from "../src/board/board.js";
+import type { Issue } from "../src/github/github.js";
 
 const mocks = vi.hoisted(() => ({
   resolveBaseBranch: vi.fn(),
@@ -20,7 +22,21 @@ vi.mock("../src/github/github.js", () => ({
   currentLogin: mocks.currentLogin,
 }));
 
-const { submit } = await import("../src/tasks/service.js");
+const { claimNext, submit } = await import("../src/tasks/service.js");
+
+it("skips stale models before runner preflight and continues to the next candidate", async () => {
+  const stale: Issue = { number: 9, title: "stale", body: "", state: "OPEN", assignees: [],
+    labels: ["agent:opencode", "effort:free", "model:outage/sim-free"] };
+  const healthy = { ...stale, number: 10, labels: ["agent:opencode", "effort:free"] };
+  const eligible = vi.spyOn(board, "eligibleIssues").mockResolvedValue([stale, healthy]);
+  const canClaim = vi.fn(() => false);
+  try {
+    await expect(claimNext("opencode", DEFAULT_CONFIG, "/repo", { canClaim })).resolves.toBeNull();
+    expect(canClaim.mock.calls).toEqual([[healthy]]);
+    expect(mocks.getIssue).not.toHaveBeenCalled();
+    expect(mocks.editIssue).not.toHaveBeenCalled();
+  } finally { eligible.mockRestore(); }
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

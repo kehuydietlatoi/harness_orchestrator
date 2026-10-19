@@ -51,6 +51,27 @@ describe("pack brief rendering", () => {
     expect(readFileSync(second, "utf8")).toBe("next");
   });
 
+  it("lists protected paths once in project-then-role first-seen order", () => {
+    const forbidden = pack.roles["gameplay-programmer"].manifest.forbidden;
+    writeFileSync(join(cwd, "studio.config.json"), JSON.stringify({
+      protected_paths: ["secrets/**", forbidden[1], "secrets/**", forbidden[0]],
+    }));
+    const rendered = renderPackBrief(issue(), cfg, cwd);
+    expect(rendered.split("\n").find(line => line.includes("Never touch protected paths:")))
+      .toBe(`- Write only inside SCOPE. Never touch protected paths: secrets/**, ${forbidden[1]}, ${forbidden[0]}, ${forbidden.slice(2).join(", ")}.`);
+  });
+
+  it("lists verify argv once in project-then-ticket first-seen order, preserving argument boundaries", () => {
+    const rendered = renderPackBrief(issue({ ...ticket, verify: [
+      ["node", "--test"], ["npm", "test"], ["node", "--test", "a b"],
+      ["node", "--test", "a", "b"], ["node", "--test", "a b"],
+    ] }), { ...cfg, verify: [["npm", "test"], ["node", "--test"], ["npm", "test"]] }, cwd);
+    expect(rendered.split("# VERIFY\n")[1].split("\n# TIMEBOX")[0].trim()).toBe([
+      "Run these yourself before you finish; orch runs them again before committing:",
+      "npm test", "node --test", 'node --test "a b"', "node --test a b",
+    ].join("\n"));
+  });
+
   it.each([
     [{ acceptance: [] }, /required ticket.acceptance/],
     [{ files: ["design/spec.md"] }, /required ticket.files/],

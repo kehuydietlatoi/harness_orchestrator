@@ -465,13 +465,20 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   };
 }
 
+export class UnknownModelProjection extends Error {
+  constructor(readonly label: string, agent: string, tier: EffortTier) {
+    super(`Unknown model projection '${label.slice(6)}' for '${agent}' at '${tier}' (${label}); run orch repair to remove the stale label`);
+    this.name = "UnknownModelProjection";
+  }
+}
+
 /** Resolve a projected member on the next claim, including its reasoning effort and family. */
 export function resolveTierModel(agent: string, tier: EffortTier, cfg: OrchConfig, labels: readonly string[] = []): ModelSpec | undefined {
   const base = cfg.adapters[agent]?.models?.[tier];
   const projection = labels.find((label) => label.startsWith("model:"))?.slice(6);
   const members = cfg.tierMembers?.[tier].filter((member) => member.agent === agent);
   const member = projection === undefined ? members?.[0] : members?.find((m) => (m.model ?? base?.model) === projection);
-  if (projection !== undefined && !member) throw new Error(`Unknown model projection '${projection}' for '${agent}' at '${tier}'`);
+  if (projection !== undefined && !member) throw new UnknownModelProjection(`model:${projection}`, agent, tier);
   if (!member) return base;
   return {
     ...base,
