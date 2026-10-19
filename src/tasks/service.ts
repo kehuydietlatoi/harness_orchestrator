@@ -384,6 +384,7 @@ export async function claimNext(
     ...claimSagaDeps,
     resolveBaseBranch: async () => base,
   };
+  let claimError: unknown;
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
     const staleModel = modelProjectionFact(candidate, cfg, agent);
@@ -403,10 +404,11 @@ export async function claimNext(
     try {
       const task = await claimSpecific(candidate.number, agent, cfg, cwd, deps);
       if (task) return task;
-    } catch {
-      continue; // lost the race or transient error; try the next candidate
+    } catch (error) {
+      claimError = error; // try other candidates, but an error is not an empty queue
     }
   }
+  if (claimError !== undefined) throw claimError;
   return null;
 }
 

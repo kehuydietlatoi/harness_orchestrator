@@ -141,6 +141,57 @@ describe("submit scope guard", () => {
 });
 
 describe("re-claim base branch", () => {
+  it("surfaces candidate claim errors instead of reporting an empty queue", async () => {
+    const issue: Issue = { number: 37, title: "Repository base", body: "", state: "OPEN", labels: ["status:todo"], assignees: [] };
+    const eligible = vi.spyOn(board, "eligibleIssues").mockResolvedValue([issue]);
+    mocks.getIssue.mockRejectedValueOnce(new Error("temporary issue read failure"));
+    try {
+      await expect(claimNext("codex", DEFAULT_CONFIG, "/repo")).rejects.toThrow("temporary issue read failure");
+    } finally { eligible.mockRestore(); }
+  });
+
+  it("retries a ref-lock fetch failure once before claiming from the refreshed base", async () => {
+    const root = mkdtempSync(join(tmpdir(), "orch-claim-fetch-"));
+    const repo = join(root, "repo");
+    const origin = join(root, "origin");
+    mkdirSync(origin);
+    const git = async (cwd: string, ...args: string[]) => {
+      const result = await realExec("git", args, { cwd });
+      if (result.code !== 0) throw new Error(result.stderr);
+      return result.stdout.trim();
+    };
+    try {
+      await git(origin, "init", "-b", "main");
+      await git(origin, "-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--allow-empty", "-m", "base");
+      await git(root, "clone", origin, repo);
+      const tip = await git(origin, "rev-parse", "HEAD");
+      let fetches = 0;
+      let reread = false;
+      mocks.exec.mockImplementation(async (cmd, args, opts) => {
+        if (args[0] === "fetch" && ++fetches === 1) {
+          return { code: 1, stdout: "", stderr: "error: cannot lock ref 'refs/remotes/origin/main': is at abc but expected def" };
+        }
+        if (fetches === 1 && args[0] === "rev-parse" && args.includes("refs/remotes/origin/main")) reread = true;
+        return realExec(cmd, args, opts);
+      });
+      const { resolveBaseBranch } = await vi.importActual<typeof import("../src/git/git.js")>("../src/git/git.js");
+      mocks.resolveBaseBranch.mockImplementation((name, cwd, opts) => resolveBaseBranch(name, cwd, opts));
+      const issue: Issue = { number: 37, title: "Repository base", body: "", state: "OPEN", labels: ["status:todo"], assignees: [] };
+      mocks.getIssue.mockImplementation(async () => structuredClone(issue));
+      mocks.currentLogin.mockResolvedValue("tester");
+      mocks.editIssue.mockImplementation(async (_number, edit) => {
+        issue.labels = issue.labels.filter(label => !edit.removeLabels?.includes(label));
+        issue.labels.push(...edit.addLabels ?? []);
+        if (edit.addAssignees) issue.assignees = ["tester"];
+      });
+      const claimed = await claimSpecific(37, "codex", { ...DEFAULT_CONFIG, baseBranch: "main", worktreeRoot: "wt" }, repo);
+      expect(claimed).not.toBeNull();
+      expect(fetches).toBe(2);
+      expect(reread).toBe(true);
+      expect(await git(claimed!.worktree.path, "rev-parse", "HEAD")).toBe(tip);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
   it.each([false, true])("refreshes only branches without their own commits (own work: %s)", async ownWork => {
     const repo = mkdtempSync(join(tmpdir(), "orch-reclaim-"));
     const git = async (...args: string[]) => {
