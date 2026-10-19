@@ -1,0 +1,30 @@
+{
+  "id": "explorer",
+  "summary": "Read-only: finds where things live and summarizes code, logs and diffs for other roles. Never writes.",
+  "prompt": "explorer.md",
+  "kinds": [
+    "docs"
+  ],
+  "tiers": [
+    "free",
+    "cheap",
+    "standard"
+  ],
+  "families": [
+    "openai",
+    "anthropic",
+    "deepseek",
+    "zhipu"
+  ],
+  "needs": [],
+  "write_scope": [],
+  "forbidden": [
+    "tests/acceptance/**",
+    "design/**",
+    ".github/**",
+    ".studio/**"
+  ],
+  "gates": [],
+  "standing": [],
+  "read_only": true
+}

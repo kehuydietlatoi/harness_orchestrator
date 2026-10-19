@@ -5,6 +5,7 @@ import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } f
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
 import type { Budget } from "./budget.js";
 import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
+import { routeFamily } from "../routing/route-policy.js";
 
 export interface TicketV2 {
   role?: string;
@@ -159,6 +160,8 @@ export interface ResolvedTicket extends TicketV2 {
 }
 
 export interface ResolveOptions {
+  /** Loaded project config enables pack validation without adding IO to the validator. */
+  config?: OrchConfig;
   /** Configured agents. When given, a ticket routed to any other agent is dropped (warning). */
   agents?: readonly string[];
   tierAliases?: TierAliases;
@@ -187,6 +190,7 @@ export interface ResolvedPlan {
  * issues with neither label: an `effort` without an `agent` is dropped. Pure.
  */
 export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {}): ResolvedPlan {
+  opts = { agents: opts.config?.agents, tierAliases: opts.config?.tierAliases, ...opts };
   const shaped = ticketShapes(tickets);
   const errors = shaped.errors;
   const warnings: string[] = [];
@@ -199,6 +203,34 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     const who = `ticket ${index}${t.id ? ` ("${t.id}")` : ""}`;
     if (!t.title.trim()) errors.push(`${who}: title needs a title`);
     if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
+    const cfg = opts.config;
+    if (cfg?.pack !== undefined) {
+      for (const field of ["role", "kind", "verify"] as const) {
+        if (!t[field]) errors.push(`${who}: ${field} is required when pack is configured`);
+      }
+      const role = t.role;
+      if (role) {
+        if (!cfg.loadedPack || !Object.hasOwn(cfg.loadedPack.roles, role)) {
+          errors.push(`${who}: role '${role}' does not exist in the pack`);
+        } else {
+          const allowance = cfg.roles[role];
+          const tier = normalizeEffort(t.effort?.trim(), cfg.tierAliases);
+          if (t.effort !== undefined && (!tier || !allowance.tiers.includes(tier))) {
+            errors.push(`${who}: effort '${t.effort}' is outside role '${role}' tiers`);
+          }
+          if (t.agent !== undefined) {
+            const agent = t.agent.trim();
+            const tiers = tier ? [tier] : allowance.tiers;
+            if (!cfg.agents.includes(agent) || !tiers.some((tier) => {
+              const family = routeFamily(agent, tier, cfg);
+              return family !== undefined && allowance.families.includes(family);
+            })) {
+              errors.push(`${who}: agent '${agent}' has no allowed family for role '${role}'`);
+            }
+          }
+        }
+      }
+    }
 
     const dependsOn = t.dependsOn ?? [];
     const knownDeps: string[] = [];

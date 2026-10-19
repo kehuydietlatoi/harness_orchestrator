@@ -107,7 +107,7 @@ export async function runPlanner(
   }
   if (tickets.length === 0) throw new Error(`planner produced no tickets\n--- output ---\n${truncate(source)}`);
 
-  const { errors } = resolvePlan(tickets);
+  const { errors } = resolvePlan(tickets, cfg.pack === undefined ? {} : { config: cfg });
   if (errors.length) throw new Error(`planner produced invalid tickets: ${errors.join("; ")}`);
   return tickets;
 }
