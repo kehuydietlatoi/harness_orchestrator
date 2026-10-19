@@ -298,6 +298,16 @@ Optional role allowances constrain issues carrying a `role:<name>` label:
 
 Issues without a role label remain unrestricted. Unknown roles are rejected.
 
+Optional `"pack": ".studio"` loads JSON role manifests from `.studio/roles/<role>.json`
+and the sibling Markdown file named by each manifest's `prompt`. The path is relative
+to `orch.config.json`. Each manifest's `tiers` and `families` supply its routing
+allowance; an explicit config `roles.<role>` replaces that allowance. With a pack,
+plans require `role`, `kind`, and non-empty `verify` argv arrays. The role must exist
+in the pack, and any supplied effort and agent must satisfy its effective allowance.
+`orch doctor` checks all manifests and prompt files. Projects without `pack` retain
+optional v2 fields. Prompt rendering and per-ticket command execution are separate
+from loading and validation.
+
 Optional `tierMembers` config enables implementation fallback after quota or endpoint
 errors. Members are tried in order, then at higher tiers, subject to role allowances:
 

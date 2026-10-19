@@ -3,6 +3,7 @@ export type { Budget } from "./tasks/budget.js";
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
+import { loadPack, type DomainPack } from "./pack/load.js";
 
 /** What an adapter is told to run for one effort tier. Either field may be omitted
  * to defer to the harness's own configured default (e.g. `~/.codex/config.toml`). */
@@ -103,6 +104,10 @@ export function resolveFamily(
 }
 
 export interface OrchConfig {
+  /** Domain pack path, relative to the project config directory. */
+  pack?: string;
+  /** Loaded by loadConfig; never read from serialized config. */
+  loadedPack?: DomainPack;
   /** Ordered implementation fallback ladder. Omitted preserves single-member retries. */
   tierMembers?: Record<EffortTier, TierMember[]>;
   roles: Record<string, { tiers: EffortTier[]; families: string[] }>;
@@ -278,7 +283,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   const defaultEffort = raw.defaultEffort === undefined
     ? DEFAULT_CONFIG.defaultEffort : normalizeEffort(raw.defaultEffort, aliases);
   if (!defaultEffort) throw new Error("defaultEffort must be free, cheap, standard, lead, easy, or hard");
-  const roles: OrchConfig["roles"] = {};
+  if (raw.pack !== undefined && (typeof raw.pack !== "string" || !raw.pack.trim())) {
+    throw new Error("pack must be a non-empty directory path");
+  }
+  const loadedPack = raw.pack === undefined ? undefined : loadPack(raw.pack, cwd);
+  const roles: OrchConfig["roles"] = Object.fromEntries(Object.entries(loadedPack?.roles ?? {})
+    .map(([id, { manifest }]) => [id, { tiers: manifest.tiers, families: manifest.families }]));
   if (raw.roles !== undefined) {
     if (!raw.roles || typeof raw.roles !== "object" || Array.isArray(raw.roles)) {
       throw new Error("roles must be an object of { tiers, families } allowances");
@@ -394,6 +404,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     ...raw,
     adapters,
     roles,
+    loadedPack,
     ...(budgets ? { budgets } : {}),
     defaultEffort,
     tierAliases: aliases,
