@@ -3,8 +3,30 @@ import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
 import { normalizeEffort, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
+import type { Budget } from "./budget.js";
 
-export interface Ticket {
+export interface TicketV2 {
+  role?: string;
+  kind?: "code" | "asset" | "design-data" | "qa" | "prototype" | "docs";
+  milestone?: string;
+  decisions?: string[];
+  context?: string[];
+  locks?: string[];
+  verify?: string[][];
+  needs?: ("shell" | "vision" | "web" | "engine" | "image-gen" | "audio-gen")[];
+  sensitivity?: "public" | "internal" | "secret";
+  budget?: Budget;
+  model?: string;
+}
+
+export const V2_FIELDS = ["role", "kind", "milestone", "decisions", "context", "locks", "verify", "needs", "sensitivity", "budget", "model"] as const;
+
+/** Pure projection; these fields never contribute to plan marker identities. */
+export function ticketV2Fields(ticket: TicketV2): TicketV2 {
+  return Object.fromEntries(V2_FIELDS.filter((key) => ticket[key] !== undefined).map((key) => [key, ticket[key]]));
+}
+
+export interface Ticket extends TicketV2 {
   id?: string; // local id other tickets reference in dependsOn or after
   title: string;
   body?: string;
@@ -21,57 +43,86 @@ export interface Ticket {
 export const MAX_BRIEF_CHARS = 4000;
 
 
-/** Parse a tickets file into the `Ticket[]` shape. Structural + field-type
- * validation \u2014 it must be a JSON array of objects, and any present `id`/`title`/
- * `body`/`agent`/`effort` must be a string and any present `dependsOn`/`after`/`files`/`acceptance`/`outOfScope` must be an array of
- * strings. Malformed field values are reported (ticket-indexed, all at once) rather
- * than silently dropped or coerced. Per-ticket semantics (missing title, duplicate
- * id, unknown deps) remain the job of `resolvePlan`. Throws on anything that is not
- * shaped like a valid ticket list. */
+/** Collect every structural error, keeping a safe working copy for semantic checks. */
+function ticketShapes(values: readonly unknown[]): { tickets: Ticket[]; errors: string[] } {
+  const errors: string[] = [];
+  const tickets = values.map((value, i) => {
+    const index = i + 1;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      errors.push("ticket " + index + " must be an object (field: ticket)");
+      return { title: "" };
+    }
+    const raw = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    const who = "ticket " + index + (typeof raw.id === "string" ? " (\"" + raw.id + "\")" : "");
+    const problem = (field: string, message: string) => errors.push(who + ": " + field + " " + message);
+    for (const field of ["id", "title", "body", "agent", "effort", "role", "kind", "milestone", "sensitivity", "model"]) {
+      if (raw[field] === undefined) continue;
+      if (typeof raw[field] !== "string") problem(field, "must be a string");
+      else out[field] = raw[field];
+    }
+    for (const field of ["dependsOn", "after", "files", "acceptance", "outOfScope", "decisions", "context", "locks", "needs"]) {
+      const v = raw[field];
+      if (v === undefined) continue;
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) problem(field, "must be an array of strings");
+      else out[field] = v;
+    }
+    const enums: Record<string, readonly string[]> = {
+      kind: ["code", "asset", "design-data", "qa", "prototype", "docs"],
+      sensitivity: ["public", "internal", "secret"],
+      needs: ["shell", "vision", "web", "engine", "image-gen", "audio-gen"],
+    };
+    for (const [field, allowed] of Object.entries(enums)) {
+      const v = out[field];
+      if (v !== undefined && !(Array.isArray(v) ? v : [v]).every((x) => allowed.includes(x as string))) {
+        problem(field, "must use only: " + allowed.join(", "));
+        delete out[field];
+      }
+    }
+    if (typeof out.role === "string" && !/^[a-z][a-z0-9-]*$/.test(out.role)) problem("role", "must be a lowercase role slug");
+    if (typeof out.milestone === "string" && !out.milestone.trim()) problem("milestone", "must be non-empty");
+    for (const field of ["decisions", "context", "locks", "needs"]) {
+      const v = out[field];
+      if (!Array.isArray(v)) continue;
+      if (new Set(v).size !== v.length) problem(field, "must contain unique values");
+      if (field === "decisions" && !v.every((x) => /^D-[0-9]{3,}$/.test(x))) problem(field, "must contain D-### decision ids");
+      if (field === "context" && !v.every((x) => /^[a-z0-9]+(\.[a-z0-9-]+)*$/.test(x))) problem(field, "must contain dotted context anchors");
+      if (field === "locks" && !v.every((x) => x.trim().length > 0)) problem(field, "must contain non-empty paths");
+    }
+    if (raw.verify !== undefined) {
+      if (!Array.isArray(raw.verify) || !raw.verify.length || !raw.verify.every((argv) =>
+        Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string" && arg.trim().length > 0))) {
+        problem("verify", "must be a non-empty array of non-empty argv arrays of non-empty strings (no shell command strings)");
+      } else out.verify = raw.verify;
+    }
+    if (raw.budget !== undefined) {
+      const budget = raw.budget;
+      if (!budget || typeof budget !== "object" || Array.isArray(budget)) problem("budget", "must be an object");
+      else {
+        out.budget = budget;
+        for (const [key, n] of Object.entries(budget)) {
+          if (!["minutes", "usd", "requests"].includes(key) || typeof n !== "number" || !Number.isFinite(n) || n < 0 || (key === "requests" && !Number.isInteger(n))) {
+            problem("budget." + key, "must be a supported non-negative number (requests must be an integer)");
+            delete out.budget;
+          }
+        }
+      }
+    }
+    return { ...out, title: out.title ?? "" } as unknown as Ticket;
+  });
+  return { tickets, errors };
+}
+
+/** Parse JSON and report every structural problem together. */
 export function parseTickets(raw: string): Ticket[] {
   const value: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
   if (!Array.isArray(value)) throw new Error("tickets file must be a JSON array");
-  const errors: string[] = [];
-  const tickets = value.map((t, i) => {
-    const index = i + 1;
-    if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error(`ticket ${index} must be an object`);
-    const o = t as Record<string, unknown>;
-
-    const stringArray = (v: unknown, field: string): string[] | undefined => {
-      if (v === undefined) return undefined;
-      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
-        errors.push(`ticket ${index}: ${field} must be an array of strings`);
-        return undefined;
-      }
-      return v;
-    };
-
-    if (o.id !== undefined && typeof o.id !== "string") errors.push(`ticket ${index}: id must be a string`);
-    if (o.title !== undefined && typeof o.title !== "string") errors.push(`ticket ${index}: title must be a string`);
-    if (o.body !== undefined && typeof o.body !== "string") errors.push(`ticket ${index}: body must be a string`);
-    const acceptance = stringArray(o.acceptance, "acceptance");
-    const outOfScope = stringArray(o.outOfScope, "outOfScope");
-    if (o.agent !== undefined && typeof o.agent !== "string") errors.push(`ticket ${index}: agent must be a string`);
-    if (o.effort !== undefined && typeof o.effort !== "string") errors.push(`ticket ${index}: effort must be a string`);
-
-    return {
-      id: typeof o.id === "string" ? o.id : undefined,
-      title: typeof o.title === "string" ? o.title : "",
-      body: typeof o.body === "string" ? o.body : undefined,
-      dependsOn: stringArray(o.dependsOn, "dependsOn"),
-      after: stringArray(o.after, "after"),
-      files: stringArray(o.files, "files"),
-      ...(acceptance ? { acceptance } : {}),
-      ...(outOfScope ? { outOfScope } : {}),
-      ...(typeof o.agent === "string" ? { agent: o.agent } : {}),
-      ...(typeof o.effort === "string" ? { effort: o.effort } : {}),
-    };
-  });
-  if (errors.length) throw new Error(errors.join("; "));
-  return tickets;
+  const result = ticketShapes(value);
+  if (result.errors.length) throw new Error(result.errors.join("; "));
+  return result.tickets;
 }
 
-export interface ResolvedTicket {
+export interface ResolvedTicket extends TicketV2 {
   /** 1-based position in the file. */
   index: number;
   id?: string;
@@ -123,16 +174,18 @@ export interface ResolvedPlan {
  * issues with neither label: an `effort` without an `agent` is dropped. Pure.
  */
 export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {}): ResolvedPlan {
-  const errors: string[] = [];
+  const shaped = ticketShapes(tickets);
+  const errors = shaped.errors;
   const warnings: string[] = [];
   const seen = new Set<string>();
   const fileOwners = new Map<string, number[]>();
   const resolved: ResolvedTicket[] = [];
 
-  tickets.forEach((t, i) => {
+  shaped.tickets.forEach((t, i) => {
     const index = i + 1;
-    if (!t.title.trim()) errors.push(`ticket ${index} needs a title`);
-    if (t.id && seen.has(t.id)) errors.push(`ticket ${index}: duplicate id "${t.id}"`);
+    const who = `ticket ${index}${t.id ? ` ("${t.id}")` : ""}`;
+    if (!t.title.trim()) errors.push(`${who}: title needs a title`);
+    if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
 
     const dependsOn = t.dependsOn ?? [];
     const knownDeps: string[] = [];
@@ -174,6 +227,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
 
     if (t.id) seen.add(t.id);
     resolved.push({
+      ...ticketV2Fields(t),
       index, id: t.id, title: t.title, body: (t.body ?? "").trim(), files, acceptance, outOfScope, dependsOn, knownDeps, after, knownAfter,
       ...(agent ? { agent } : {}),
       ...(effort ? { effort: effort as EffortTier } : {}),

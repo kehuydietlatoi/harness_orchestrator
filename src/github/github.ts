@@ -143,13 +143,24 @@ export async function getIssue(number: number, opts: { cwd?: string } = {}): Pro
   return parseIssue(JSON.parse(r.stdout));
 }
 
+/** Ensure an exact milestone title, reconciling concurrent creates/response loss. */
+export async function ensureMilestone(title: string, cwd: string = process.cwd()): Promise<void> {
+  const find = async () => (await paginatedApi<{ title: string }>(
+    "repos/{owner}/{repo}/milestones", { state: "all" }, { cwd },
+  )).some((milestone) => milestone.title === title);
+  if (await find()) return;
+  const r = await exec("gh", ["api", "repos/{owner}/{repo}/milestones", "--method", "POST", "--raw-field", `title=${title}`], { cwd });
+  if (r.code !== 0 && !(await find())) throw new Error(`could not create milestone: ${r.stderr.trim()}`);
+}
+
 export async function createIssue(
   title: string,
   body: string,
   labels: string[],
-  opts: { cwd?: string } = {},
+  opts: { cwd?: string; milestone?: string } = {},
 ): Promise<number> {
   const args = ["issue", "create", "--title", title, "--body", body];
+  if (opts.milestone !== undefined) args.push("--milestone", opts.milestone);
   for (const l of labels) args.push("--label", l);
   const r = await exec("gh", args, { cwd: opts.cwd });
   if (r.code !== 0) throw new Error(`gh issue create failed: ${r.stderr.trim()}`);

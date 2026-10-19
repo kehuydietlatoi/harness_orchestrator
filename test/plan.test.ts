@@ -112,7 +112,7 @@ describe("resolvePlan", () => {
       { title: "", id: "a" },
       { title: "B", id: "a" },
     ]);
-    expect(r.errors).toEqual(["ticket 1 needs a title", 'ticket 2: duplicate id "a"']);
+    expect(r.errors).toEqual(['ticket 1 ("a"): title needs a title', 'ticket 2 ("a"): id duplicate id "a"']);
   });
 
   it("warns and drops an unknown/later dependency", () => {
@@ -235,4 +235,41 @@ it.each([
 it("uses configured tier aliases for legacy plan effort", () => {
   const plan = resolvePlan([{ title: "tier", agent: "codex", effort: "easy" }], { tierAliases: { easy: "free" } });
   expect(plan.tickets[0].effort).toBe("free");
+});
+
+
+describe("v2 structural validation", () => {
+  it("reports three independent errors with ticket id and field", () => {
+    const plan = resolvePlan([{ id: "T1", title: "Check fields", kind: "bad", needs: ["telepathy"], verify: ["npm test"] }] as any);
+    expect(plan.errors).toHaveLength(3);
+    for (const field of ["kind", "needs", "verify"]) expect(plan.errors).toContainEqual(expect.stringMatching(new RegExp('T1.*' + field)));
+  });
+
+  it("keeps checking later tickets and semantic errors after malformed fields", () => {
+    const plan = resolvePlan([{ id: "T1", title: "", files: 2 }, null, { id: "T1", title: "Second", budget: { minutes: -1, requests: 0.5 } }] as any);
+    expect(plan.errors.join('; ')).toMatch(/T1.*files/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*title/);
+    expect(plan.errors.join('; ')).toMatch(/ticket 2.*ticket/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*id duplicate/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*budget.minutes/);
+    expect(plan.errors.join('; ')).toMatch(/T1.*budget.requests/);
+  });
+
+  it.each([
+    { role: 3 }, { role: "Bad Role" }, { milestone: "" }, { decisions: ["D-1"] },
+    { context: ["Not an anchor"] }, { locks: [""] }, { locks: ["a", "a"] },
+    { sensitivity: "private" }, { model: [] }, { budget: null }, { budget: { extra: 1 } },
+    { budget: { usd: Infinity } }, { verify: "npm test" }, { verify: [] },
+    { verify: [[]] }, { verify: [["npm", " "]] }, { verify: [["npm", 1]] },
+  ])("rejects malformed v2 fields: %j", (fields) => {
+    expect(resolvePlan([{ title: "Valid title", ...fields }] as any).errors.length).toBeGreaterThan(0);
+    expect(() => parseTickets(JSON.stringify([{ title: "Valid title", ...fields }]))).toThrow();
+  });
+
+  it("preserves argv boundaries and accepts optional empty arrays and zero budgets", () => {
+    const fields = { verify: [["node", "path with spaces/check.js", "literal|argument"]], needs: [], locks: [], budget: { minutes: 0, usd: 0, requests: 0 } };
+    const [ticket] = parseTickets(JSON.stringify([{ title: "A valid title", ...fields }]));
+    expect(resolvePlan([ticket]).errors).toEqual([]);
+    expect(resolvePlan([ticket]).tickets[0]).toMatchObject(fields);
+  });
 });
