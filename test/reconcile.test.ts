@@ -317,38 +317,38 @@ describe("repair observation of an open PR", () => {
     { local: "absent", expected: "in-review" },
   ])("uses PR head with local branch $local", async ({ local, expected }) => {
     root = mkdtempSync(join(tmpdir(), "orch-reconcile-"));
-    const git = async (...args: string[]) => {
-      const result = await exec("git", args, { cwd: root });
+    const git = async (args: string[], input?: string) => {
+      const result = await exec("git", args, { cwd: root, input });
       if (result.code !== 0) throw new Error(result.stderr);
       return result.stdout.trim();
     };
-    // Unique messages: identical empty commits made within one second would
-    // otherwise hash to the same object and collapse distinct histories.
-    let commits = 0;
-    const commit = async () => {
-      await git("-c", "user.name=Test", "-c", "user.email=test@example.com",
-        "commit", "--allow-empty", "-qm", `fixture ${++commits}`);
-      return git("rev-parse", "HEAD");
-    };
-    await git("init", "-q", "-b", "main");
-    const base = await commit();
-    await git("checkout", "-qb", "pr-head");
-    const ancestor = await commit();
-    const headSha = await commit();
-    const openPr = { ...pr(), headSha };
-    const branch = openPr.headRefName;
-    const cfg = { ...DEFAULT_CONFIG, baseBranch: "main", worktreeRoot: "./wt" };
-    let localSha: string | undefined;
+    // Build the same real commit graph in one process. Repeated commit/checkouts
+    // made fixture setup exceed the test deadline on loaded Windows runners.
+    const branch = pr().headRefName;
+    const commit = (ref: string, mark: number, parent?: number) => [
+      `commit refs/heads/${ref}`, `mark :${mark}`,
+      "committer Test <test@example.com> 1 +0000",
+      `data ${Buffer.byteLength(`fixture ${mark}`)}`, `fixture ${mark}`,
+      ...(parent ? [`from :${parent}`] : []), "",
+    ].join("\n") + "\n";
+    let history = commit("main", 1) + commit("pr-head", 2, 1) + commit("pr-head", 3, 2);
     if (local !== "absent") {
-      const start = local === "stale at base" || local === "diverged" ? base
-        : local === "stale ahead of base" ? ancestor : headSha;
-      await git("checkout", "-qb", branch, start);
-      if (local === "ahead of PR" || local === "diverged") await commit();
-      localSha = await git("rev-parse", branch);
-      await git("checkout", "-q", "main");
-      await git("worktree", "add", "--quiet", join(root, "wt", "issue-36"), branch);
+      const start = local === "stale at base" || local === "diverged" ? 1
+        : local === "stale ahead of base" ? 2 : 3;
+      history += local === "ahead of PR" || local === "diverged"
+        ? commit(branch, 4, start) : `reset refs/heads/${branch}\nfrom :${start}\n\n`;
     }
-    await git("update-ref", "refs/orch/lock/issue-36", base);
+    await git(["init", "-q", "-b", "main"]);
+    await git(["fast-import", "--quiet"], history);
+    const [base, headSha, localSha] = (await git([
+      "rev-parse", "main", "pr-head", ...(local === "absent" ? [] : [branch]),
+    ])).split(/\r?\n/);
+    const openPr = { ...pr(), headSha };
+    const cfg = { ...DEFAULT_CONFIG, baseBranch: "main", worktreeRoot: "./wt" };
+    if (local !== "absent") {
+      await git(["worktree", "add", "--quiet", join(root, "wt", "issue-36"), branch]);
+    }
+    await git(["update-ref", "refs/orch/lock/issue-36", base]);
     vi.spyOn(github, "getIssue").mockResolvedValue(issue({ labels: [STATUS.inReview, REVIEW_NEEDED] }));
     vi.spyOn(github, "listPrs").mockResolvedValue([openPr]);
     vi.spyOn(github, "listPrReviews").mockResolvedValue([]);
@@ -373,7 +373,7 @@ describe("repair observation of an open PR", () => {
       expect(result.actions).toEqual([]);
       expect(result.blocked).toEqual([]);
     }
-    if (localSha) expect(await git("rev-parse", branch)).toBe(localSha);
+    if (localSha) expect(await git(["rev-parse", branch])).toBe(localSha);
   });
 });
 
