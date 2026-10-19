@@ -27,8 +27,11 @@ allowances. A role constrains where work runs; it does not authorize approval.
 model's family over the adapter default (Claude defaults to `anthropic`, Codex to
 `openai`). OpenCode must specify a family per configured model and never inherits
 the adapter family: one OpenCode harness can run models from multiple providers,
-so its executable name cannot establish provider identity. Config validation
-requires an explicit OpenCode model and family, including resolved ladder members.
+so its executable name cannot establish provider identity. Config validation in
+[src/config.ts](../../src/config.ts) requires a family for OpenCode adapter model
+specs and both a model and family for resolved ladder members. At invocation,
+`OpencodeAdapter.run` in [src/adapters/opencode.ts](../../src/adapters/opencode.ts)
+requires an explicit provider/model.
 
 ## Default model order
 
