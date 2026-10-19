@@ -18,6 +18,8 @@ export interface PrStepFacts {
 }
 
 export interface StepFacts {
+  /** A successful local push has not yet settled in GitHub's observations. */
+  pushPending?: boolean;
   /** A complete PR path observation rejected the worker's scope. */
   scopeFailure?: string | null;
   /** Failed fix-type attempts on this head and route, supplied by the coordinator. */
@@ -94,6 +96,7 @@ function decidePrStep(f: StepFacts): Step {
   const pr = f.pr;
   if (!pr) return { kind: "none", reason: "no open pull request" };
   if (f.scopeFailure) return { kind: "escalate", reason: f.scopeFailure };
+  if (f.pushPending) return { kind: "wait", reason: "GitHub is still updating the pushed head and mergeability" };
 
   const extra = f.extraRounds ?? 0;
   const exhausted = f.rounds >= f.maxRounds + extra;

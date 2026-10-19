@@ -7,12 +7,14 @@ vi.mock("../src/github/github.js", () => ({
   listIssues: vi.fn(), listOpenPrs: vi.fn(), listPrReviews: vi.fn(), prChecksState: vi.fn(), prMergeability: vi.fn(),
   listPrComments: vi.fn(), prChangedPaths: vi.fn(),
 }));
-vi.mock("../src/tasks/events.js", () => ({ readEvents: () => [], fixRoundsFor: () => 0 }));
+vi.mock("../src/tasks/events.js", () => ({ readEvents: vi.fn(() => []), fixRoundsFor: () => 0 }));
 
 import * as gh from "../src/github/github.js";
 import type { Board } from "../src/github/board.js";
 import { assembleFacts, observeTasks } from "../src/tasks/observe.js";
 import { formatTriageComment } from "../src/tasks/triage.js";
+import { readEvents } from "../src/tasks/events.js";
+import * as subprocess from "../src/util/exec.js";
 
 const HEAD = "a".repeat(40);
 const OLD = "c".repeat(40);
@@ -118,11 +120,70 @@ describe("assembleFacts", () => {
 describe("observeTasks", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.mocked(readEvents).mockReturnValue([]);
     vi.mocked(gh.listIssues).mockResolvedValue([issue]);
     vi.mocked(gh.listOpenPrs).mockResolvedValue([pr]);
     vi.mocked(gh.listPrReviews).mockResolvedValue([]);
     vi.mocked(gh.prChecksState).mockResolvedValue("pass");
     vi.mocked(gh.prMergeability).mockResolvedValue("clean");
+  });
+
+  it("waits for the pushed head instead of fixing the same old review again", async () => {
+    vi.mocked(readEvents).mockReturnValue([{
+      ts: "2026-10-19T00:00:00Z", issue: 38, pr: 62, type: "step.finished",
+      signal: "fix.pushed", previousHead: HEAD, pushedHead: OLD,
+    }]);
+    vi.mocked(gh.listPrReviews).mockResolvedValue([review("codex", "request-changes")]);
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("wait");
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headSha: OLD }]);
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("review");
+  });
+
+  it("waits for mergeability on its pushed head, then resolves a new conflict once", async () => {
+    vi.mocked(readEvents).mockReturnValue([{
+      ts: "2026-10-19T00:00:00Z", issue: 38, pr: 62, type: "step.finished",
+      signal: "conflict.resolved", previousHead: OLD, pushedHead: HEAD,
+    }]);
+    vi.mocked(gh.prMergeability).mockResolvedValue("unknown");
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("wait");
+    vi.mocked(gh.prMergeability).mockResolvedValue("clean");
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("review");
+    vi.mocked(gh.prMergeability).mockResolvedValue("conflicting");
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("resolve-conflict");
+    // Once that newer base is resolved, delayed recomputation must not buy a second run.
+    const next = "d".repeat(40);
+    vi.mocked(readEvents).mockReturnValue([{
+      ts: "2026-10-19T00:01:00Z", issue: 38, type: "step.finished",
+      signal: "conflict.resolved", previousHead: HEAD, pushedHead: next,
+    }]);
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("wait");
+    vi.mocked(gh.listOpenPrs).mockResolvedValue([{ ...pr, headSha: next }]);
+    vi.mocked(gh.prMergeability).mockResolvedValue("unknown");
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("wait");
+    vi.mocked(gh.prMergeability).mockResolvedValue("clean");
+    expect((await observeTasks(DEFAULT_CONFIG, "/repo")).tasks[0].step.kind).toBe("review");
+  });
+
+  it("waits when GitHub reports a stale conflict on the exact head just pushed", async () => {
+    const actual = await vi.importActual<typeof gh>("../src/github/github.js");
+    vi.mocked(readEvents).mockReturnValue([{
+      ts: "2026-10-19T00:00:00Z", issue: 38, type: "step.finished",
+      signal: "conflict.resolved", previousHead: OLD, pushedHead: HEAD,
+    }]);
+    const exec = vi.spyOn(subprocess, "exec").mockResolvedValueOnce({
+      code: 0, stderr: "", stdout: JSON.stringify({
+        head: { sha: HEAD }, base: { sha: OLD }, mergeable: false,
+      }),
+    }).mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" }); // base is already merged
+    vi.mocked(gh.prMergeability).mockImplementation(actual.prMergeability);
+    try {
+      const { tasks: [task] } = await observeTasks(DEFAULT_CONFIG, "/repo");
+      expect(task.pr.headSha).toBe(HEAD);
+      expect(task.facts.pr?.mergeable).toBe("unknown");
+      expect(task.step.kind).toBe("wait");
+    } finally {
+      exec.mockRestore();
+    }
   });
 
   it("escalates a PR pushed outside submit before any review or triage", async () => {

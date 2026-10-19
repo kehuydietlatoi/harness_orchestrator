@@ -9,7 +9,7 @@ export interface Board {
   listPrReviews(number: number, opts?: { cwd?: string }): Promise<PrReview[]>;
   listPrComments(number: number, opts?: { cwd?: string }): Promise<IssueComment[]>;
   prChecksState(number: number, opts?: { cwd?: string; strict?: boolean }): Promise<ChecksState>;
-  prMergeability(number: number, opts?: { cwd?: string }): Promise<Mergeability>;
+  prMergeability(number: number, opts?: { cwd?: string; head?: string }): Promise<Mergeability>;
   editIssue(number: number, opts?: {
     cwd?: string;
     addLabels?: string[];

@@ -495,7 +495,29 @@ export async function recordPrReview(number: number, head: string, body: string,
 /** Whether a PR can merge into its base right now. `unknown` while GitHub is still computing it. */
 export type Mergeability = "clean" | "conflicting" | "unknown";
 
-export async function prMergeability(number: number, opts: { cwd?: string } = {}): Promise<Mergeability> {
+export async function prMergeability(number: number, opts: { cwd?: string; head?: string } = {}): Promise<Mergeability> {
+  if (opts.head) {
+    // Read head/base and the computed result together. A separate PR-list read may lag a push.
+    const r = await exec("gh", ["api", `repos/{owner}/{repo}/pulls/${number}`], { cwd: opts.cwd });
+    if (r.code !== 0) throw new Error(`gh PR #${number} mergeability failed: ${r.stderr.trim()}`);
+    const pr = JSON.parse(r.stdout) as { head?: { sha?: string }; base?: { sha?: string }; mergeable?: boolean | null };
+    if (pr.head?.sha !== opts.head || typeof pr.mergeable !== "boolean") return "unknown";
+    if (pr.mergeable) return "clean";
+
+    // GitHub can briefly keep the previous 'conflicting' result even on the new head.
+    // A head containing this exact base cannot conflict with it. Do not use a timeout:
+    // a genuinely newer base must remain eligible for conflict resolution immediately.
+    const base = pr.base?.sha;
+    if (!base || !/^[a-f0-9]{40}$/i.test(base) || !/^[a-f0-9]{40}$/i.test(opts.head)) return "unknown";
+    const args = ["merge-base", "--is-ancestor", base, opts.head];
+    let ancestry = await exec("git", args, { cwd: opts.cwd });
+    if (ancestry.code !== 0 && ancestry.code !== 1) {
+      const fetch = await exec("git", ["fetch", "--no-tags", "origin", base, opts.head], { cwd: opts.cwd });
+      if (fetch.code !== 0) return "unknown";
+      ancestry = await exec("git", args, { cwd: opts.cwd });
+    }
+    return ancestry.code === 1 ? "conflicting" : "unknown";
+  }
   const r = await exec("gh", ["pr", "view", String(number), "--json", "mergeable", "--jq", ".mergeable"], {
     cwd: opts.cwd,
   });

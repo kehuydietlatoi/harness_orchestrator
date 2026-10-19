@@ -242,7 +242,9 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     // let a cooldown, or a label write that keeps failing, reset the timer forever so --max-idle never fires.
     const failedEscalation = step === "escalate" && result.signal === "step.failed";
     if (result.signal !== "agent.unavailable" && !failedEscalation) lastProgress = deps.now();
-    deps.record({ type: "step.finished", issue, step, signal: result.signal, detail: result.detail, durationMs: deps.now() - startedAt });
+    deps.record({ type: "step.finished", issue, step, signal: result.signal, detail: result.detail,
+      ...(result.pushedHead ? { pushedHead: result.pushedHead, previousHead: result.previousHead } : {}),
+      durationMs: deps.now() - startedAt });
     deps.say(`  #${issue} ${step} -> ${result.signal}${result.detail ? ` (${result.detail})` : ""}`);
     switch (result.signal) {
       case "step.failed": {
