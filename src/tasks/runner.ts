@@ -283,6 +283,15 @@ export async function dispatchSpecific(
   return processClaimed(task, agent, cfg, cwd);
 }
 
+async function commentSpawnRefusal(n: number, reason: string, cwd: string): Promise<void> {
+  try {
+    const result = await exec("gh", ["issue", "comment", String(n), "--body-file", "-"], { cwd, input: reason });
+    if (result.code !== 0) throw new Error(result.stderr);
+  } catch (error) {
+    log.warn(`#${n}: could not comment spawn refusal: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 /** A refusal spends no request budget and never constructs an adapter. */
 async function refuseRoute(issue: Issue, agent: string, cfg: OrchConfig, cwd: string): Promise<boolean> {
   try { resolveTaskModel(agent, issue, cfg); return false; }
@@ -290,6 +299,7 @@ async function refuseRoute(issue: Issue, agent: string, cfg: OrchConfig, cwd: st
     if (!(error instanceof RouteRefusal)) throw error;
     await editIssue(issue.number, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.todo] });
     appendEvent({ type: "task.escalated", issue: issue.number, agent, detail: error.message }, cwd);
+    await commentSpawnRefusal(issue.number, error.message, cwd);
     log.warn(error.message);
     return true;
   }
@@ -338,6 +348,7 @@ async function processClaimed(
       const reason = `Incomplete brief: ${error instanceof Error ? error.message : String(error)}`;
       await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
       appendEvent({ type: "task.escalated", issue: n, agent, detail: reason }, cwd);
+      await commentSpawnRefusal(n, reason, cwd);
       log.warn(`#${n}: ${reason}`);
       return { issue: n, outcome: "needs-attention", reason, durationMs: 0 };
     }
