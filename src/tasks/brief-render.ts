@@ -51,7 +51,7 @@ export function renderPackBrief(issue: Issue, cfg: OrchConfig, cwd: string, prio
   const values: Record<string, string> = {
     "role.prompt": role.prompt.replace(/\r\n/g, "\n").trim(),
     "project.standing": [conventions, bullets(role.manifest.standing)].filter(Boolean).join("\n\n"),
-    "project.protected_paths": [...(studio.protected_paths ?? []), ...role.manifest.forbidden].join(", "),
+    "project.protected_paths": [...new Set([...(studio.protected_paths ?? []), ...role.manifest.forbidden])].join(", "),
     "ticket.decisions_inline": (ticket.decisions ?? []).map(id => design.decisions[id]?.row ?? "").join("\n"),
     "ticket.goal": [issue.title.trim(), issue.body.trim().split(/\r?\n\s*\r?\n/)[0]].filter(Boolean).join("\n\n"),
     "ticket.files": allowed.join(", "),
@@ -59,8 +59,8 @@ export function renderPackBrief(issue: Issue, cfg: OrchConfig, cwd: string, prio
     "ticket.context_sections": context,
     "ticket.prior_attempt": priorAttempt,
     "ticket.acceptance": listSection(issue.body, "Definition of done"),
-    "ticket.verify": [...(cfg.verify ?? []), ...(ticket.verify ?? [])]
-      .map(argv => argv.map(arg => /^[\w./:@%+=,-]+$/.test(arg) ? arg : JSON.stringify(arg)).join(" ")).join("\n"),
+    "ticket.verify": [...new Set([...(cfg.verify ?? []), ...(ticket.verify ?? [])]
+      .map(argv => argv.map(arg => /^[\w./:@%+=,-]+$/.test(arg) ? arg : JSON.stringify(arg)).join(" ")))].join("\n"),
     "ticket.budget": Object.keys(budget).length ? JSON.stringify(budget) : `Timeout: ${cfg.taskTimeoutMs / 60000} minutes`,
     "ticket.forbidden": [listSection(issue.body, "Out of scope"), bullets(role.manifest.forbidden), gitRules].filter(Boolean).join("\n"),
     "ticket.id": String(issue.number),

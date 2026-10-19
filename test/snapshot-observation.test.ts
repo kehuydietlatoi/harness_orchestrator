@@ -14,6 +14,7 @@ import { listLocks } from "../src/git/lock.js";
 import { exec } from "../src/util/exec.js";
 import { buildSnapshot } from "../src/board/snapshot.js";
 import { formatReview } from "../src/board/approval.js";
+import { lifecycleChecks } from "../src/commands/doctor.js";
 let fixture = 0;
 beforeEach(() => {
   vi.resetAllMocks(); fixture++;
@@ -31,6 +32,16 @@ beforeEach(() => {
     args?.[0] === "worktree" ? `worktree ${process.cwd()}/src\nbranch refs/heads/task/1-x\n\n` : "task/1-x\n" }));
 });
 describe("snapshot observation", () => {
+  it("keeps snapshot and doctor observations available when one model label is stale", async () => {
+    const healthy = (await gh.listIssues())[0];
+    vi.mocked(gh.listIssues).mockResolvedValue([healthy, { ...healthy, number: 9,
+      labels: ["agent:opencode", "effort:free", "model:outage/sim-free"] }]);
+    const snapshot = await buildSnapshot(`/repo-${fixture}`);
+    expect(snapshot.tasks.map((task) => [task.number, task.health.kind])).toEqual([[1, "in-review"], [9, "inconsistent"]]);
+    expect(lifecycleChecks(snapshot)).toEqual([{ name: "#9 lifecycle: inconsistent", ok: false,
+      note: expect.stringMatching(/model:outage\/sim-free.*orch repair 9/) }]);
+  });
+
   it("caches current approvals by repository and head, refreshing same-head decisions after ten seconds", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(100_000);
     const head = "a".repeat(40);
