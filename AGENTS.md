@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Exclusive path claims (#173)**: `git/lock.ts` atomically claims the issue and normalized `locks` under `refs/orch/lock/path/<sha256>`. Path-ref blobs retain issue/path/owner metadata; the persistent `refs/orch/path-lock-version` CAS serializes overlapping glob checks (ADR-0002). `release`/`releaseOwned` release the full owned set, so every existing cleanup path shares the rule. Contention returns unavailable (`claimSpecific`: null); retained work retains locks. Repair reports orphaned path refs without deleting them. `git/path-locks.ts` owns the shared plan/runtime overlap semantics; `parseTicketV2` lives in `plan.ts`, re-exported by `plan-create.ts` for compatibility.
+
 - **Ticket v2 metadata (#171)**: `plan.ts` shares structural validation between parse and resolve and reports ticket id + field for all errors. Creation stores optional v2 fields in the `Ticket metadata (v2)` JSON section (`parseTicketV2` in `plan-create.ts`), alongside label/milestone projections and the existing `Budget:` line. V2 fields stay outside marker identities; issue verify argv remains data until a separate trust check authorizes execution.
 
 - **Multi-provider routing**: when changing model selection, cascades, billing, budgets, or provider permissions, read [ADR-0012](docs/adr/0012-multi-provider-routing.md) for Phase 1 decisions and known gaps.

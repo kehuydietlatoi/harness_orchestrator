@@ -1,7 +1,8 @@
 import { normalizeEffort, type EffortTier, type TierAliases } from "../config.js";
 import { type Issue, listIssues, getIssue } from "../github/github.js";
 import { NEEDS_ATTENTION, STATUS } from "../github/labels.js";
-import { isLocked } from "../git/lock.js";
+import { isLocked, pathsLocked } from "../git/lock.js";
+import { parseTicketV2 } from "../tasks/plan.js";
 
 export function issueStatus(i: Issue): string {
   const s = i.labels.find((l) => l.startsWith("status:"));
@@ -90,6 +91,8 @@ export async function isEligible(
   const claimed = i.labels.some((l) => l.startsWith("status:") && l !== STATUS.todo);
   if (claimed) return false;
   if (await isLocked(i.number, { cwd })) return false;
+  const paths = parseTicketV2(i.body).locks ?? [];
+  if (paths.length && await pathsLocked(paths, { cwd })) return false;
   const blocking = open ? openDepsFromMap(i, open) : await openDeps(i, cwd);
   if (blocking.length > 0) return false;
   return true;
