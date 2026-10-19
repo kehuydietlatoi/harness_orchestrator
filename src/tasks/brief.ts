@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Issue } from "../github/github.js";
 import type { Worktree } from "../git/worktree.js";
+import { parseTicketV2 } from "./plan.js";
 
 /** The consistent briefing handed to whichever harness picks up a task. */
 export function buildBrief(issue: Issue, worktree: Worktree, agent: string, cwd: string): string {
+  const verify = parseTicketV2(issue.body).verify ?? [];
   const hasMemory = existsSync(resolve(cwd, "AGENTS.md"));
   const memoryNote = hasMemory
     ? "Read AGENTS.md at the repo root before starting; record durable facts there (not in native memory)."
@@ -20,6 +22,7 @@ export function buildBrief(issue: Issue, worktree: Worktree, agent: string, cwd:
     issue.body.trim() || "_(no description)_",
     ``,
     `## Working agreement`,
+    ...verify.map((argv) => `- Self-check in your sandbox with verify argv: ${JSON.stringify(argv)}`),
     `- Do all work inside the worktree above.`,
     `- ${memoryNote}`,
     `- When done: \`orch submit ${issue.number} --agent ${agent}\` — opens a PR and routes review to the other harness.`,

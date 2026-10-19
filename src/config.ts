@@ -134,6 +134,8 @@ export interface OrchConfig {
   taskTimeoutMs: number;
   /** Trusted local checks, executed directly in the task worktree before auto-commit. */
   verify?: string[][];
+  /** Repository-relative globs whose changes require a current lead-tier approval. */
+  protectedPaths?: string[];
   budgets?: { default?: Budget; byTier?: Partial<Record<EffortTier, Budget>> };
   /**
    * How long one automated review may run. Much shorter than a task: reading a diff takes minutes, and a
@@ -157,12 +159,17 @@ export interface OrchConfig {
 }
 
 export const CONFIG_FILE = "orch.config.json";
+export const DEFAULT_PROTECTED_PATHS = [
+  "**/package.json", "**/vitest.config.*", "**/jest.config.*", "**/.mocharc*",
+  "**/playwright.config.*", "**/orch.config.json",
+];
 
 /** Regenerable output that never makes a task worktree worth preserving. */
 export const DEFAULT_DISPOSABLE_IGNORED: readonly string[] = ["node_modules/", "dist/", "coverage/", "logs/"];
 
 export const DEFAULT_CONFIG: OrchConfig = {
   roles: {},
+  protectedPaths: [...DEFAULT_PROTECTED_PATHS],
   agents: ["claude", "codex"],
   lead: "claude",
   requireCrossReview: true,
@@ -225,6 +232,11 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  if (raw.protectedPaths !== undefined && (!Array.isArray(raw.protectedPaths) ||
+      !raw.protectedPaths.every((path) => typeof path === "string" && path.trim().length > 0 &&
+        ![...path].some((char) => char.charCodeAt(0) < 32) && !/^(?:[\\/]|[a-z]:)/i.test(path) && !path.split(/[\\/]/).includes("..")))) {
+    throw new Error("protectedPaths must be a list of repository-relative path globs");
+  }
   if (Object.prototype.hasOwnProperty.call(raw, "verify") &&
       (!Array.isArray(raw.verify) || !raw.verify.every((argv) =>
         Array.isArray(argv) && argv.length > 0 && argv.every((arg) =>

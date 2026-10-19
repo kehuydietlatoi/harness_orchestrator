@@ -15,7 +15,7 @@ function project(overrides = {}) {
   const cwd = mkdtempSync(join(tmpdir(), "orch-pack-"));
   dirs.push(cwd);
   cpSync(fixture, join(cwd, ".studio"), { recursive: true });
-  writeFileSync(join(cwd, "orch.config.json"), JSON.stringify({ pack: ".studio", ...overrides }));
+  writeFileSync(join(cwd, "orch.config.json"), JSON.stringify({ pack: ".studio", verify: [["npm", "test"]], ...overrides }));
   return cwd;
 }
 
@@ -65,7 +65,7 @@ describe("domain packs", () => {
     for (const ticket of [{ ...valid, effort: "cheap" }, { ...valid, agent: "codex", effort: "standard" },
       { ...valid, role: "custom" }, { ...valid, agent: "unknown" }, { ...valid, effort: "bogus" }]) {
       expect(resolvePlan([ticket], { config: cfg }).errors.length).toBeGreaterThan(0);
-      expect(resolvePlan([ticket]).errors).toEqual([]);
+      expect(resolvePlan([ticket], { config: { ...cfg, pack: undefined } }).errors).toEqual([]);
     }
   });
 });

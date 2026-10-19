@@ -1,6 +1,27 @@
 import { describe, it, expect } from "vitest";
 import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
 import { renderTicketBody } from "../src/tasks/plan-create.js";
+import { DEFAULT_CONFIG } from "../src/config.js";
+
+describe("ticket verify trust", () => {
+  const config = { ...DEFAULT_CONFIG, verify: [["node", "--test"]] };
+  it("accepts only project prefixes plus paths, separators and plain numbers", () => {
+    expect(resolvePlan([{ id: "checks", title: "Check", verify: [["node", "--test", "--", "tests/a.test.ts", "3"]] }], { config }).errors).toEqual([]);
+  });
+  it.each(["-e", "--require", "..", "../escape", "tests/../escape", "/etc/passwd", "C:\\tests\\a.ts", "\\\\host\\share", "tests/a\0.ts"])("rejects argument %j with the ticket identity", (arg) => {
+    const errors = resolvePlan([{ id: "checks", title: "Check", verify: [["node", "--test", arg]] }], { config }).errors;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain('ticket 1 ("checks")');
+    expect(errors[0]).toContain(JSON.stringify(arg));
+  });
+  it("rejects unrelated executables and changes within the prefix", () => {
+    for (const argv of [["python", "tests/check.py"], ["node", "-e", "code"]]) {
+      expect(resolvePlan([{ id: "checks", title: "Check", verify: [argv] }], { config }).errors[0])
+        .toContain(JSON.stringify(argv[argv[0] === "node" ? 1 : 0]));
+    }
+    expect(resolvePlan([{ title: "Check", verify: [["node", "--test"]] }]).errors).toHaveLength(1);
+  });
+});
 
 describe("exclusive plan locks", () => {
   it.each([["scenes/main.scene", "scenes/main.scene"], ["assets/**", "assets/hero.png"], ["assets/*/hero.png", "assets/characters/*.png"]])(
@@ -296,7 +317,7 @@ describe("v2 structural validation", () => {
   it("preserves argv boundaries and accepts optional empty arrays and zero budgets", () => {
     const fields = { verify: [["node", "path with spaces/check.js", "literal|argument"]], needs: [], locks: [], budget: { minutes: 0, usd: 0, requests: 0 } };
     const [ticket] = parseTickets(JSON.stringify([{ title: "A valid title", ...fields }]));
-    expect(resolvePlan([ticket]).errors).toEqual([]);
+    expect(resolvePlan([ticket], { config: { ...DEFAULT_CONFIG, verify: [["node"]] } }).errors).toEqual([]);
     expect(resolvePlan([ticket]).tickets[0]).toMatchObject(fields);
   });
 });

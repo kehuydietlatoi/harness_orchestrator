@@ -27,6 +27,8 @@ import { writeSession } from "./sessions.js";
 import { endpointHealthy } from "../board/health.js";
 import { ENDPOINT_COOLDOWN_MS } from "../adapters/usage-limit.js";
 import { exec } from "../util/exec.js";
+import { parseTicketV2 } from "./plan.js";
+import { verifyEnvironment, verifyTrustErrors } from "./verify.js";
 
 class VerificationFailed extends Error {}
 
@@ -45,8 +47,11 @@ async function commitWorkerOutput(task: ClaimedTask, agent: string, model: Model
   };
   await assertBranch();
   if (!(await git(["status", "--porcelain", "--untracked-files=all"])).trim()) return false;
-  for (const argv of cfg.verify ?? []) {
-    const result = await exec(argv[0], argv.slice(1), { cwd, timeoutMs: 300_000 });
+  const ticketVerify = parseTicketV2(task.issue.body).verify ?? [];
+  const trustErrors = verifyTrustErrors(ticketVerify, cfg.verify ?? []);
+  if (trustErrors.length) throw new VerificationFailed(`Ticket #${task.issue.number}: ${trustErrors.join("; ")}`);
+  for (const argv of [...cfg.verify ?? [], ...ticketVerify]) {
+    const result = await exec(argv[0], argv.slice(1), { cwd, timeoutMs: 300_000, env: verifyEnvironment() });
     if (result.code !== 0) {
       const tail = `${result.stdout}\n${result.stderr}`.slice(-6000);
       throw new VerificationFailed(`Coordinator verification failed (exit ${result.code}). Worktree and claim retained; no commit or submission.\n\nCommand (argv): ${JSON.stringify(argv)}\n\nOutput tail:\n${tail.split(/\r?\n/).map(line => `    ${line}`).join("\n")}`);

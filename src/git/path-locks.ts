@@ -87,6 +87,29 @@ function automaton(pattern: string): State[] {
   return states;
 }
 
+/** Match a concrete repository path, without treating the filename as a glob or directory. */
+export function pathMatchesGlob(pattern: string, path: string): boolean {
+  const value = normalizeLockPath(path);
+  return braceVariants(normalizeLockPath(pattern)).some((variant) => {
+    const states = automaton(variant);
+    const closure = (input: Set<number>): Set<number> => {
+      const result = new Set(input);
+      for (const state of result) for (const next of states[state].epsilon) result.add(next);
+      return result;
+    };
+    let active = closure(new Set([0]));
+    for (let i = 0; i < value.length; i++) {
+      const code = value.charCodeAt(i);
+      const next = new Set<number>();
+      for (const state of active) for (const edge of states[state].edges) {
+        if (edge.ranges.some(([lo, hi]) => lo <= code && code <= hi)) next.add(edge.to);
+      }
+      active = closure(next);
+    }
+    return active.has(states.length - 1);
+  });
+}
+
 /** Whether two glob languages intersect (including paths beneath a directory). */
 export function lockPathsOverlap(left: string, right: string): boolean {
   const a = normalizeLockPath(left), b = normalizeLockPath(right);

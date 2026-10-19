@@ -164,7 +164,7 @@ describe("processNext recovery", () => {
       ["git", ["commit", "-m", "Recover runner failures (#35)", "-m",
         `Worker: ${agent}; model: ${agent === "opencode" ? "default" : agent === "codex" ? "gpt-6.1-sol@medium" : "claude-sonnet-5-5@medium"}`]],
     ]);
-    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000 });
+    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object) });
     expect(mocks.submit).toHaveBeenCalledWith(35, agent, cfg, cwd);
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });
@@ -176,6 +176,43 @@ describe("processNext recovery", () => {
       stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M greet.js" : "" }));
     expect((await processNext("codex", DEFAULT_CONFIG, cwd))?.outcome).toBe("submitted");
     expect(mocks.exec.mock.calls.every(([cmd]) => cmd === "git")).toBe(true);
+  });
+
+  it("runs ticket checks after project checks with a cleaned environment in the worktree", async () => {
+    const secrets = ["GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "SERVICE_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENCODE_CONFIG", "CODEX_HOME", "github_token", "NODE_AUTH_TOKEN"];
+    for (const key of secrets) vi.stubEnv(key, "test-secret");
+    vi.stubEnv("NODE_ENV", "test");
+    try {
+      const body = '## Ticket metadata (v2)\n\n```json\n' + JSON.stringify({ verify: [["node", "--test", "--", "tests/a.test.ts", "3"]] }) + '\n```';
+      mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+      mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+      mocks.getIssue.mockResolvedValue(issue);
+      mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+        stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M a.ts" : "" }));
+      expect((await processNext("codex", { ...DEFAULT_CONFIG, verify: [["node", "--test"]] }, cwd))?.outcome).toBe("submitted");
+      const checks = mocks.exec.mock.calls.filter(([cmd]) => cmd === "node");
+      expect(checks.map(([, argv]) => argv)).toEqual([["--test"], ["--test", "--", "tests/a.test.ts", "3"]]);
+      for (const [, , opts] of checks) {
+        expect(opts).toMatchObject({ cwd: worktree, timeoutMs: 300_000, env: { NODE_ENV: "test" } });
+        for (const key of secrets) expect(opts.env).not.toHaveProperty(key);
+        const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")!;
+        expect(opts.env[pathKey]).toBe(process.env[pathKey]);
+      }
+    } finally { vi.unstubAllEnvs(); }
+  });
+
+  it("revalidates issue verify at runtime before executing host checks", async () => {
+    const body = '## Ticket metadata (v2)\n\n```json\n{"verify":[["node","--test","--require","evil.js"]]}\n```';
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (_cmd: string, args: string[]) => ({ code: 0, stderr: "",
+      stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M a.ts" : "" }));
+    expect((await processNext("codex", { ...DEFAULT_CONFIG, verify: [["node", "--test"]] }, cwd))?.outcome).toBe("needs-attention");
+    expect(mocks.exec.mock.calls.some(([cmd]) => cmd === "node")).toBe(false);
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });
 
   it.each([1, 124])("retains output and comments a failed verification (exit %s)", async code => {

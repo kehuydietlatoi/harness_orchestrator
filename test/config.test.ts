@@ -33,6 +33,15 @@ describe("loadConfig", () => {
       .toEqual([["node", "--test"], ["npm", "test"]]);
   });
 
+  it("defaults protected paths and permits an explicit replacement or empty list", () => {
+    expect(loadConfig(writeConfig({})).protectedPaths).toEqual(DEFAULT_CONFIG.protectedPaths);
+    expect(loadConfig(writeConfig({ protectedPaths: ["scripts/**"] })).protectedPaths).toEqual(["scripts/**"]);
+    expect(loadConfig(writeConfig({ protectedPaths: [] })).protectedPaths).toEqual([]);
+  });
+  it.each([null, "package.json", [""], [12], ["../outside"], ["C:\\outside"], ["/outside"]])("rejects invalid protectedPaths %j", protectedPaths => {
+    expect(() => loadConfig(writeConfig({ protectedPaths }))).toThrow(/protectedPaths/);
+  });
+
   it.each([null, "npm test", ["node --test"], [[]], [[""]], [["node", 1]], [["node", "\0"]]])("rejects invalid verify %j", verify => {
     expect(() => loadConfig(writeConfig({ verify }))).toThrow(/verify/);
   });
