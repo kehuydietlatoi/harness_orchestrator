@@ -17,5 +17,6 @@
       "cmd": "codex"
     }
   },
-  "baseBranch": "studio"
+  "baseBranch": "studio",
+  "reviewPolicy": "cross"
 }
