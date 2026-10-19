@@ -8,6 +8,7 @@
 
 ## Conventions
 
+- **Multi-provider routing**: when changing model selection, cascades, billing, budgets, or provider permissions, read [ADR-0012](docs/adr/0012-multi-provider-routing.md) for Phase 1 decisions and known gaps.
 - **Claude 5.5 pricing (#163)**: model-specific defaults follow claude.com/pricing as verified 2026-10-19; generic `opus`/`sonnet` aliases retain older-model rates. Pricing models cache reads only (`input`, `cachedInput`, `output`); config overrides merge over defaults.
 
 - **OpenCode adapter reference (#161)**: `docs/opencode-adapter.md` owns the current adapter contract and dated 2026-10-18 spike evidence; fixtures remain in `test/fixtures/opencode-1.19.3/`. `test/opencode-doc.test.ts` checks repository links and named spike fixtures; the package e2e checks README-linked docs are shipped.
