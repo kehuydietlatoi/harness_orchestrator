@@ -1,0 +1,35 @@
+{
+  "id": "asset-artist",
+  "summary": "Produces 2D/3D assets with generation tools from asset specs and the art bible; records provenance for every file.",
+  "prompt": "asset-artist.md",
+  "kinds": [
+    "asset"
+  ],
+  "tiers": [
+    "standard",
+    "lead"
+  ],
+  "families": [
+    "anthropic",
+    "openai"
+  ],
+  "needs": [
+    "vision",
+    "image-gen"
+  ],
+  "write_scope": [
+    "assets/**",
+    "public/assets/**"
+  ],
+  "forbidden": [
+    "tests/acceptance/**",
+    "design/**",
+    ".github/**",
+    ".studio/**"
+  ],
+  "gates": [
+    "asset-spec",
+    "art-direction"
+  ],
+  "standing": []
+}

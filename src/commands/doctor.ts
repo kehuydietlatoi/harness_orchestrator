@@ -73,8 +73,9 @@ export async function doctorCommand(): Promise<void> {
     try {
       const loaded = loadConfig(cwd);
       adapters = configuredAdapterCommands(loaded);
-    } catch {
-      /* ignore malformed config here; presence check already recorded */
+      checks.push({ name: "config and domain pack valid", ok: true });
+    } catch (error) {
+      checks.push({ name: "config and domain pack valid", ok: false, note: String(error) });
     }
   }
   for (const adapter of adapters) {

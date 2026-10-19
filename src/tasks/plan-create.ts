@@ -1,10 +1,9 @@
-import type { TierAliases } from "../config.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createIssue, ensureLabels, ensureMilestone, listIssues, type Issue } from "../github/github.js";
 import { STATUS, agentLabel, effortLabel, labelDefs } from "../github/labels.js";
 import { renderDefinitionOfDone } from "./definition-of-done.js";
-import { parseTickets, resolvePlan, ticketV2Fields, type ResolvedTicket, type Ticket, type TicketV2 } from "./plan.js";
+import { parseTickets, resolvePlan, ticketV2Fields, type ResolvedTicket, type Ticket, type TicketV2, type ResolveOptions } from "./plan.js";
 
 const MARKER_VERSION = "v1";
 
@@ -44,13 +43,7 @@ export interface PlanCreateDeps {
   ensureMilestone?: typeof ensureMilestone;
 }
 
-export interface PlanCreateOptions {
-  /** Plan brief (the brainstorm's goal, decisions, constraints) embedded in every created issue. */
-  brief?: string;
-  /** Configured agents: a ticket routed to any other agent is created unrouted. */
-  agents?: readonly string[];
-  tierAliases?: TierAliases;
-}
+export type PlanCreateOptions = ResolveOptions;
 
 const defaultDeps: PlanCreateDeps = { listIssues, createIssue, ensureLabels, ensureMilestone };
 
