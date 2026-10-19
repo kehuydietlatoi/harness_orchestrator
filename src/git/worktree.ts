@@ -1,6 +1,7 @@
-import { resolve } from "node:path";
-import { existsSync, realpathSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { existsSync, lstatSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
 import { exec } from "../util/exec.js";
+import { log } from "../util/log.js";
 import { DEFAULT_DISPOSABLE_IGNORED } from "../config.js";
 
 export interface Worktree {
@@ -169,6 +170,48 @@ export interface RemovalSafety {
   reason?: string;
 }
 
+/** Inspect every entry, including ignored output, without entering a link. */
+function worktreeLinks(path: string): string[] {
+  const links: string[] = [];
+  function visit(entry: string, root = false): void {
+    try {
+      const stat = lstatSync(entry);
+      if (stat.isSymbolicLink()) {
+        if (root) throw new Error("worktree root is a link");
+        links.push(entry);
+      } else if (stat.isDirectory()) {
+        for (const name of readdirSync(entry)) visit(join(entry, name));
+      } else if (root) {
+        throw new Error("worktree root is not a directory");
+      }
+    } catch (error) {
+      throw new Error(`cannot safely inspect ${entry}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  visit(resolve(path), true);
+  return links;
+}
+
+/** Git for Windows can recurse through junctions, even without --force. */
+function prepareWorktreeRemoval(path: string): boolean {
+  try {
+    for (const link of worktreeLinks(path)) {
+      try {
+        // Never use recursive rm or pass a trailing slash. Node's unlink removes
+        // both POSIX symlinks and Windows junctions without touching the target.
+        if (!lstatSync(link).isSymbolicLink()) throw new Error("link changed during cleanup");
+        unlinkSync(link);
+      } catch (error) {
+        throw new Error(`cannot safely unlink ${link}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    return true;
+  } catch (error) {
+    log.warn(`worktree retained: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 /**
  * The single safe-removal predicate shared by repair and every cleanup path:
  * nothing dirty, untracked, or ignored-but-not-disposable, and HEAD reachable
@@ -179,6 +222,11 @@ export async function worktreeRemovalSafety(
   registeredBranch: string,
   disposable: readonly string[] = DEFAULT_DISPOSABLE_IGNORED,
 ): Promise<RemovalSafety> {
+  try {
+    worktreeLinks(path);
+  } catch (error) {
+    return { removable: false, reason: error instanceof Error ? error.message : String(error) };
+  }
   const status = await exec(
     "git",
     ["status", "--porcelain=v1", "--untracked-files=all", "--ignored=matching"],
@@ -237,6 +285,7 @@ export async function removeWorktree(
 
   const safety = await worktreeRemovalSafety(path, registered.branch, opts.disposableIgnored);
   if (!safety.removable) return false;
+  if (!prepareWorktreeRemoval(path)) return false;
 
   // Without --force, git still refuses tracked modifications or untracked
   // files, so a change racing in after the check above is never discarded.
@@ -249,6 +298,8 @@ export async function discardWorktree(
   path: string,
   opts: { cwd?: string } = {},
 ): Promise<boolean> {
+  // Discard authorizes deleting local work, never files beyond a link target.
+  if (!prepareWorktreeRemoval(path)) return false;
   const r = await exec("git", ["worktree", "remove", "--force", path], { cwd: opts.cwd });
   return r.code === 0;
 }
