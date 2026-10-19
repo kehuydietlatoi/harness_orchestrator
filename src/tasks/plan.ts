@@ -1,3 +1,4 @@
+import { designReferenceErrors, type DesignContext } from "./brief-context.js";
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
@@ -160,6 +161,7 @@ export interface ResolvedTicket extends TicketV2 {
 }
 
 export interface ResolveOptions {
+  design?: DesignContext;
   /** Loaded project config enables pack validation without adding IO to the validator. */
   config?: OrchConfig;
   /** Configured agents. When given, a ticket routed to any other agent is dropped (warning). */
@@ -205,6 +207,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
     const cfg = opts.config;
     if (cfg?.pack !== undefined) {
+      errors.push(...designReferenceErrors(t, opts.design).map(error => `${who}: ${error}`));
       for (const field of ["role", "kind", "verify"] as const) {
         if (!t[field]) errors.push(`${who}: ${field} is required when pack is configured`);
       }
