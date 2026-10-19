@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OpencodeAdapter, opencodePermissions } from "../src/adapters/opencode.js";
 import { buildOpencodeArgv, reduceOpencode } from "../src/adapters/opencode-events.js";
@@ -255,6 +256,53 @@ live("live OpenCode runs bash with explicit workdir in a git worktree without an
   expect(events.some(event => event.type === "tool_use" && event.part?.tool === "bash"
     && event.part.state?.status === "completed"
     && realpathSync(event.part.state.input.workdir) === realpathSync(worktree))).toBe(true);
+}, 200_000);
+
+live("live OpenCode runs bare node --test in the worktree despite the operator's PWD", async () => {
+  const { root, repo, worktree } = await liveWorktree();
+  const proof = join(worktree, "cwd-proof.json");
+  writeFileSync(join(worktree, "cwd.test.cjs"), `
+    const { test } = require("node:test");
+    const assert = require("node:assert/strict");
+    const fs = require("node:fs");
+    test("runs in the task worktree", () => {
+      assert.equal(fs.realpathSync(process.cwd()), ${JSON.stringify(realpathSync(worktree))});
+      fs.writeFileSync("cwd-proof.json", JSON.stringify({ cwd: process.cwd() }));
+    });
+  `);
+  writeFileSync(join(repo, "cwd.test.cjs"), 'throw new Error("node --test ran in the operator checkout");');
+  const logFile = join(root, "bare-test.jsonl");
+  const script = join(root, "run-worker.mjs");
+  // Start the real adapter in the operator checkout, with its stale PWD, just as orch was started.
+  writeFileSync(script, `
+    import assert from "node:assert/strict";
+    import { makeAdapter } from ${JSON.stringify(pathToFileURL(resolve("src/adapters/index.ts")).href)};
+    import { DEFAULT_CONFIG } from ${JSON.stringify(pathToFileURL(resolve("src/config.ts")).href)};
+    assert.equal(process.cwd(), ${JSON.stringify(repo)});
+    assert.equal(process.env.PWD, ${JSON.stringify(repo)});
+    const adapter = makeAdapter("opencode", {
+      ...DEFAULT_CONFIG, verify: [["node", "--test"]],
+      adapters: { ...DEFAULT_CONFIG.adapters, opencode: ${JSON.stringify(liveConfig()) ?? "undefined"} },
+    });
+    const result = await adapter.runTask({
+      issue: 188, agent: "opencode", worktree: ${JSON.stringify(worktree)}, logFile: ${JSON.stringify(logFile)},
+      prompt: 'Call the bash tool exactly once with command "node --test". Omit workdir entirely. Do not change directories, edit files, or run any other command. Then reply DONE and stop.',
+      model: { model: "opencode/deepseek-v4.1-flash-free" }, timeoutMs: 180000,
+    });
+    assert.equal(result.ok, true);
+  `);
+  const result = await exec(process.execPath, [
+    "--import", pathToFileURL(resolve("node_modules/tsx/dist/loader.mjs")).href, script,
+  ], { cwd: repo, env: { ...process.env, PWD: repo, ORCH_HOME: join(root, "state") }, timeoutMs: 190_000 });
+  expect(result.code, result.stderr).toBe(0);
+  const raw = readFileSync(logFile, "utf8");
+  const events = raw.split(/\r?\n/).flatMap(line => { try { return [JSON.parse(line)]; } catch { return []; } });
+  expect(events.some(event => event.type === "tool_use" && event.part?.tool === "bash"
+    && event.part.state?.status === "completed"
+    && event.part.state.input.command === "node --test"
+    && event.part.state.input.workdir === undefined), raw).toBe(true);
+  expect(realpathSync(JSON.parse(readFileSync(proof, "utf8")).cwd)).toBe(realpathSync(worktree));
+  expect(existsSync(join(repo, "cwd-proof.json"))).toBe(false);
 }, 200_000);
 
 live("live OpenCode fixes a toy file", async () => {

@@ -39,6 +39,19 @@ describe("spawnLogged", () => {
     expect(readFileSync(log, "utf8")).toContain("hello-log");
   });
 
+  it.each([undefined, "."])("aligns PWD with the actual cwd when cwd=%s", async cwd => {
+    const logFile = join(tmp(), "env.log");
+    const env = { ...process.env, PWD: "stale-operator-checkout", ORCH_ENV_TEST: "preserved" };
+    const r = await spawnLogged(process.execPath, ["-e",
+      "console.log(JSON.stringify({ cwd: process.cwd(), pwd: process.env.PWD, custom: process.env.ORCH_ENV_TEST }))",
+    ], { cwd, env, logFile });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(readFileSync(logFile, "utf8"))).toEqual({
+      cwd: process.cwd(), pwd: process.cwd(), custom: "preserved",
+    });
+    expect(env.PWD).toBe("stale-operator-checkout");
+  });
+
   it("delivers stdin input to the child", async () => {
     const log = join(tmp(), "in.log");
     const r = await spawnLogged(
