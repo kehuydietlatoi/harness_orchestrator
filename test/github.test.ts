@@ -5,7 +5,54 @@ vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(.
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
 const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff, closeIssue } = await import("../src/github/github.js");
-const { prChangedPaths } = await import("../src/github/github.js");
+const { prChangedPaths, prMergeability } = await import("../src/github/github.js");
+
+describe("head-bound mergeability", () => {
+  const head = "a".repeat(40);
+  const base = "b".repeat(40);
+  const response = (mergeable: boolean | null, sha = head) => ({
+    code: 0, stderr: "", stdout: JSON.stringify({ head: { sha }, base: { sha: base }, mergeable }),
+  });
+  beforeEach(() => execMock.mockReset());
+
+  it("treats a stale conflict on a pushed head containing the base as unknown", async () => {
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    expect(await prMergeability(62, { cwd: "/repo", head })).toBe("unknown");
+    expect(execMock).toHaveBeenLastCalledWith("git", ["merge-base", "--is-ancestor", base, head], { cwd: "/repo" });
+  });
+
+  it("keeps a conflict with a newer base actionable", async () => {
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
+    expect(await prMergeability(62, { head })).toBe("conflicting");
+  });
+
+  it.each([response(null), response(false, "c".repeat(40))])("waits for unknown or mismatched head results", async (result) => {
+    execMock.mockResolvedValueOnce(result);
+    expect(await prMergeability(62, { head })).toBe("unknown");
+    expect(execMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts a computed clean result for the requested head", async () => {
+    execMock.mockResolvedValueOnce(response(true));
+    expect(await prMergeability(62, { head })).toBe("clean");
+  });
+
+  it("fetches missing objects before checking a new base", async () => {
+    execMock.mockResolvedValueOnce(response(false))
+      .mockResolvedValueOnce({ code: 128, stdout: "", stderr: "missing object" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
+    expect(await prMergeability(62, { head })).toBe("conflicting");
+    expect(execMock.mock.calls[2][1]).toEqual(["fetch", "--no-tags", "origin", base, head]);
+  });
+
+  it("does not turn an unreadable ancestry into a conflict", async () => {
+    execMock.mockResolvedValueOnce(response(false))
+      .mockResolvedValueOnce({ code: 128, stdout: "", stderr: "missing object" })
+      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    expect(await prMergeability(62, { head })).toBe("unknown");
+  });
+});
 
 describe("prChangedPaths", () => {
   beforeEach(() => execMock.mockReset());

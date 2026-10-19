@@ -176,7 +176,7 @@ describe("step executors", () => {
 
       const result = await executeFix(obs(), "review", DEFAULT_CONFIG, cwd, env);
 
-      expect(result).toEqual({ signal: "fix.pushed", detail: "round 1 (review)" });
+      expect(result).toEqual({ signal: "fix.pushed", detail: "round 1 (review)", previousHead: HEAD, pushedHead: NEW_HEAD });
       expect(agentCalls).toHaveLength(1);
       expect(agentCalls[0]).toMatchObject({ agent: "codex", worktree: wt, resumeSession: "old-thread" });
       expect(agentCalls[0].prompt).toContain("earlier in this conversation");
@@ -642,7 +642,7 @@ describe("step executors", () => {
 
       const result = await executeResolveConflict(task, cfg, cwd, env);
 
-      expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'codex'" });
+      expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'codex'", previousHead: HEAD, pushedHead: NEW_HEAD });
       expect(agentCalls).toHaveLength(1);
       expect(agentCalls[0]).toMatchObject({ agent: "codex", model: cfg.adapters.codex.models?.lead });
     });
@@ -662,7 +662,7 @@ describe("step executors", () => {
       const { env, agentCalls, gitCalls } = fakeEnv({});
       const result = await executeResolveConflict(obs(), DEFAULT_CONFIG, cwd, env);
 
-      expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'claude'" });
+      expect(result).toEqual({ signal: "conflict.resolved", detail: "resolved by 'claude'", previousHead: HEAD, pushedHead: NEW_HEAD });
       expect(gitCalls.find((a) => a[0] === "fetch" && a[2] === "main")).toEqual(["fetch", "origin", "main"]);
       expect(agentCalls[0].agent).toBe("claude");
       expect(agentCalls[0].prompt).toContain("git merge origin/main");

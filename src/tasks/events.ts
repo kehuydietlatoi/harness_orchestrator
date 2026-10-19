@@ -23,6 +23,9 @@ export interface OrchEvent {
   /** Outcome signal of a finished step (`review.approved`, `fix.pushed`, ...). */
   signal?: string;
   pr?: number;
+  /** Exact successful push, so delayed GitHub reads cannot repeat the answered round. */
+  pushedHead?: string;
+  previousHead?: string;
   agent?: string;
   detail?: string;
   durationMs?: number;

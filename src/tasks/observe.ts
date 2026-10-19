@@ -139,7 +139,7 @@ export async function observeTasks(
       const [reviews, checks, mergeable] = await Promise.all([
         board.listPrReviews(pr.number, { cwd }),
         board.prChecksState(pr.number, { cwd, strict: true }), // a failed lookup must be 'unobserved', never 'red'
-        board.prMergeability(pr.number, { cwd }),
+        board.prMergeability(pr.number, { cwd, head: pr.headSha }),
       ]);
       const base = { issue, author, pr, reviews, checks, mergeable, localRounds: fixRoundsFor(events, n), cfg,
         isRouteAvailable: (member: CascadeRoute) => !unavailableUntil(availabilityKey(member.agent, member.model), cwd) };
@@ -156,6 +156,18 @@ export async function observeTasks(
       if (!facts.scopeFailure && cfg.maxLeadTriage > 0 && facts.rounds >= facts.maxRounds) {
         triage = triageFacts(await board.listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
         facts = assembleFacts({ ...base, triage });
+      }
+      // Only the latest attempt's pushes matter. An older PR-list read may still carry the
+      // review we just answered; never spend another round against that superseded head.
+      for (let i = events.length - 1; i >= 0; i--) {
+        const event = events[i];
+        if (event.issue !== n) continue;
+        if (event.type === "task.started") break;
+        if (event.type !== "step.finished" || !event.pushedHead ||
+            (event.signal !== "fix.pushed" && event.signal !== "conflict.resolved")) continue;
+        facts.pushPending = pr.headSha === event.previousHead ||
+          (pr.headSha === event.pushedHead && mergeable === "unknown");
+        break;
       }
       out.push({
         issue, author, pr, reviews, facts, step: decideStep(facts),

@@ -46,6 +46,8 @@ export type Signal =
 export interface StepResult {
   signal: Signal;
   detail?: string;
+  pushedHead?: string;
+  previousHead?: string;
 }
 
 /** The I/O an executor needs beyond GitHub: tests substitute these, production uses the real ones. */
@@ -134,7 +136,7 @@ async function pushAndRequeueReview(
   cwd: string,
   worktree: string,
   extraCheck?: (head: string) => Promise<string | null>,
-): Promise<{ failed: StepResult } | { pushed: true; warning?: string }> {
+): Promise<{ failed: StepResult } | { pushed: true; head: string; warning?: string }> {
   const state = await inspectWorktree(env, worktree);
   if (state.dirty) return { failed: failure("the agent left uncommitted changes; nothing was pushed") };
   if (state.head === obs.pr.headSha) return { failed: failure("the agent made no new commits") };
@@ -153,9 +155,9 @@ async function pushAndRequeueReview(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.warn(`#${obs.issue.number}: pushed, but updating labels failed: ${message}`);
-    return { pushed: true, warning: `labels not updated (${message}); run \`orch repair ${obs.issue.number}\`` };
+    return { pushed: true, head: state.head, warning: `labels not updated (${message}); run \`orch repair ${obs.issue.number}\`` };
   }
-  return { pushed: true };
+  return { pushed: true, head: state.head };
 }
 
 /**
@@ -290,7 +292,7 @@ export async function executeFix(
       return null;
     });
     if ("failed" in pushed) return pushed.failed;
-    return { signal: "fix.pushed", detail: `round ${round} (${reason})${pushed.warning ? `; ${pushed.warning}` : ""}` };
+    return { signal: "fix.pushed", pushedHead: pushed.head, previousHead: obs.pr.headSha, detail: `round ${round} (${reason})${pushed.warning ? `; ${pushed.warning}` : ""}` };
   };
   // A completed harness run is always recorded, even if inspecting or pushing its result throws.
   const result = await settled(outcome);
@@ -347,7 +349,7 @@ export async function executeResolveConflict(
       return merged.code === 0 ? null : `the branch still does not contain origin/${base.name}`;
     });
     if ("failed" in pushed) return pushed.failed;
-    return { signal: "conflict.resolved", detail: `resolved by '${agent}'${pushed.warning ? `; ${pushed.warning}` : ""}` };
+    return { signal: "conflict.resolved", pushedHead: pushed.head, previousHead: obs.pr.headSha, detail: `resolved by '${agent}'${pushed.warning ? `; ${pushed.warning}` : ""}` };
   });
   recordRun(n, agent, model, result.signal === "conflict.resolved" ? "resolve-pushed" : "resolve-failed",
     Date.now() - started, attempt.logFile, cwd, cfg, { phase: "resolve-conflict", round, since: attempt.since });
