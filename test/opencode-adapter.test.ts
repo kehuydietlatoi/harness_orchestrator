@@ -182,7 +182,7 @@ describe("OpenCode adapter", () => {
     expect(await adapter.healthCheck()).toBe(false);
     vi.mocked(exec).mockResolvedValue({ code: 0, stdout: "1.19.3", stderr: "" });
     expect(await adapter.healthCheck()).toBe(true);
-    expect(exec).toHaveBeenLastCalledWith("custom.exe", ["--version"]);
+    expect(exec).toHaveBeenLastCalledWith("custom.exe", ["--version"], { env: expect.any(Object) });
   });
 
   it("uses the reducer's cumulative usage", () => {

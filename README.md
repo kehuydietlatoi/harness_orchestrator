@@ -356,6 +356,15 @@ and are recorded in both `events.jsonl` and `runs.jsonl`.
 Codex; a model spec's `family` overrides it. OpenCode requires a family on each
 configured model, including `leadModel`. Role tiers must be valid effort tiers.
 
+Harness environments strip inherited credentials by default. Set
+`adapters.<agent>.env` to the names of provider variables to pass through, e.g.
+`["ANTHROPIC_API_KEY"]` for Claude API billing or `["OPENROUTER_API_KEY"]` for
+OpenCode with OpenRouter. The default is empty; Claude and Codex subscription
+logins use profile credentials, and Codex preserves `CODEX_HOME` when set.
+GitHub tokens are always excluded, even if listed. Worker `orch submit` relies
+on gh's keyring login; otherwise the coordinator handles submission. See
+[the environment boundary and remaining filesystem risk](docs/adr/0013-ticket-verify-trust.md#worker-environments-189).
+
 Assignment only selects issues with **neither** an `agent:` nor an `effort:` label;
 it preserves existing routing, including partially labeled issues. Dependencies
 are `Depends-on: #n` references in issue bodies; open prerequisites block dispatch.

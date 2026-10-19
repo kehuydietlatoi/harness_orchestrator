@@ -17,6 +17,16 @@ describe("loadConfig", () => {
     return dir;
   }
 
+  it("loads adapter environment names and defaults to no credential exceptions", () => {
+    const config = loadConfig(writeConfig({ adapters: { claude: { env: ["ANTHROPIC_API_KEY"] }, codex: { env: [] }, opencode: { cmd: "opencode", env: ["OPENROUTER_API_KEY"] } } }));
+    expect(config.adapters.claude.env).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(config.adapters.codex.env).toEqual([]);
+    expect(config.adapters.opencode.env).toEqual(["OPENROUTER_API_KEY"]);
+  });
+  it.each([null, "API_KEY", [1], [""], ["A=B"], ["A\nB"]])("rejects malformed adapter environment names %j", env => {
+    expect(() => loadConfig(writeConfig({ adapters: { claude: { env } } }))).toThrow(/adapters.claude.env/);
+  });
+
   it("defaults proven capabilities without web and preserves explicit replacements", () => {
     const config = loadConfig(writeConfig({ adapters: { codex: { models: { lead: { capabilities: ["vision"] } } } },
       tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", capabilities: [] }] } }));

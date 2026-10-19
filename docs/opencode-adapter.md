@@ -22,6 +22,13 @@ resolution; otherwise orch resolves `opencode.exe` with `where` on Windows or
 shell shim. Prompts never go in argv. The builder supports `--title`, but the
 adapter does not supply it. `ModelSpec.effort` is passed as `--variant`; provider
 effects remain unverified. Only resume adds `-s`; `--auto` is never passed.
+
+Inherited credentials are stripped with the shared verification rule. For a
+provider requiring an API key, configure e.g.
+`"adapters": { "opencode": { "env": ["OPENROUTER_API_KEY"] } }` to restore that
+variable only when set. The default list is empty, suitable for Zen free models.
+GitHub tokens are excluded even when listed. Orch's configuration variables are
+applied after cleaning; see [ADR-0013](adr/0013-ticket-verify-trust.md).
 [spawnLogged](../src/util/spawn.ts) appends both streams to the log, closes stdin,
 and kills on timeout (Windows uses direct `taskkill /T /F`). A long tool call can
 be silent until completion, so event gaps are not a liveness signal.

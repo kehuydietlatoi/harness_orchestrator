@@ -22,9 +22,4 @@ export function verifyTrustErrors(commands: readonly string[][], project: readon
   });
 }
 
-/** Keep test-runner settings while removing inherited service credentials (case-insensitive on every OS). */
-export function verifyEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(source).filter(([key]) =>
-    !/^(?:ANTHROPIC_|OPENAI_|OPENCODE_|CODEX_)/i.test(key) &&
-    !/(?:^|_)(?:TOKEN|API_KEY|AUTH|PASSWORD|SECRET|CREDENTIALS?)(?:_|$)/i.test(key)));
-}
+export { cleanEnvironment as verifyEnvironment } from "../util/environment.js";

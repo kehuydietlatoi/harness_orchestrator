@@ -5,6 +5,7 @@ import { projectStateDir } from "../board/telemetry.js";
 import { commandExists, exec } from "../util/exec.js";
 import { logSize, readLogSince } from "../util/log-file.js";
 import { spawnLogged } from "../util/spawn.js";
+import { workerEnvironment } from "../util/environment.js";
 import { buildOpencodeArgv, reduceOpencode } from "./opencode-events.js";
 import type { HarnessAdapter, HeadlessContext, HeadlessResult, RunContext, RunResult } from "./types.js";
 
@@ -60,7 +61,7 @@ export class OpencodeAdapter implements HarnessAdapter {
   async healthCheck(): Promise<boolean> {
     try {
       const cmd = await this.command();
-      return await commandExists(cmd) && (await exec(cmd, ["--version"])).code === 0;
+      return await commandExists(cmd) && (await exec(cmd, ["--version"], { env: workerEnvironment(this.id, this.cfg?.env) })).code === 0;
     } catch { return false; }
   }
 
@@ -99,7 +100,7 @@ export class OpencodeAdapter implements HarnessAdapter {
         // 1.19.3 merges project files AFTER OPENCODE_CONFIG, including agent permissions.
         // Exclude those files rather than trying to undo their deep-merged allow rules.
         shell: false, env: {
-          ...process.env, OPENCODE_CONFIG: config, OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+          ...workerEnvironment(this.id, this.cfg?.env), OPENCODE_CONFIG: config, OPENCODE_DISABLE_PROJECT_CONFIG: "true",
           OPENCODE_CONFIG_CONTENT: "", OPENCODE_CONFIG_DIR: "", OPENCODE_PERMISSION: "",
         },
       });
