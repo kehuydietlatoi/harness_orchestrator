@@ -411,6 +411,7 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Recoverable lifecycle](docs/adr/0006-recoverable-task-lifecycle.md) — observed state and safe recovery
 - [Prompt injection](docs/adr/0007-prompt-injection-threat-model.md) — trusted authorship and agent inputs
 - [Multi-provider routing](docs/adr/0012-multi-provider-routing.md) — tiers, fallback ladders, budgets, and provider boundaries
+- [Domain packs and ticket schema v2](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) — pack roles, validation, briefs, verification, routing filters, and path locks
 
 ## Development
 

@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Domain packs and ticket v2**: read [ADR-0014](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) when changing pack loading, ticket validation/projections, brief rendering, routing filters, or path claims.
+
 - **Needs and sensitivity (#176)**: `validateRoute` owns capability and sensitivity filters shared by planning, assignment, dispatch, and cascades. Pass ticket metadata to `nextHop`, including PR cascades. Capability overrides replace harness defaults; OpenCode vision requires an explicit declaration. Legacy tickets without either field remain unrestricted unless config `sensitivity` or `pack` opts in; opted-in tickets default to internal. Dispatch refusals mark needs-attention before adapter creation and emit escalation without run telemetry. See ADR-0013 for policy details.
 
 - **Pack briefs (#174)**: `brief-context.ts` loads design registers at I/O boundaries; pass its snapshot as `ResolveOptions.design` to keep rule 4 validation pure. Pack dispatch rechecks references and required template fields before adapter construction, stores successful briefs with exclusive attempt numbering under the project state `briefs/`, and records refusal reasons in `task.escalated` events without harness telemetry. `ticket-metadata.ts` owns pure v2 metadata rendering/parsing (re-exported by `plan-create.ts`). Legacy `buildBrief` stays unchanged.
