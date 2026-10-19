@@ -72,7 +72,7 @@ export interface ClaimSagaDeps {
 }
 
 const claimSagaDeps: ClaimSagaDeps = {
-  resolveBaseBranch,
+  resolveBaseBranch: (configured, cwd) => resolveBaseBranch(configured, cwd, { fetch: true }),
   createOwnerToken: (number, agent, cwd) => createOwnerToken(number, agent, { cwd }),
   observeLock: (number, cwd) => lockOwner(number, { cwd }),
   acquireLock: (number, owner, cwd, paths) => lockClaim(number, { cwd, sha: owner, paths }),
