@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Harness cwd isolation (#188)**: `spawnLogged` and `spawnInteractive` set `PWD` to the absolute spawn cwd (defaulting to the current directory), including when adapters provide their own environment. OpenCode shell tools trust inherited `PWD` over the OS cwd; forwarding the operator's value can escape the task worktree. Keep this rule shared across all harnesses.
+
 - **Worker scope (#186)**: `src/tasks/scope-guard.ts` checks manifest `write_scope` union ticket `files` when pack + role label are present; `forbidden` wins. Runner leftover commits, submit branch diffs, and autopilot/automated reviews share the guard. Check deletions and both rename names; rejections retain worktree/lock, flag needs-attention, and comment paths. See ADR-0014.
 
 - **Domain packs and ticket v2**: read [ADR-0014](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) when changing pack loading, ticket validation/projections, brief rendering, routing filters, or path claims.

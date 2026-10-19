@@ -1,5 +1,16 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
+import { resolve } from "node:path";
+
+/** Shell tools may trust PWD over the OS cwd. Never inherit the operator's checkout. */
+function spawnEnv(cwd?: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const result = { ...env };
+  // Windows environment names are case-insensitive; avoid sending competing spellings.
+  for (const key of Object.keys(result)) {
+    if (key === "PWD" || (process.platform === "win32" && key.toUpperCase() === "PWD")) delete result[key];
+  }
+  return { ...result, PWD: resolve(cwd ?? process.cwd()) };
+}
 
 /**
  * Kill `child` and everything it started.
@@ -69,7 +80,7 @@ export function spawnLogged(
     const child = spawn(command, spawnArgs, {
       cwd: opts.cwd,
       shell: useShell,
-      env: opts.env ?? process.env,
+      env: spawnEnv(opts.cwd, opts.env),
       windowsHide: true,
     });
 
@@ -161,7 +172,7 @@ export function spawnInteractive(
     const child = spawn(command, spawnArgs, {
       cwd: opts.cwd,
       shell: useShell,
-      env: opts.env ?? process.env,
+      env: spawnEnv(opts.cwd, opts.env),
       stdio: "inherit",
     });
     child.on("error", () => resolve({ code: 127 }));
