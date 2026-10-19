@@ -1,3 +1,4 @@
+import { renderPackBrief, storeBrief } from "./brief-render.js";
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
 import { cascadeLabels, cascadeRequeue } from "./cascade-requeue.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
@@ -63,7 +64,7 @@ export interface RunSummary {
   issue: number;
   outcome: "submitted" | "needs-attention" | "failed" | "requeued";
   prUrl?: string;
-  reason?: "budget spent";
+  reason?: string;
   durationMs: number;
 }
 
@@ -281,6 +282,19 @@ async function processClaimed(
     log.warn("#" + n + ": budget spent; handing task to a human");
     return { issue: n, outcome: "needs-attention", reason: "budget spent", durationMs: 0 };
   }
+  let prompt: string | undefined;
+  if (cfg.pack !== undefined) {
+    try {
+      prompt = renderPackBrief(task.issue, cfg, cwd);
+      storeBrief(n, prompt, cwd);
+    } catch (error) {
+      const reason = `Incomplete brief: ${error instanceof Error ? error.message : String(error)}`;
+      await recoverClaim(n, task.worktree.path, cwd, { disposableIgnored: cfg.disposableIgnored });
+      appendEvent({ type: "task.escalated", issue: n, agent, detail: reason }, cwd);
+      log.warn(`#${n}: ${reason}`);
+      return { issue: n, outcome: "needs-attention", reason, durationMs: 0 };
+    }
+  }
   const model = resolveTaskModel(agent, task.issue, cfg);
   const startedAt = Date.now();
   const logDir = resolve(cwd, "logs");
@@ -300,13 +314,12 @@ async function processClaimed(
     console.log(pc.cyan(`▶ #${n} started by '${agent}' — ${task.worktree.path}`));
 
     const adapter = makeAdapter(agent, cfg);
-    const prompt = buildBrief(task.issue, task.worktree, agent, cwd);
     logMark = logSize(logFile); // judge this run only by what it appends to the shared log
     const result = await adapter.runTask({
       issue: n,
       agent,
       worktree: task.worktree.path,
-      prompt,
+      prompt: prompt ?? buildBrief(task.issue, task.worktree, agent, cwd),
       model,
       logFile,
       ...limits,

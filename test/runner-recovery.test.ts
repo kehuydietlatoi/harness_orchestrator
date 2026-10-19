@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
+import { loadPack } from "../src/pack/load.js";
+import { renderTicketV2 } from "../src/tasks/ticket-metadata.js";
+import { readEvents } from "../src/tasks/events.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -112,6 +115,37 @@ describe("processNext recovery", () => {
     expect(mocks.runTask).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+  });
+
+  it.each(["empty required", "superseded decision", "missing anchor"])("refuses to spawn on %s and preserves the reason", async (problem) => {
+    const pack = loadPack("test/fixtures/pack");
+    mkdirSync(join(cwd, "design"));
+    writeFileSync(join(cwd, "design/decisions.md"), "| D-001 | Old rule | superseded | D-002 | today |");
+    const metadata = renderTicketV2({ role: "gameplay-programmer", kind: "code", verify: [["npm", "test"]],
+      ...(problem === "superseded decision" ? { decisions: ["D-001"] } : {}),
+      ...(problem === "missing anchor" ? { context: ["combat.missing"] } : {}),
+    });
+    const body = (problem === "empty required" ? "Goal.\n\n" : "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n") + metadata;
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd);
+    expect(result?.outcome).toBe("needs-attention");
+    expect(result?.reason).toMatch(problem === "empty required" ? /required ticket.acceptance/ : problem === "superseded decision" ? /D-001 is superseded/ : /anchor combat.missing/);
+    expect(mocks.makeAdapter).not.toHaveBeenCalled();
+    expect(mocks.runTask).not.toHaveBeenCalled();
+    expect(mocks.appendRun).not.toHaveBeenCalled();
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"], removeLabels: ["status:claimed", "status:in-progress"] }));
+    expect(readEvents(cwd).at(-1)?.detail).toBe(result?.reason);
+  });
+
+  it("passes the stored pack brief to the harness", async () => {
+    const pack = loadPack("test/fixtures/pack");
+    const body = "Goal.\n\n## Definition of done\n- [ ] Test passes\n\n" + renderTicketV2({ role: "gameplay-programmer", verify: [["npm", "test"]] });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.runTask.mockResolvedValue({ ok: false, code: 1, durationMs: 1 });
+    await processNext("codex", { ...DEFAULT_CONFIG, pack: pack.path, loadedPack: pack }, cwd);
+    const stored = readFileSync(join(cwd, ".state/briefs/issue-35-1.md"), "utf8");
+    expect(mocks.runTask.mock.calls[0][0].prompt).toBe(stored);
+    expect(mocks.buildBrief).not.toHaveBeenCalled();
   });
 
   it("reports a ticket time budget cutoff as budget-spent", async () => {

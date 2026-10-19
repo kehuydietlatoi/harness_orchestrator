@@ -1,9 +1,11 @@
+import { renderTicketV2 } from "./ticket-metadata.js";
+import { loadDesignContext } from "./brief-context.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createIssue, ensureLabels, ensureMilestone, listIssues, type Issue } from "../github/github.js";
 import { STATUS, agentLabel, effortLabel, labelDefs } from "../github/labels.js";
 import { renderDefinitionOfDone } from "./definition-of-done.js";
-import { parseTickets, resolvePlan, ticketV2Fields, type ResolvedTicket, type Ticket, type TicketV2, type ResolveOptions } from "./plan.js";
+import { parseTickets, resolvePlan, type ResolvedTicket, type Ticket, type TicketV2, type ResolveOptions } from "./plan.js";
 
 const MARKER_VERSION = "v1";
 
@@ -106,22 +108,7 @@ export function creationLabels(ticket: Pick<ResolvedTicket, "agent" | "effort"> 
   return labels;
 }
 
-/** Versioned JSON preserves argv boundaries and empty optional arrays exactly.
- * This is data only; issue-supplied verify commands are never executed here. */
-export function renderTicketV2(ticket: TicketV2): string {
-  const fields = ticketV2Fields(ticket);
-  if (!Object.keys(fields).length) return "";
-  return `## Ticket metadata (v2)\n\n\`\`\`json\n${JSON.stringify(fields, null, 2)}\n\`\`\``;
-}
-
-/** Read back structured v2 data, applying the same structural checks as plans. */
-export function parseTicketV2(body: string): TicketV2 {
-  const json = /^## Ticket metadata \(v2\)\r?\n\r?\n```json\r?\n([\s\S]*?)\r?\n```[ \t]*$/m.exec(body)?.[1];
-  if (json === undefined) return {};
-  const fields: unknown = JSON.parse(json);
-  if (!fields || typeof fields !== "object" || Array.isArray(fields)) throw new Error("ticket metadata must be an object");
-  return ticketV2Fields(parseTickets(JSON.stringify([{ ...fields, title: "metadata" }]))[0]);
-}
+export { parseTicketV2, renderTicketV2 } from "./ticket-metadata.js";
 
 /** Pure: render the GitHub issue body from a ticket + resolved dependency numbers. */
 export function renderTicketBody(
@@ -220,7 +207,7 @@ export async function createFromPlan(
   deps: PlanCreateDeps = defaultDeps,
   opts: PlanCreateOptions = {},
 ): Promise<PlanCreateResult> {
-  const plan = resolvePlan(tickets, opts);
+  const plan = resolvePlan(tickets, { ...opts, design: opts.config?.pack === undefined ? undefined : loadDesignContext(cwd) });
   if (plan.errors.length) throw new Error(`invalid tickets: ${plan.errors.join("; ")}`);
 
   const result: PlanCreateResult = { created: [], reused: [], failed: [] };

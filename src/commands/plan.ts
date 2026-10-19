@@ -1,3 +1,4 @@
+import { loadDesignContext } from "../tasks/brief-context.js";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -136,7 +137,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   if (opts.draft) {
     const cfg = loadConfig(cwd);
     const tickets = await runPlanner(opts.draft, loadPlanSkill(), await repoContext(cwd), cfg, cwd);
-    resolvePlan(tickets, { config: cfg, tierAliases: cfg.tierAliases }).warnings.forEach((w) => console.error(pc.dim(`warning: ${w}`)));
+    resolvePlan(tickets, { design: cfg?.pack === undefined ? undefined : loadDesignContext(cwd), config: cfg, tierAliases: cfg.tierAliases }).warnings.forEach((w) => console.error(pc.dim(`warning: ${w}`)));
     process.stdout.write(`${JSON.stringify(tickets, null, 2)}\n`);
     return;
   }
@@ -149,7 +150,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
     const cfg = opts.dryRun && !configExists(cwd) ? undefined : loadConfig(cwd);
     const agents = cfg?.agents;
     const tierAliases = cfg?.tierAliases;
-    const plan = resolvePlan(tickets, { config: cfg, agents, brief, tierAliases });
+    const plan = resolvePlan(tickets, { design: cfg?.pack === undefined ? undefined : loadDesignContext(cwd), config: cfg, agents, brief, tierAliases });
 
     // --dry-run: pure validate + preview, write nothing (no repo/config needed).
     if (opts.dryRun) {
@@ -211,7 +212,7 @@ export async function planCommand(file: string | undefined, opts: PlanOptions): 
   const briefWritten = existsSync(briefPath) && statSync(briefPath).mtimeMs >= started;
   const brief = briefWritten ? readBrief(briefPath) : undefined;
   const tickets = parseTickets(readFileSync(outputPath, "utf8"));
-  const plan = resolvePlan(tickets, { config: cfg, agents: cfg.agents, brief, tierAliases: cfg.tierAliases });
+  const plan = resolvePlan(tickets, { design: cfg?.pack === undefined ? undefined : loadDesignContext(cwd), config: cfg, agents: cfg.agents, brief, tierAliases: cfg.tierAliases });
   console.log("");
   printPreview(plan, brief, "");
   console.log(pc.green(`\nSaved ${plan.tickets.length} ticket(s) to ${outputPath}${briefWritten ? ` and the brief to ${briefPath}` : ""}.`));

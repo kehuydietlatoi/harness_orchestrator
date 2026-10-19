@@ -1,3 +1,4 @@
+import { loadDesignContext } from "../tasks/brief-context.js";
 import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { applyPlan, formatBrief, rollupTelemetry, selectUnassigned, type PlanEntry } from "../routing/assign.js";
@@ -261,7 +262,7 @@ async function handlePlanPreview(
     return;
   }
   const config = deps.loadConfig(cwd);
-  sendJson(response, 200, resolvePlan(tickets, config.pack === undefined ? {} : { config })); // { tickets, errors, warnings }
+  sendJson(response, 200, resolvePlan(tickets, config.pack === undefined ? {} : { config, design: loadDesignContext(cwd) })); // { tickets, errors, warnings }
 }
 
 /** Create issues from a ticket draft — the second mutating route. Refuses (400) on
@@ -281,7 +282,7 @@ async function handlePlanCreate(
   }
   const config = deps.loadConfig(cwd);
   const { agents, tierAliases } = config; // a ticket routed to an unknown agent is created unrouted
-  const { errors } = resolvePlan(tickets, { config, agents, tierAliases });
+  const { errors } = resolvePlan(tickets, { design: config?.pack === undefined ? undefined : loadDesignContext(cwd), config, agents, tierAliases });
   if (errors.length) {
     sendJson(response, 400, { error: `invalid tickets: ${errors.join("; ")}`, errors });
     return;

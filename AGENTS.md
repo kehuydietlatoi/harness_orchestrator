@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Pack briefs (#174)**: `brief-context.ts` loads design registers at I/O boundaries; pass its snapshot as `ResolveOptions.design` to keep rule 4 validation pure. Pack dispatch rechecks references and required template fields before adapter construction, stores successful briefs with exclusive attempt numbering under the project state `briefs/`, and records refusal reasons in `task.escalated` events without harness telemetry. `ticket-metadata.ts` owns pure v2 metadata rendering/parsing (re-exported by `plan-create.ts`). Legacy `buildBrief` stays unchanged.
+
 - **Domain packs (#172)**: `loadPack` (`src/pack/load.ts`) reads JSON role manifests and sibling Markdown prompts. `loadConfig` resolves `pack` relative to the config directory, exposes `loadedPack`, and merges allowances with whole-entry config `roles` overrides. Pass the loaded config through `ResolveOptions.config` for pure pack-required field, membership, tier, and provider-family checks; CLI planning, dashboard preview/create, and the create gate share this path. `doctor` reports config/pack load failures. Config-only roles cannot satisfy pack membership.
 
 - **Ticket v2 metadata (#171)**: `plan.ts` shares structural validation between parse and resolve and reports ticket id + field for all errors. Creation stores optional v2 fields in the `Ticket metadata (v2)` JSON section (`parseTicketV2` in `plan-create.ts`), alongside label/milestone projections and the existing `Budget:` line. V2 fields stay outside marker identities; issue verify argv remains data until a separate trust check authorizes execution.

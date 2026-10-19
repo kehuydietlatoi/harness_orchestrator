@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import path from "node:path";
@@ -61,6 +61,15 @@ describe("built CLI smoke", () => {
       const result = runCli(["plan", "tickets.json", "--dry-run"], cwd);
       expect(result.code).toBe(1);
       for (const field of ["role", "kind", "verify"]) expect(result.stdout).toContain(`${field} is required`);
+      const ticket = { id: "T2", title: "Resolve design", role: "gameplay-programmer", kind: "code", verify: [["npm", "test"]], decisions: ["D-999", "D-001"], context: ["combat.missing"] };
+      mkdirSync(path.join(cwd, "design"));
+      writeFileSync(path.join(cwd, "design/decisions.md"), "| D-001 | Old rule | superseded | D-002 | today |\n");
+      writeFileSync(path.join(cwd, "tickets.json"), JSON.stringify([ticket]));
+      const unresolved = runCli(["plan", "tickets.json", "--dry-run"], cwd);
+      expect(unresolved.code).toBe(1);
+      expect(unresolved.stdout).toContain('("T2"): decisions: unknown decision D-999');
+      expect(unresolved.stdout).toContain('("T2"): decisions: D-001 is superseded');
+      expect(unresolved.stdout).toContain('("T2"): context: anchor combat.missing');
       writeFileSync(path.join(cwd, "orch.config.json"), "{}");
       expect(runCli(["plan", "tickets.json", "--dry-run"], cwd).code).toBe(0);
     } finally {

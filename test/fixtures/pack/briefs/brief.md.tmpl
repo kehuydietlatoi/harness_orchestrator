@@ -1,0 +1,64 @@
+<!--
+  Worker brief template (PLAN.md §4.2; contract in docs/specs/ticket-schema-v2.md). Rendered per ticket
+  by orch once the pack is wired in (Phase 2). Stable sections come first so provider prompt caches hit.
+  A brief with any {{required ...}} field empty must not be sent: refuse to spawn.
+-->
+# ROLE
+{{role.prompt}}
+
+# WORKER PROTOCOL (every role)
+- You are running unattended. Nobody will answer a question. Decide within this brief, or stop.
+- Read `AGENTS.md` first, then only the CONTEXT sections below. Do not read whole design docs.
+- Write only inside SCOPE. Never touch protected paths: {{project.protected_paths}}.
+- Do not make a project-wide decision (anything a decision in the register covers, or that another ticket would have to agree with). If you need one, stop and report `BLOCKED: needs decision <topic>` with your recommended answer.
+- If the brief contradicts the code, the code is the fact: stop and report `BLOCKED: brief conflicts with code` with the file:line.
+- Never weaken, skip, delete or special-case a test to make it pass. If a test looks wrong, report `CONCERNS: test <name> looks wrong because …` and leave it.
+- No git commits, pushes, rebases or branch changes; orch commits and submits your work after running VERIFY itself.
+- No new dependencies, network calls or generated binaries unless SCOPE says so.
+- If your change makes a design doc stale, do not edit `design/`; list it under `doc_drift` in the report.
+- Stay inside the TIMEBOX. A small, verified change beats a large, unverified one.
+
+# STANDING RULES (this project)
+{{project.standing}}
+
+# DECISIONS YOU MUST FOLLOW
+{{ticket.decisions_inline}}
+
+# GOAL
+{{required ticket.goal}}
+
+# SCOPE
+Files you may write: {{required ticket.files}}
+Locks you hold: {{ticket.locks}}
+
+# CONTEXT
+{{ticket.context_sections}}
+{{ticket.prior_attempt}}
+
+# ACCEPTANCE
+{{required ticket.acceptance}}
+
+# VERIFY
+Run these yourself before you finish; orch runs them again before committing:
+{{required ticket.verify}}
+
+# TIMEBOX
+{{ticket.budget}}
+
+# FORBIDDEN
+{{ticket.forbidden}}
+
+# REPORT
+End your final message with exactly one fenced `json` block and nothing after it:
+```json
+{
+  "ticket": "{{ticket.id}}",
+  "status": "done | blocked | partial",
+  "summary": ["at most 5 bullets: what changed and why"],
+  "files": ["paths you changed"],
+  "verify": [{ "command": "…", "result": "pass | fail", "note": "…" }],
+  "blocked": ["BLOCKED: … (with your recommended answer)"],
+  "concerns": ["CONCERNS: …"],
+  "doc_drift": ["design/… section that is now stale, and why"]
+}
+```
