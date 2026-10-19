@@ -29,6 +29,8 @@ import {
   claim as claimLock,
   createOwnerToken,
   listLocks,
+  listPathLocks,
+  type PathLock,
   owner as lockOwner,
   release as releaseLock,
 } from "../git/lock.js";
@@ -49,6 +51,7 @@ import {
   type RepositoryBase,
 } from "../git/git.js";
 import { exec } from "../util/exec.js";
+import { parseTicketV2 } from "./plan.js";
 import {
   deriveTaskState,
   projectLifecycleLabels,
@@ -76,6 +79,7 @@ export interface RepairObservation {
   issue: Issue | null;
   expectedBranch: string | null;
   lockOwner: string | null;
+  pathLocks?: PathLock[];
   worktree: RepairWorktree;
   branch: TaskFacts["branch"];
   prs: Pr[];
@@ -274,6 +278,9 @@ export function planRepairs(observation: RepairObservation): RepairPlan {
   const facts: TaskFacts = { ...initialFacts };
   const actions: RepairAction[] = [];
   const blocked: string[] = [];
+  for (const lock of observation.pathLocks ?? []) {
+    if (lock.owner !== observation.lockOwner) blocked.push(`orphaned path lock ${lock.ref} (${lock.path}): no live claim for #${lock.issue}`);
+  }
   const issue = observation.issue;
   const pr = effectivePr(observation, facts.pr);
 
@@ -515,6 +522,7 @@ async function observeRepair(
     issue,
     expectedBranch,
     lockOwner: owner,
+    pathLocks: (await listPathLocks({ cwd })).filter((lock) => lock.issue === number),
     worktree,
     branch,
     prs,
@@ -569,7 +577,7 @@ async function executeRepair(
     }
     case "acquire-lock": {
       const token = await createOwnerToken(action.issue, "repair", { cwd });
-      const result = await claimLock(action.issue, { cwd, sha: token });
+      const result = await claimLock(action.issue, { cwd, sha: token, paths: observation.issue ? parseTicketV2(observation.issue.body).locks : [] });
       if (result.outcome === "error") throw new Error(result.detail || "claim lock repair failed");
       return;
     }
@@ -672,15 +680,17 @@ function branchIssueNumber(branch: string): number | null {
 /** Discover orchestrator-owned tasks and orphaned task resources for `orch
  * repair` without an issue argument. */
 export async function discoverRepairIssues(cwd: string): Promise<number[]> {
-  const [issues, prs, locks, records, branches, worktrees] = await Promise.all([
+  const [issues, prs, locks, records, branches, worktrees, pathLocks] = await Promise.all([
     listIssues({ cwd, state: "all" }),
     listPrs({ cwd, state: "all" }),
     listLocks({ cwd }),
     Promise.resolve(readRuns(cwd)),
     exec("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads/task/"], { cwd }),
     registeredWorktrees(cwd),
+    listPathLocks({ cwd }),
   ]);
   const numbers = new Set<number>(locks);
+  for (const lock of pathLocks) numbers.add(lock.issue);
   for (const issue of issues) {
     if (
       issue.labels.some(

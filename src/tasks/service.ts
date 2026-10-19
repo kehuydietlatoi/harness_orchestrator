@@ -31,6 +31,7 @@ import {
 import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
 import { resolveTierModel, type OrchConfig } from "../config.js";
 import { decideTaskTransition } from "./lifecycle.js";
+import { parseTicketV2 } from "./plan.js";
 
 export interface ClaimedTask {
   issue: Issue;
@@ -49,7 +50,7 @@ export interface ClaimSagaDeps {
   resolveBaseBranch(configured: string | undefined, cwd: string): Promise<RepositoryBase>;
   createOwnerToken(number: number, agent: string, cwd: string): Promise<string>;
   observeLock(number: number, cwd: string): Promise<string | null>;
-  acquireLock(number: number, owner: string, cwd: string): Promise<ClaimResult>;
+  acquireLock(number: number, owner: string, cwd: string, paths?: readonly string[]): Promise<ClaimResult>;
   releaseLock(number: number, owner: string, cwd: string): Promise<boolean>;
   getIssue(number: number, cwd: string): Promise<Issue>;
   currentLogin(cwd: string): Promise<string>;
@@ -73,7 +74,7 @@ const claimSagaDeps: ClaimSagaDeps = {
   resolveBaseBranch,
   createOwnerToken: (number, agent, cwd) => createOwnerToken(number, agent, { cwd }),
   observeLock: (number, cwd) => lockOwner(number, { cwd }),
-  acquireLock: (number, owner, cwd) => lockClaim(number, { cwd, sha: owner }),
+  acquireLock: (number, owner, cwd, paths) => lockClaim(number, { cwd, sha: owner, paths }),
   releaseLock: (number, owner, cwd) => lockReleaseOwned(number, owner, { cwd }),
   getIssue: (number, cwd) => getIssue(number, { cwd }),
   currentLogin: (cwd) => currentLogin({ cwd }),
@@ -93,6 +94,7 @@ interface ClaimContext {
   base: RepositoryBase;
   login: string;
   initialIssue: Issue;
+  paths: string[];
 }
 
 interface ClaimObservation {
@@ -144,9 +146,6 @@ function decideClaim(number: number, observation: ClaimObservation): void {
   if (observation.issue.labels.includes(NEEDS_ATTENTION)) {
     throw new Error(`#${number} needs-attention; human recovery is required before claiming.`);
   }
-  if (observation.lockOwner !== null) {
-    throw new Error(`#${number} is already claimed by another agent.`);
-  }
   if (observation.worktree.outcome !== "absent") {
     throw new Error(
       observation.worktree.outcome === "usable"
@@ -159,20 +158,22 @@ function decideClaim(number: number, observation: ClaimObservation): void {
   if (!decision.allowed) throw new Error(decision.reason);
 }
 
-async function acquireOwnedLock(ctx: ClaimContext, deps: ClaimSagaDeps): Promise<void> {
+async function acquireOwnedLock(ctx: ClaimContext, deps: ClaimSagaDeps): Promise<boolean> {
   let result: ClaimResult | undefined;
   let failure: unknown;
   try {
-    result = await deps.acquireLock(ctx.number, ctx.owner, ctx.cwd);
+    result = ctx.paths.length
+      ? await deps.acquireLock(ctx.number, ctx.owner, ctx.cwd, ctx.paths)
+      : await deps.acquireLock(ctx.number, ctx.owner, ctx.cwd);
   } catch (error) {
     failure = error;
   }
-  if (result?.outcome === "acquired") return;
+  if (result?.outcome === "acquired") return true;
 
   const observed = await deps.observeLock(ctx.number, ctx.cwd);
-  if (observed === ctx.owner) return; // write succeeded but its response was lost
+  if (observed === ctx.owner) return true; // write succeeded but its response was lost
   if (result?.outcome === "already-held" || observed !== null) {
-    throw new Error(`#${ctx.number} is already claimed by another agent.`);
+    return false;
   }
   const detail =
     result?.detail ?? (failure instanceof Error ? failure.message : failure ? String(failure) : undefined);
@@ -305,6 +306,7 @@ async function compensateClaim(
  * Claim setup saga: observe -> decide -> execute lock/issue/worktree writes ->
  * compensate from fresh observations. Ambiguous writes roll forward only when
  * the saga can prove ownership of the resulting side effect.
+ * A held issue or overlapping path claim returns null without side effects.
  */
 export async function claimSpecific(
   number: number,
@@ -312,8 +314,9 @@ export async function claimSpecific(
   cfg: OrchConfig,
   cwd: string,
   deps: ClaimSagaDeps = claimSagaDeps,
-): Promise<ClaimedTask> {
+): Promise<ClaimedTask | null> {
   const observation = await observeClaim(number, cfg, cwd, deps);
+  if (observation.lockOwner !== null) return null;
   decideClaim(number, observation);
   const route = validateRoute({
     role: issueRole(observation.issue), agent,
@@ -331,10 +334,11 @@ export async function claimSpecific(
     base,
     login: observation.login,
     initialIssue: observation.issue,
+    paths: parseTicketV2(observation.issue.body).locks ?? [],
   };
   let ownsLock = false;
   try {
-    await acquireOwnedLock(ctx, deps);
+    if (!(await acquireOwnedLock(ctx, deps))) return null;
     ownsLock = true;
     const issue = await applyClaimProjection(ctx, deps);
     if (!isClaimProjection(issue, ctx)) {
@@ -379,7 +383,8 @@ export async function claimNext(
     }
     if (opts.canClaim && !(await opts.canClaim(candidate))) continue;
     try {
-      return await claimSpecific(candidate.number, agent, cfg, cwd, deps);
+      const task = await claimSpecific(candidate.number, agent, cfg, cwd, deps);
+      if (task) return task;
     } catch {
       continue; // lost the race or transient error; try the next candidate
     }

@@ -12,6 +12,10 @@ export async function claimCommand(issueArg: string, opts: { agent?: string }): 
   if (!Number.isInteger(number)) throw new Error(`invalid issue number: ${issueArg}`);
 
   const task = await claimSpecific(number, agent, cfg, cwd);
+  if (!task) {
+    console.log(`#${number} is not claimable: an issue or path lock is held.`);
+    return;
+  }
   console.log(pc.green(`Claimed #${number} as '${agent}'.\n`));
   console.log(buildBrief(task.issue, task.worktree, agent, cwd));
 }

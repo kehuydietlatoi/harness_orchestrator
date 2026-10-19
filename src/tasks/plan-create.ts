@@ -115,13 +115,7 @@ export function renderTicketV2(ticket: TicketV2): string {
 }
 
 /** Read back structured v2 data, applying the same structural checks as plans. */
-export function parseTicketV2(body: string): TicketV2 {
-  const json = /^## Ticket metadata \(v2\)\r?\n\r?\n```json\r?\n([\s\S]*?)\r?\n```[ \t]*$/m.exec(body)?.[1];
-  if (json === undefined) return {};
-  const fields: unknown = JSON.parse(json);
-  if (!fields || typeof fields !== "object" || Array.isArray(fields)) throw new Error("ticket metadata must be an object");
-  return ticketV2Fields(parseTickets(JSON.stringify([{ ...fields, title: "metadata" }]))[0]);
-}
+export { parseTicketV2 } from "./plan.js";
 
 /** Pure: render the GitHub issue body from a ticket + resolved dependency numbers. */
 export function renderTicketBody(

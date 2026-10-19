@@ -126,6 +126,24 @@ function expectReadyProjection(h: Harness): void {
 beforeEach(() => vi.restoreAllMocks());
 
 describe("recoverable claim setup saga", () => {
+  it("passes path claims into the atomic acquisition and rolls back the owned claim on setup failure", async () => {
+    const h = harness({ worktree: "before" });
+    h.state.issue.body = '## Ticket metadata (v2)\n\n```json\n{"locks":["assets/**","scenes/main.scene"]}\n```';
+    await expect(claim(h)).rejects.toThrow(/worktree write failed/);
+    expect(h.deps.acquireLock).toHaveBeenCalledWith(34, "owner-a", "/repo", ["assets/**", "scenes/main.scene"]);
+    expect(h.deps.releaseLock).toHaveBeenCalledWith(34, "owner-a", "/repo");
+    expectReadyProjection(h);
+  });
+
+  it("does not change GitHub or worktrees when a path claim is held", async () => {
+    const h = harness();
+    h.state.issue.body = '## Ticket metadata (v2)\n\n```json\n{"locks":["assets/**"]}\n```';
+    vi.mocked(h.deps.acquireLock).mockResolvedValue({ outcome: "already-held" });
+    await expect(claim(h)).resolves.toBeNull();
+    expect(h.deps.editIssue).not.toHaveBeenCalled();
+    expect(h.deps.addWorktree).not.toHaveBeenCalled();
+    expect(h.deps.releaseLock).not.toHaveBeenCalled();
+  });
   it.each([false, true])("refuses needs-attention before claiming resources (todo=%s)", async (todo) => {
     const h = harness();
     h.state.issue.labels = ["agent:codex", "needs-attention", ...(todo ? [STATUS.todo] : [])];
@@ -175,7 +193,7 @@ describe("recoverable claim setup saga", () => {
       return { outcome: "error", detail: "ambiguous lock response" };
     });
 
-    await expect(claim(h)).rejects.toThrow(/another agent/i);
+    await expect(claim(h)).resolves.toBeNull();
 
     expect(h.state.lock).toBe("owner-b");
     expect(h.deps.editIssue).not.toHaveBeenCalled();
@@ -226,7 +244,7 @@ describe("recoverable claim setup saga", () => {
 
     const result = await claim(h);
 
-    expect(result.worktree).toEqual(taskWorktree);
+    expect(result!.worktree).toEqual(taskWorktree);
     expect(h.state.lock).toBe("owner-a");
     expect(h.state.issue.labels).toContain(STATUS.claimed);
     expect(h.deps.addWorktree).toHaveBeenCalledWith(
@@ -243,8 +261,8 @@ describe("recoverable claim setup saga", () => {
 
     const result = await claim(h);
 
-    expect(result.issue.labels).toContain(STATUS.claimed);
-    expect(result.worktree).toEqual(taskWorktree);
+    expect(result!.issue.labels).toContain(STATUS.claimed);
+    expect(result!.worktree).toEqual(taskWorktree);
     expect(h.deps.editIssue).toHaveBeenCalledTimes(1);
   });
 

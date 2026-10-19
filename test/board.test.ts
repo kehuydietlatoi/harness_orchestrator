@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { byNumber, claimableBy, isEligible, issueEffort, openDepsFromMap, parseDeps } from "../src/board/board.js";
 import type { Issue } from "../src/github/github.js";
+import { pathsLocked } from "../src/git/lock.js";
 
-vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
+vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false), pathsLocked: vi.fn(async () => false) }));
 
 function issue(number: number, over: Partial<Issue> = {}): Issue {
   return {
@@ -17,6 +18,13 @@ function issue(number: number, over: Partial<Issue> = {}): Issue {
 }
 
 describe("isEligible", () => {
+  it("treats an overlapping path claim as unavailable", async () => {
+    const target = issue(1, { body: '## Ticket metadata (v2)\n\n```json\n{"locks":["assets/**"]}\n```' });
+    vi.mocked(pathsLocked).mockResolvedValueOnce(true);
+    expect(await isEligible(target, "/repo", byNumber([target]))).toBe(false);
+    expect(pathsLocked).toHaveBeenCalledWith(["assets/**"], { cwd: "/repo" });
+    expect(await isEligible(target, "/repo", byNumber([target]))).toBe(true);
+  });
   it.each([[], ["status:todo"], ["status:claimed"], ["status:in-progress"]].map((labels) => ({ labels })))(
     "refuses needs-attention with status labels $labels", async ({ labels }) => {
       const target = issue(1, { labels: ["needs-attention", ...labels] });
