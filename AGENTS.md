@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Spawn refusal comments (#190)**: runner incomplete-brief and route refusals post the escalation reason once on the issue before returning, without constructing an adapter or recording a run. Comment failures warn and preserve the refusal outcome.
+
 - **Stale model projections (#195)**: keep `resolveTierModel` strict for execution. `modelProjectionFact` converts only `UnknownModelProjection` into a per-task lifecycle inconsistency for snapshot and repair; unresolved author identity counts no approvals. Claim selection skips stale projections before runner preflight. Repair removes the stale label, then re-observes before repairing resources or projecting reviews.
 
 - **Post-push observations (#159)**: fix/conflict results record `previousHead` and `pushedHead` in `step.finished` events. Observation waits on the superseded head or unknown mergeability for the pushed head. Head-bound `prMergeability` reads REST head/base/result together and rejects a conflicting result when Git proves the head already contains that base; a newer, non-ancestor base remains actionable. Keep the merge strategy as merge, never rebase.
