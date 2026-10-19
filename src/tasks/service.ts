@@ -1,4 +1,5 @@
 import { log } from "../util/log.js";
+import { assertNoExternalLinks, ExternalLinksRejected } from "../git/worktree.js";
 import { issueScope, scopeFailure, ScopeRejected } from "./scope-guard.js";
 import { issueRole, validateRoute } from "../routing/route-policy.js";
 import { existsSync } from "node:fs";
@@ -20,6 +21,8 @@ import {
 import { STATUS, agentLabel, REVIEW_NEEDED, NEEDS_ATTENTION } from "../github/labels.js";
 import {
   addWorktree,
+  branchName,
+  slugify,
   observeWorktree,
   worktreePath,
   type Worktree,
@@ -27,6 +30,7 @@ import {
 } from "../git/worktree.js";
 import {
   resolveBaseBranch,
+  refreshTaskBranch,
   type RepositoryBase,
 } from "../git/git.js";
 import { issueEffort, claimableBy, eligibleIssues, type ClaimFilter } from "../board/board.js";
@@ -83,8 +87,14 @@ const claimSagaDeps: ClaimSagaDeps = {
   editIssue: (number, edit, cwd) => editIssue(number, { cwd, ...edit }),
   observeWorktree: (number, title, root, cwd) =>
     observeWorktree(number, title, root, { cwd }),
-  addWorktree: (number, title, root, baseRef, cwd) =>
-    addWorktree(number, title, root, { cwd, baseRef }),
+  addWorktree: async (number, title, root, baseRef, cwd) => {
+    const branch = branchName(number, slugify(title));
+    const behind = await refreshTaskBranch(branch, baseRef, cwd);
+    if (behind > 0) {
+      log.warn(`Task branch '${branch}' has its own commits and is behind ${baseRef} by ${behind} commit(s); preserving it unchanged.`);
+    }
+    return addWorktree(number, title, root, { cwd, baseRef });
+  },
 };
 
 interface ClaimContext {
@@ -374,6 +384,7 @@ export async function claimNext(
     ...claimSagaDeps,
     resolveBaseBranch: async () => base,
   };
+  let claimError: unknown;
   for (const candidate of candidates) {
     if (!claimableBy(candidate, agent, opts)) continue; // pinned elsewhere, out of scope, or unrouted when routing is required
     const staleModel = modelProjectionFact(candidate, cfg, agent);
@@ -393,10 +404,11 @@ export async function claimNext(
     try {
       const task = await claimSpecific(candidate.number, agent, cfg, cwd, deps);
       if (task) return task;
-    } catch {
-      continue; // lost the race or transient error; try the next candidate
+    } catch (error) {
+      claimError = error; // try other candidates, but an error is not an empty queue
     }
   }
+  if (claimError !== undefined) throw claimError;
   return null;
 }
 
@@ -419,6 +431,7 @@ export async function submit(
   const base = await resolveBaseBranch(cfg.baseBranch, cwd);
   const issue = await getIssue(number, { cwd });
   try {
+    assertNoExternalLinks(wt);
     const role = issueScope(issue, cfg);
     if (role) {
       const diff = await exec("git", ["diff", "--name-only", "--no-renames", "-z", `${base.ref}...HEAD`, "--"], { cwd: wt });
@@ -427,7 +440,7 @@ export async function submit(
       if (reason) throw new ScopeRejected(reason);
     }
   } catch (error) {
-    if (!(error instanceof ScopeRejected)) throw error;
+    if (!(error instanceof ScopeRejected) && !(error instanceof ExternalLinksRejected)) throw error;
     await editIssue(number, { cwd, addLabels: [NEEDS_ATTENTION], removeLabels: [STATUS.claimed, STATUS.inProgress] });
     const comment = await exec("gh", ["issue", "comment", String(number), "--body-file", "-"], { cwd, input: error.message });
     if (comment.code !== 0) log.warn(`#${number}: could not comment scope rejection: ${comment.stderr}`);

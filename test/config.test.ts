@@ -326,7 +326,7 @@ describe("loadConfig", () => {
   });
 
   it("defaults and overrides the disposable ignored allowlist, rejecting malformed values", () => {
-    expect(loadConfig(writeConfig({})).disposableIgnored).toEqual(["node_modules/", "dist/", "coverage/", "logs/"]);
+    expect(loadConfig(writeConfig({})).disposableIgnored).toEqual(["node_modules/", "dist/", "coverage/", "logs/", "*.log"]);
     rmSync(dir, { recursive: true, force: true });
     expect(loadConfig(writeConfig({ disposableIgnored: [".venv/"] })).disposableIgnored).toEqual([".venv/"]);
     for (const bad of ["node_modules/", [""], [1]]) {

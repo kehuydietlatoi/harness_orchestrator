@@ -22,7 +22,7 @@ vi.mock("../src/github/github.js", () => ({
 vi.mock("../src/git/git.js", () => ({
   resolveBaseBranch: async () => ({ name: "studio", ref: "refs/heads/studio" }), countCommitsAhead: async () => 0,
 }));
-vi.mock("../src/git/worktree.js", () => ({ removeWorktree: mocks.removeWorktree }));
+vi.mock("../src/git/worktree.js", async (importOriginal) => ({ ...await importOriginal<typeof import("../src/git/worktree.js")>(), assertNoExternalLinks: vi.fn(), removeWorktree: mocks.removeWorktree }));
 vi.mock("../src/git/lock.js", () => ({ release: mocks.release }));
 
 import { dispatchSpecific, processNext, recordRun } from "../src/tasks/runner.js";

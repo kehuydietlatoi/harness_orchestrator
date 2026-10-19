@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_CONFIG } from "../src/config.js";
@@ -55,7 +55,8 @@ vi.mock("../src/github/github.js", () => ({
   listOpenPrs: mocks.listOpenPrs,
 }));
 vi.mock("../src/git/lock.js", () => ({ release: mocks.lockRelease }));
-vi.mock("../src/git/worktree.js", () => ({
+vi.mock("../src/git/worktree.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/git/worktree.js")>(),
   removeWorktree: mocks.removeWorktree,
   discardWorktree: mocks.discardWorktree,
 }));
@@ -265,6 +266,25 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
     expect(mocks.lockRelease).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1])("retains an external node_modules link before verification or submission (commits: %s)", async commits => {
+    const outside = join(cwd, "outside");
+    mkdirSync(outside);
+    symlinkSync(outside, join(worktree, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    mocks.runTask.mockResolvedValue({ ok: true, outcome: "completed", code: 0, durationMs: 24 });
+    mocks.countCommitsAhead.mockResolvedValue(commits);
+    mocks.exec.mockImplementation(async (_cmd, args) => ({ code: 0, stderr: "", stdout: args[0] === "status" ? " M worker.ts" : "" }));
+    expect((await processNext("codex", { ...DEFAULT_CONFIG, verify: [["npm", "test"]] }, cwd))?.outcome).toBe("needs-attention");
+    expect(mocks.exec.mock.calls.map(([cmd]) => cmd)).toEqual(["gh"]);
+    const comment = mocks.exec.mock.calls[0][2].input;
+    expect(comment).toContain("node_modules");
+    expect(comment).toContain(JSON.stringify(outside));
+    expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
+    expect(mocks.submit).not.toHaveBeenCalled();
+    expect(mocks.removeWorktree).not.toHaveBeenCalled();
+    expect(mocks.lockRelease).not.toHaveBeenCalled();
+    expect(statSync(worktree).isDirectory()).toBe(true);
   });
 
   it.each(["codex", "claude", "opencode"])("verifies, commits and submits uncommitted output from %s", async (agent) => {

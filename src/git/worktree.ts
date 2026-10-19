@@ -1,5 +1,5 @@
-import { join, resolve } from "node:path";
-import { existsSync, lstatSync, readdirSync, realpathSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync, unlinkSync } from "node:fs";
 import { exec } from "../util/exec.js";
 import { log } from "../util/log.js";
 import { DEFAULT_DISPOSABLE_IGNORED } from "../config.js";
@@ -149,7 +149,8 @@ export async function addWorktree(
  * --ignored=matching` that make a worktree unsafe to remove — every dirty or
  * untracked entry, plus ignored paths outside the `disposable` allowlist.
  * Allowlist entries are worktree-relative; a trailing `/` covers a directory and
- * its contents. Quoted (unusual-character) paths are never guessed safe.
+ * its contents. Filename globs support `*` and `?` at the root only.
+ * Quoted (unusual-character) paths are never guessed safe.
  */
 export function blockingStatusEntries(porcelain: string, disposable: readonly string[]): string[] {
   return porcelain
@@ -159,9 +160,14 @@ export function blockingStatusEntries(porcelain: string, disposable: readonly st
       if (!line.startsWith("!! ")) return true;
       const path = line.slice(3);
       if (path.startsWith('"')) return true;
-      return !disposable.some((entry) =>
-        entry.endsWith("/") ? path === entry || path.startsWith(entry) : path === entry,
-      );
+      return !disposable.some((entry) => {
+        if (entry.endsWith("/")) return path === entry || path.startsWith(entry);
+        if (path === entry) return true;
+        if (entry.includes("/") || entry.includes("\\") || path.includes("/") || path.includes("\\")) return false;
+        const pattern = entry.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*").replace(/\?/g, ".");
+        return new RegExp(`^${pattern}$`).test(path);
+      });
     });
 }
 
@@ -190,6 +196,60 @@ function worktreeLinks(path: string): string[] {
   }
   visit(resolve(path), true);
   return links;
+}
+
+export interface ExternalLink { path: string; target: string }
+
+/** Include ignored entries, never entering a symlink or junction. Hard-link
+ * peers cannot be enumerated portably, so reject every nlink > 1 file. */
+export function externalLinks(worktree: string): ExternalLink[] {
+  const root = realpathSync.native(worktree);
+  const links: ExternalLink[] = [];
+  const outside = (target: string) => {
+    const rel = relative(root, target);
+    return rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel);
+  };
+  // Resolve existing ancestors even for dangling targets through other links.
+  const canonical = (path: string): string => {
+    try { return realpathSync.native(path); }
+    catch (error) {
+      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+      const parent = dirname(path);
+      if (parent === path) throw error;
+      return join(canonical(parent), relative(parent, path));
+    }
+  };
+  function visit(path: string): void {
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink()) {
+      const target = resolve(dirname(path), readlinkSync(path));
+      // Compare canonical identities: Windows short names and ancestor aliases
+      // can spell an internal target as a path lexically outside the root.
+      if (outside(canonical(target))) links.push({ path: relative(root, path), target });
+    } else if (stat.isDirectory()) {
+      for (const name of readdirSync(path)) visit(join(path, name));
+    } else if (stat.isFile() && stat.nlink > 1) {
+      links.push({ path: relative(root, path), target: `unknown hard-link peer (link count ${stat.nlink}; conservatively rejected because external peers cannot be determined portably)` });
+    }
+  }
+  if (lstatSync(worktree).isSymbolicLink()) return [{ path: ".", target: root }];
+  visit(root);
+  return links;
+}
+
+export class ExternalLinksRejected extends Error {}
+
+/** Shared refusal text for coordinator completion and worker-invoked submit. */
+export function assertNoExternalLinks(worktree: string): void {
+  let links: ExternalLink[];
+  try { links = externalLinks(worktree); }
+  catch (error) {
+    throw new ExternalLinksRejected(`Worker links could not be inspected; worktree and claim retained. No verification, commit or submission.\n\n${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (links.length) throw new ExternalLinksRejected(
+    "Worker external links rejected; worktree and claim retained for inspection. No verification, commit or submission.\n\n" +
+    links.map(({ path, target }) => `- ${JSON.stringify(path)} -> ${JSON.stringify(target)}`).join("\n"),
+  );
 }
 
 /** Git for Windows can recurse through junctions, even without --force. */

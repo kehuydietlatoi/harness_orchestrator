@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec } from "../src/util/exec.js";
@@ -11,6 +11,8 @@ vi.mock("node:fs", async (importOriginal) => {
 });
 import {
   addWorktree,
+  externalLinks,
+  assertNoExternalLinks,
   blockingStatusEntries,
   discardWorktree,
   observeWorktree,
@@ -25,7 +27,7 @@ async function makeRepo(): Promise<{ base: string; repo: string }> {
   mkdirSync(repo);
   await exec("git", ["init", "-q", "-b", "main"], { cwd: repo });
   writeFileSync(join(repo, "README.md"), "# test\n");
-  writeFileSync(join(repo, ".gitignore"), "ignored.txt\nnode_modules/\n");
+  writeFileSync(join(repo, ".gitignore"), "ignored.txt\nnode_modules/\n*.log\n");
   await exec("git", ["add", "-A"], { cwd: repo });
   await exec(
     "git",
@@ -50,6 +52,49 @@ describe("task worktrees", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     rmSync(base, { recursive: true, force: true });
+  });
+
+  it("reports external links under ignored node_modules without traversing links", () => {
+    const outside = join(base, "outside");
+    mkdirSync(outside);
+    symlinkSync(repo, join(outside, "cycle"), process.platform === "win32" ? "junction" : "dir");
+    const link = join(repo, "node_modules");
+    symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+    try {
+      expect(externalLinks(repo)).toEqual([{ path: "node_modules", target: outside }]);
+      expect(vi.mocked(readdirSync).mock.calls.some(([path]) => String(path) === link || String(path) === outside)).toBe(false);
+    } finally { unlinkSync(link); unlinkSync(join(outside, "cycle")); }
+  });
+
+  it("allows internal links and cycles without entering them", () => {
+    const link = join(repo, "node_modules");
+    symlinkSync(repo, link, process.platform === "win32" ? "junction" : "dir");
+    try { expect(externalLinks(repo)).toEqual([]); }
+    finally { unlinkSync(link); }
+  });
+
+  it("allows internal targets spelled through an ancestor alias", () => {
+    const alias = join(base, "alias");
+    const nested = join(repo, "nested");
+    mkdirSync(nested);
+    symlinkSync(repo, alias, process.platform === "win32" ? "junction" : "dir");
+    const link = join(nested, "node_modules");
+    symlinkSync(join(alias, "nested"), link, process.platform === "win32" ? "junction" : "dir");
+    try { expect(externalLinks(nested)).toEqual([]); }
+    finally { unlinkSync(link); unlinkSync(alias); }
+  });
+
+  it("reports hard links to external files conservatively", () => {
+    const target = join(base, "shared.txt");
+    writeFileSync(target, "keep");
+    linkSync(target, join(repo, "hard.txt"));
+    expect(externalLinks(repo)).toEqual([{ path: "hard.txt", target: expect.stringContaining("link count 2") }]);
+    expect(() => assertNoExternalLinks(repo)).toThrow(/external peers cannot be determined portably/);
+  });
+
+  it("fails closed when a directory cannot be scanned", () => {
+    vi.mocked(readdirSync).mockImplementationOnce(() => { throw new Error("scan denied"); });
+    expect(() => assertNoExternalLinks(repo)).toThrow(/could not be inspected.*retained/);
   });
 
   it("rejects an existing task path that Git does not register as a worktree", async () => {
@@ -183,6 +228,28 @@ describe("task worktrees", () => {
     expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
     expect(existsSync(worktree.path)).toBe(false);
   });
+
+  it("removes a merged worktree holding only root-level ignored logs", async () => {
+    const worktree = await addWorktree(29, "Identity safe", "../wt", options(repo));
+    for (const name of ["test-results.log", "coverage-check.log", "e2e-check.log"]) {
+      writeFileSync(join(worktree.path, name), "check output\n");
+    }
+    expect(await worktreeRemovalSafety(worktree.path, `refs/heads/${worktree.branch}`)).toEqual({ removable: true });
+    expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(true);
+    expect(existsSync(worktree.path)).toBe(false);
+  });
+
+  it.each(["notes.txt", "nested/check.log", "output.log/notes.txt", "README.md"])(
+    "retains other local work alongside disposable logs: %s", async (name) => {
+      const worktree = await addWorktree(29, "Identity safe", "../wt", options(repo));
+      writeFileSync(join(worktree.path, "test-results.log"), "output\n");
+      const recoverable = join(worktree.path, name);
+      mkdirSync(join(recoverable, ".."), { recursive: true });
+      writeFileSync(recoverable, "keep me\n");
+      expect(await removeWorktree(worktree.path, { cwd: repo })).toBe(false);
+      expect(readFileSync(recoverable, "utf8")).toBe("keep me\n");
+    },
+  );
 
   // POSIX Git treats a top-level symlink as a file, so node_modules/ does
   // not ignore it. A junction is a directory to Windows Git. The nested case
@@ -325,6 +392,17 @@ describe("task worktrees", () => {
 
 describe("blockingStatusEntries", () => {
   const disposable = ["node_modules/", "dist/", "build.stamp"];
+
+  it("matches star and question-mark globs only for ignored root filenames", () => {
+    expect(blockingStatusEntries("!! test.log\n!! check-1.txt\n", ["*.log", "check-?.txt"])).toEqual([]);
+    const blocked = ["?? untracked.log", " M tracked.log", "!! nested/test.log", "!! output.log/", '!! "quoted.log"', "!! check-12.txt"];
+    expect(blockingStatusEntries(blocked.join("\n"), ["*.log", "check-?.txt"])).toEqual(blocked);
+  });
+
+  it("treats regex punctuation literally and does not support directory globs", () => {
+    expect(blockingStatusEntries("!! build[1].log\n!! build1.log\n!! nested/test.log\n", ["build[1].*", "nested/*.log"]))
+      .toEqual(["!! build1.log", "!! nested/test.log"]);
+  });
 
   it("treats allowlisted ignored paths as disposable", () => {
     expect(blockingStatusEntries("!! node_modules/\n!! dist/\n!! build.stamp\n", disposable)).toEqual([]);
