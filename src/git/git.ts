@@ -1,4 +1,45 @@
 import { exec } from "../util/exec.js";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
+
+const baseFetches = new Map<string, { ref: string; done: Promise<void> }>();
+
+/** Linked worktrees share refs. Coalesce the same base, serialize different bases. */
+async function fetchBase(name: string, cwd: string): Promise<void> {
+  const common = await exec("git", ["rev-parse", "--git-common-dir"], { cwd });
+  if (common.code !== 0) throw commandFailure("git rev-parse --git-common-dir", common.stderr);
+  const canonical = await realpath(resolve(cwd, common.stdout.trim()));
+  const key = process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  const remote = `refs/remotes/origin/${name}`;
+  for (;;) {
+    const running = baseFetches.get(key);
+    if (running) {
+      await running.done;
+      if (running.ref === remote) return;
+      continue;
+    }
+    const done = (async () => {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const fetched = await exec("git", [
+          "fetch", "--no-tags", "origin", `+refs/heads/${name}:${remote}`,
+        ], { cwd });
+        if (fetched.code === 0) return;
+        if (attempt !== 0 || !/cannot lock ref/i.test(fetched.stderr)) {
+          throw commandFailure(`git fetch origin ${name}`, fetched.stderr);
+        }
+        // An external fetch may have moved the ref. Re-observe before retrying;
+        // a missing ref is valid on a first fetch, other read errors fail closed.
+        const current = await exec("git", ["rev-parse", "--verify", "--quiet", remote], { cwd });
+        if (current.code !== 0 && current.code !== 1) {
+          throw commandFailure(`git rev-parse ${remote}`, current.stderr);
+        }
+      }
+    })();
+    baseFetches.set(key, { ref: remote, done });
+    try { await done; } finally { baseFetches.delete(key); }
+    return;
+  }
+}
 
 export interface RepositoryBase {
   /** Branch name as GitHub expects it (for example, `main` or `release/v2`). */
@@ -60,10 +101,7 @@ export async function resolveBaseBranch(
   if (opts.fetch) {
     // Explicit destination also works in single-branch clones whose configured
     // fetch refspec does not include this base. Never alter the operator's branch.
-    const fetched = await exec("git", [
-      "fetch", "--no-tags", "origin", `+${local}:${remote}`,
-    ], { cwd });
-    if (fetched.code !== 0) throw commandFailure(`git fetch origin ${name}`, fetched.stderr);
+    await fetchBase(name, cwd);
   }
   const hasLocal = await refExists(local, cwd);
   if (await refExists(remote, cwd)) {

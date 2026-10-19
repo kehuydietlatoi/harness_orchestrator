@@ -220,6 +220,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
   const escalationFailures = new Map<number, number>();
   const escalateRetryAt = new Map<number, number>();
   const drained = new Set<string>();
+  const claimRetryAt = new Map<string, number>();
   const routeGenerations = new Map<string, number>();
   /** Issues an implementation has claimed and not yet finalised: their PR may already exist, but is not ours to touch. */
   const implementing = new Set<number>();
@@ -334,10 +335,14 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
           implementing.add(issue);
         }, (destination) => { cascadeAgents.add(destination); });
       } catch (error) {
-        markDrained(); // do not hot-loop a claim error
+        // An unreadable queue is not an empty queue. Back off without resetting
+        // the progress clock, so persistent failures reach the idle deadline.
+        claimRetryAt.set(agent, deps.now() + Math.max(opts.pollMs, FAILURE_BACKOFF_MS));
+        summary.failures += 1;
         deps.say(`  ${agent} could not claim work: ${error instanceof Error ? error.message : String(error)}`);
         return;
       }
+      claimRetryAt.delete(agent);
       if (result === null) {
         markDrained();
         return;
@@ -415,7 +420,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     }
 
     const actionable: Array<{ obs: TaskObservation; step: ActionableStep }> = [];
-    let waiting = !observed || unobserved.length > 0;
+    let waiting = !observed || unobserved.length > 0 || claimRetryAt.size > 0;
     // Two open PRs for one issue: driving either could merge the wrong one, and both would contend for the
     // same issue slot. The observation decides this from the full open-PR inventory (so an unreadable twin
     // still counts); an observation that nevertheless lists two tasks for one issue is treated the same way.
@@ -519,6 +524,7 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
     if (backlog === 0 && opts.claim !== "none") {
       for (const agent of deps.availableAgents()) {
         if (inflight.size >= max) break;
+        if ((claimRetryAt.get(agent) ?? 0) > deps.now()) continue;
         if (!drained.has(agent) && !inflight.has(`impl:${agent}`)) launchImplement(agent);
       }
     }

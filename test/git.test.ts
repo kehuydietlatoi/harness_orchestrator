@@ -171,6 +171,31 @@ describe("repository base with real Git refs", () => {
     expect(await resolveBaseBranch("studio", repo)).toEqual(base);
   });
 
+  it("shares concurrent base fetches across linked worktrees", async () => {
+    const wt = join(root, "sibling");
+    await git(repo, "worktree", "add", "-b", "sibling", wt);
+    const latest = await commit(origin, "new base");
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let fetches = 0;
+    execMock.mockImplementation(async (cmd: string, args: string[], opts: { cwd: string }) => {
+      if (args[0] === "fetch") { fetches += 1; await gate; }
+      return realExec(cmd, args, opts);
+    });
+    const calls = [resolveBaseBranch("studio", repo, { fetch: true }), resolveBaseBranch("studio", wt, { fetch: true })];
+    try {
+      await vi.waitFor(() => expect(fetches).toBeGreaterThan(0));
+      // Both callers have reached the shared operation before it completes.
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } finally { release(); }
+    await expect(Promise.all(calls)).resolves.toEqual([
+      { name: "studio", ref: "refs/remotes/origin/studio" },
+      { name: "studio", ref: "refs/remotes/origin/studio" },
+    ]);
+    expect(fetches).toBe(1);
+    expect(await git(repo, "rev-parse", "origin/studio")).toBe(latest);
+  });
+
   it.each(["ahead", "diverged"])("rejects a local base that is %s of origin", async relation => {
     await commit(repo, "local work");
     if (relation === "diverged") await commit(origin, "remote work");
@@ -182,5 +207,22 @@ describe("repository base with real Git refs", () => {
   it("fails closed when fetching fails even with cached base refs", async () => {
     await git(repo, "remote", "set-url", "origin", join(root, "missing"));
     await expect(resolveBaseBranch("studio", repo, { fetch: true })).rejects.toThrow(/git fetch.*failed/);
+    expect(execMock.mock.calls.filter(([, args]) => args[0] === "fetch")).toHaveLength(1);
+  });
+
+  it("bounds ref-lock retries and allows another fetch after failure", async () => {
+    let fetches = 0;
+    execMock.mockImplementation(async (cmd: string, args: string[], opts: { cwd: string }) => {
+      if (args[0] === "fetch" && ++fetches <= 2) {
+        return { code: 1, stdout: "", stderr: "cannot lock ref 'refs/remotes/origin/studio'" };
+      }
+      return realExec(cmd, args, opts);
+    });
+    await expect(resolveBaseBranch("studio", repo, { fetch: true })).rejects.toThrow(/cannot lock ref/);
+    expect(fetches).toBe(2);
+    await expect(resolveBaseBranch("studio", repo, { fetch: true })).resolves.toEqual({
+      name: "studio", ref: "refs/remotes/origin/studio",
+    });
+    expect(fetches).toBe(3);
   });
 });

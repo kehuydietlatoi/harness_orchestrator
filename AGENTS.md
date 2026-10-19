@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Concurrent base fetches (#207)**: `resolveBaseBranch` coalesces in-process fetches by canonical Git common directory and base ref, sharing across linked worktrees and serializing different bases. Ref-lock failures re-read the tracking ref and retry once; other failures propagate. `claimNext` surfaces candidate errors after trying alternatives. Coordinator claim errors back off until success or the idle deadline; only an empty claim result marks the agent drained.
+
 - Never create a symlink, junction or hard link to anything outside your worktree; run `npm ci` inside it.
 - Compare link destinations with the canonical worktree root after resolving path aliases; Windows temporary paths can use short names such as `RUNNER~1` for the same directory.
 - **Worker link guard (#205)**: `externalLinks` in `src/git/worktree.ts` scans ignored paths without entering links. Runner checks after worker runs before recovery or verification; submit checks before push. Violations or unreadable scans retain worktree/lock and flag needs-attention with an issue comment. Files with nlink > 1 are conservatively rejected because external hard-link peers cannot be enumerated portably.

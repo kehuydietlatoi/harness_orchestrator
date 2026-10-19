@@ -1052,8 +1052,21 @@ describe("runAutopilot", () => {
 
     const summary = await drive(w);
 
-    expect(summary).toMatchObject({ submitted: [], stopped: "drained" });
+    expect(summary).toMatchObject({ submitted: [], stopped: "idle-timeout" });
     expect(w.said.some((l) => l.includes("could not claim work: claim exploded"))).toBe(true);
+    expect(summary.failures).toBeGreaterThan(2);
+    expect(summary.failures).toBeLessThan(100);
+  });
+
+  it("retries a transient claim error and completes the scoped work", async () => {
+    const w = new World();
+    w.implementThrows = true;
+    w.todo.push({ issue: 9, agent: "claude", pr: {} });
+    w.onSleep = () => { w.implementThrows = false; };
+    const summary = await drive(w, { issues: new Set([9]) });
+    expect(summary.submitted).toEqual([9]);
+    expect(summary.merged).toEqual([9]);
+    expect(w.said.some(line => line.includes("could not claim work"))).toBe(true);
   });
 
   it("treats an executor that throws as a failed step", async () => {
