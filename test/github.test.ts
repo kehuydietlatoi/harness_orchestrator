@@ -33,19 +33,36 @@ describe("issue label handbacks", () => {
 describe("head-bound mergeability", () => {
   const head = "a".repeat(40);
   const base = "b".repeat(40);
-  const response = (mergeable: boolean | null, sha = head) => ({
-    code: 0, stderr: "", stdout: JSON.stringify({ head: { sha }, base: { sha: base }, mergeable }),
+  const response = (mergeable: boolean | null, sha = head, prBase = base) => ({
+    code: 0, stderr: "", stdout: JSON.stringify({ head: { sha }, base: { sha: prBase, ref: "studio" }, mergeable }),
   });
+  /** The base branch's current tip, read separately: a pull's `base.sha` lags the branch. */
+  const tip = (sha = base) => ({ code: 0, stderr: "", stdout: JSON.stringify({ object: { sha } }) });
   beforeEach(() => execMock.mockReset());
 
+  it("judges a conflict against the base branch's current tip, not the pull's stale base.sha (#239)", async () => {
+    const stale = "d".repeat(40);
+    execMock.mockResolvedValueOnce(response(false, head, stale)).mockResolvedValueOnce(tip(base))
+      .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
+    expect(await prMergeability(239, { cwd: "/repo", head })).toBe("conflicting");
+    expect(execMock.mock.calls[1]).toEqual(["gh", ["api", "repos/{owner}/{repo}/git/ref/heads/studio"], { cwd: "/repo" }]);
+    expect(execMock).toHaveBeenLastCalledWith("git", ["merge-base", "--is-ancestor", base, head], { cwd: "/repo" });
+  });
+
+  it("waits when the base branch tip cannot be read", async () => {
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "HTTP 502" });
+    expect(await prMergeability(62, { head })).toBe("unknown");
+    expect(execMock).toHaveBeenCalledTimes(2);
+  });
+
   it("treats a stale conflict on a pushed head containing the base as unknown", async () => {
-    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce(tip()).mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
     expect(await prMergeability(62, { cwd: "/repo", head })).toBe("unknown");
     expect(execMock).toHaveBeenLastCalledWith("git", ["merge-base", "--is-ancestor", base, head], { cwd: "/repo" });
   });
 
   it("keeps a conflict with a newer base actionable", async () => {
-    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce(tip()).mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
     expect(await prMergeability(62, { head })).toBe("conflicting");
   });
 
@@ -61,16 +78,16 @@ describe("head-bound mergeability", () => {
   });
 
   it("fetches missing objects before checking a new base", async () => {
-    execMock.mockResolvedValueOnce(response(false))
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce(tip())
       .mockResolvedValueOnce({ code: 128, stdout: "", stderr: "missing object" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "" });
     expect(await prMergeability(62, { head })).toBe("conflicting");
-    expect(execMock.mock.calls[2][1]).toEqual(["fetch", "--no-tags", "origin", base, head]);
+    expect(execMock.mock.calls[3][1]).toEqual(["fetch", "--no-tags", "origin", base, head]);
   });
 
   it("does not turn an unreadable ancestry into a conflict", async () => {
-    execMock.mockResolvedValueOnce(response(false))
+    execMock.mockResolvedValueOnce(response(false)).mockResolvedValueOnce(tip())
       .mockResolvedValueOnce({ code: 128, stdout: "", stderr: "missing object" })
       .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
     expect(await prMergeability(62, { head })).toBe("unknown");
