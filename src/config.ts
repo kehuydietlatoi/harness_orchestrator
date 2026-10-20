@@ -285,12 +285,12 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     throw new Error("evidenceSetup must be a list of non-empty argv arrays of non-empty strings");
   }
   const scenariosDir = raw.scenariosDir === undefined ? DEFAULT_CONFIG.scenariosDir! : raw.scenariosDir;
-  if (typeof scenariosDir !== "string" || !scenariosDir.trim() || /[\x00-\x1f:]/.test(scenariosDir) ||
+  if (typeof scenariosDir !== "string" || !scenariosDir.trim() || [...scenariosDir].some(char => char.charCodeAt(0) < 32 || char === ":") ||
       /^[\\/]/.test(scenariosDir) || scenariosDir.split(/[\\/]/).includes("..") ||
       !pathWithin(canonicalPath(cwd), canonicalPath(resolve(cwd, scenariosDir)))) {
     throw new Error("scenariosDir must be a repository-relative path that does not escape the repo");
   }
-  if (raw.evidenceDir !== undefined && (typeof raw.evidenceDir !== "string" || !raw.evidenceDir.trim() || /[\x00-\x1f]/.test(raw.evidenceDir))) {
+  if (raw.evidenceDir !== undefined && (typeof raw.evidenceDir !== "string" || !raw.evidenceDir.trim() || [...raw.evidenceDir].some(char => char.charCodeAt(0) < 32))) {
     throw new Error("evidenceDir must be a non-empty path outside the repository");
   }
   const evidenceDir = resolve(cwd, raw.evidenceDir ?? resolve(projectStateDir(cwd), "evidence"));

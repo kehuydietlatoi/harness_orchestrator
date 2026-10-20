@@ -38,10 +38,10 @@ describe("loadConfig", () => {
   it.each([null, "npm ci", ["npm", "ci"], [[]], [[""]], [[1]], [["a\0b"]]])("rejects malformed evidenceSetup %j", evidenceSetup => {
     expect(() => loadConfig(writeConfig({ evidenceSetup }))).toThrow(/evidenceSetup/);
   });
-  it.each(["../qa", "qa/../../outside", "..\\outside", "/qa", "C:\\qa", "", 5, null])("rejects escaping or malformed scenariosDir %j", scenariosDir => {
+  it.each(["../qa", "qa/../../outside", "..\\outside", "/qa", "C:\\qa", "qa/\0scenarios", "qa/\x1fscenarios", "qa/scenarios\n", "", 5, null])("rejects escaping or malformed scenariosDir %j", scenariosDir => {
     expect(() => loadConfig(writeConfig({ scenariosDir }))).toThrow(/scenariosDir/);
   });
-  it.each([".", "evidence", "qa/../evidence", "", 5, null])("rejects internal or malformed evidenceDir %j", evidenceDir => {
+  it.each([".", "evidence", "qa/../evidence", join(tmpdir(), "evidence\0"), join(tmpdir(), "evidence\x1f"), join(tmpdir(), "evidence\n"), "", 5, null])("rejects internal or malformed evidenceDir %j", evidenceDir => {
     expect(() => loadConfig(writeConfig({ evidenceDir }))).toThrow(/evidenceDir/);
   });
   it("rejects an absolute evidenceDir inside the checkout", () => {
