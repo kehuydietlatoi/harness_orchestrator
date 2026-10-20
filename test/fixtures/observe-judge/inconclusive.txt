@@ -1,0 +1,4 @@
+The screenshot was captured before the HUD appeared.
+```json
+{"gate":"observe","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","overall":"inconclusive","lines":[{"acceptance":"Observe: health is readable","verdict":"inconclusive","evidence":["shots/loading.png"],"note":"Capture after loading completes to show the health HUD."}],"concerns":[]}
+```

@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe judging (#217)**: `src/tasks/observe-judge.ts` selects a vision-capable standard-tier judge from another provider family regardless of `reviewPolicy`. It stages regular evidence files under `.orch-observe/` in the evidence checkout, requires a head-bound fenced verdict, and records `observe.verdict` plus phase `observe` telemetry with distinct outcomes. The caller retains checkout ownership and must release it after judging.
+
 - **Evidence execution (#216)**: `src/tasks/evidence.ts` runs trusted setup/evidence argv only in `prepareReviewCheckout`'s detached head checkout, with `verifyEnvironment` and per-command timeouts. Results and `observe.evidence` events are scenario/head-bound; output folders are replaced per run. Callers own the returned checkout and must release it after judging. Review checkout release shares `prepareWorktreeRemoval`'s non-recursive link guard and retains the checkout on unsafe cleanup or Git removal failure.
 
 - **Observe ticket configuration (#215)**: `observe` is validated and projected with v2 metadata, outside marker identities; planning requires config `evidence`. `loadConfig` validates evidence argv/setup and resolves evidence storage outside the canonical checkout; pack briefs expose scenario commands through `ticket.observe`. This ticket configures evidence only; execution and judging are separate work.

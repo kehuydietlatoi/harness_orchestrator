@@ -1,0 +1,4 @@
+The state reports health 100; the screenshot shows readable health text.
+```json
+{"gate":"observe","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","overall":"verified","lines":[{"acceptance":"Observe: health is readable","verdict":"verified","evidence":["shots/health.png","state/health.json#health"],"note":"Health is 100 and readable."}],"concerns":[]}
+```
