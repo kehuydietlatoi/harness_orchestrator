@@ -296,6 +296,7 @@ export const EDGES: readonly FlowEdge[] = [
   edge("auto.decide", "step.escalate", "worker diff violates scope", "escalation"),
   edge("step.escalate", "auto.handoff", "label + PR comment", "escalation"),
   edge("auto.handoff", "step.none", "loop ignores the task until handed back", "escalation"),
+  edge("step.none", "auto.observe", "human handback: retry observe", "autopilot-fix", "escalation"),
   edge("auto.decide", "auto.report", "drained or plan-complete", "report"),
   // recovery
   edge("state.needs-attention", "rec.repair", "human runs orch repair", "repair", "failure-recovery"),

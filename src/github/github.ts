@@ -148,6 +148,23 @@ export async function listIssues(
   return items.filter((o) => !o.pull_request).map(parseRestIssue);
 }
 
+/** Read all issue events: a later handback can be beyond the first page. */
+export async function latestLabelRemoval(number: number, label: string, opts: { cwd?: string } = {}): Promise<string | null> {
+  const events = await paginatedApi<{ event: string; label?: { name: string }; created_at?: string }>(
+    `repos/{owner}/{repo}/issues/${number}/events`, {}, opts);
+  let latest: string | null = null;
+  for (const event of events) {
+    if (event.event !== "unlabeled") continue;
+    if (typeof event.label?.name !== "string") throw new Error("Invalid issue label event");
+    if (event.label.name !== label) continue;
+    if (typeof event.created_at !== "string" || !Number.isFinite(Date.parse(event.created_at))) {
+      throw new Error("Invalid issue label removal time");
+    }
+    if (!latest || Date.parse(event.created_at) > Date.parse(latest)) latest = event.created_at;
+  }
+  return latest;
+}
+
 export async function getIssue(number: number, opts: { cwd?: string } = {}): Promise<Issue> {
   const r = await exec("gh", ["issue", "view", String(number), "--json", ISSUE_FIELDS], {
     cwd: opts.cwd,

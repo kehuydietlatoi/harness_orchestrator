@@ -15,7 +15,8 @@ const obs: TaskObservation = { issue, pr, author: "claude", reviews: [], feedbac
   review: { approved: false, changesRequested: false }, rounds: 0, maxRounds: 3, requireHumanMerge: false,
 }, step: { kind: "observe" } };
 const record: ObserveRecord = { pr: 300, sha, overall: "verified", lines: [{ acceptance: "Observe: button is visible", verdict: "verified", evidence: ["shots/menu.png"], note: "Visible" }], concerns: [] };
-const comment = (r = record, id = 1) => ({ id, created_at: "", body: formatObserveComment(r, ["evidence/menu"]) });
+const recordedAt = "2026-10-20T10:00:00Z";
+const comment = (r = record, id = 1, created_at = recordedAt) => ({ id, created_at, body: formatObserveComment(r, ["evidence/menu"]) });
 
 function fake() {
   const release = vi.fn(async () => {});
@@ -82,6 +83,7 @@ describe("observe record and observation", () => {
     return { listIssues: vi.fn(async () => [issue]), listOpenPrs: vi.fn(async () => [pr]), listPrReviews: vi.fn(async () => []),
       prChecksState: vi.fn(async () => "pass"), prMergeability: vi.fn(async () => "clean"),
       observeStatus: vi.fn(async () => "success"), listPrComments: vi.fn(async () => [comment()]),
+      latestLabelRemoval: vi.fn(async () => null),
       editIssue: vi.fn(), closeIssue: vi.fn(), commentOnPr: vi.fn() };
   }
   it("uses current-head status and comment; older verified records are missing", async () => {
@@ -89,6 +91,52 @@ describe("observe record and observation", () => {
     expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observe?.state).toBe("verified");
     b.listPrComments = async () => [comment({ ...record, sha: "b".repeat(40) })];
     expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].step.kind).toBe("observe");
+  });
+  it.each(["verifier-blocked", "inconclusive"] as const)("reruns %s once on the same SHA after handback", async overall => {
+    const b = board();
+    const blocked = { ...record, overall };
+    b.observeStatus = async () => "failure";
+    b.listPrComments = async () => [comment(blocked)];
+    b.latestLabelRemoval = vi.fn(async () => "2026-10-20T11:00:00Z");
+    const task = (await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0];
+    expect(task.facts.observe?.state).toBe("missing");
+    expect(task.step.kind).toBe("observe");
+    expect(task.pr.headSha).toBe(sha);
+    expect(b.latestLabelRemoval).toHaveBeenCalledWith(issue.number, "needs-attention", { cwd: "." });
+    // A fresh blocked result consumes that handback without a new commit.
+    b.listPrComments = async () => [comment(blocked), comment(blocked, 2, "2026-10-20T12:00:00Z")];
+    const rerun = (await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0];
+    expect(rerun.facts.observe?.state).toBe("blocked");
+    expect(rerun.step.kind).toBe("escalate");
+  });
+  it.each([null, "2026-10-20T09:00:00Z", recordedAt])("keeps blocked without a strictly later handback (%s)", async removedAt => {
+    const b = board();
+    b.observeStatus = async () => "failure";
+    b.listPrComments = async () => [comment({ ...record, overall: "verifier-blocked", evidenceError: "setup failed" })];
+    b.latestLabelRemoval = vi.fn(async () => removedAt);
+    const task = (await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0];
+    expect(task.facts.observe?.state).toBe("blocked");
+    expect(task.step.kind).toBe("escalate");
+  });
+  it("leaves blocked PRs unobserved when handback events cannot be read", async () => {
+    const b = board();
+    b.observeStatus = async () => "failure";
+    b.listPrComments = async () => [comment({ ...record, overall: "verifier-blocked" })];
+    b.latestLabelRemoval = async () => { throw new Error("offline"); };
+    const seen = await observeTasks(DEFAULT_CONFIG, ".", {}, b);
+    expect(seen.tasks).toEqual([]);
+    expect(seen.unobserved).toEqual([300]);
+  });
+  it("reads no handback events for verified, not-verified, missing or stale records", async () => {
+    for (const overall of ["verified", "not-verified", "missing", "stale"] as const) {
+      const b = board();
+      b.observeStatus = async () => overall === "verified" ? "success" : "failure";
+      b.listPrComments = async () => overall === "missing" ? [] : [comment({ ...record,
+        overall: overall === "stale" ? "verifier-blocked" : overall,
+        sha: overall === "stale" ? "b".repeat(40) : sha })];
+      await observeTasks(DEFAULT_CONFIG, ".", {}, b);
+      expect(b.latestLabelRemoval).not.toHaveBeenCalled();
+    }
   });
   it("unreadable status or comments makes the PR unobserved", async () => {
     for (const key of ["observeStatus", "listPrComments"] as const) {
