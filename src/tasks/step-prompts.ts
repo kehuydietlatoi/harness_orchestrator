@@ -18,7 +18,7 @@ export function formatFixPrompt(params: {
   issue: Pick<Issue, "number" | "title" | "body">;
   pr: Pick<Pr, "number" | "headRefName">;
   worktree: string;
-  reason: "review" | "ci";
+  reason: "review" | "ci" | "observe";
   notes: string | null;
   failingChecks: readonly string[];
   resumed: boolean;
@@ -28,7 +28,9 @@ export function formatFixPrompt(params: {
 }): string {
   const { issue, pr, worktree, reason, notes, failingChecks, resumed, baseName, leadGuidance } = params;
   const why =
-    reason === "review"
+    reason === "observe"
+      ? ["Observe acceptance was not verified:", "", notes?.trim() || "Re-read the observe verdict on the PR."]
+      : reason === "review"
       ? ["A reviewer requested changes on your pull request:", "", notes?.trim() || "(the reviewer left no notes - re-read the diff critically)"]
       : [
           "Your pull request's CI is failing.",

@@ -1,4 +1,9 @@
 import { BudgetSpentError, runBudget } from "./budget-runtime.js";
+import { runEvidence } from "./evidence.js";
+import { runObserveJudge } from "./observe-judge.js";
+import { formatObserveComment, type ObserveRecord } from "./observe-record.js";
+import { parseTicketV2 } from "./plan.js";
+import { setObserveStatus } from "../github/github.js";
 import { ScopeRejected } from "./scope-guard.js";
 import { cascadeRequeue } from "./cascade-requeue.js";
 import { appendEvent } from "./events.js";
@@ -32,6 +37,7 @@ import { formatTriageComment, formatTriagePrompt, parseTriageDecision, type Tria
 
 /** The outcome of one step. The coordinator logs it and re-observes; it never trusts it as state. */
 export type Signal =
+  | "observe.finished"
   | "review.approved"
   | "review.changes_requested"
   | "fix.pushed"
@@ -105,6 +111,51 @@ export async function executeReview(obs: TaskObservation, cfg: OrchConfig, cwd: 
     if (error instanceof ScopeRejected) return { signal: "task.escalated", detail };
     if (error instanceof BudgetSpentError) return executeEscalate(obs, "budget spent", cwd);
     return error instanceof NoReviewerError ? { signal: "agent.unavailable", detail } : failure(detail);
+  }
+}
+
+export interface ObserveEnv {
+  evidence: typeof runEvidence;
+  judge: typeof runObserveJudge;
+  headOf(pr: number): Promise<string>;
+  status(sha: string, state: "success" | "failure", description: string): Promise<void>;
+  comment(pr: number, body: string): Promise<void>;
+}
+
+export async function executeObserve(obs: TaskObservation, cfg: OrchConfig, cwd: string, env: ObserveEnv = {
+  evidence: runEvidence, judge: runObserveJudge,
+  headOf: async pr => (await getPr(pr, { cwd })).headSha,
+  status: (sha, state, description) => setObserveStatus(sha, state, description, { cwd }),
+  comment: (pr, body) => commentOnPr(pr, body, { cwd }),
+}): Promise<StepResult> {
+  let evidence: Awaited<ReturnType<typeof runEvidence>> | undefined;
+  const record: ObserveRecord = { pr: obs.pr.number, sha: obs.pr.headSha, overall: "verifier-blocked", lines: [], concerns: [] };
+  try {
+    try {
+      evidence = await env.evidence({ cfg, cwd, issue: obs.issue.number, prNumber: obs.pr.number,
+        sha: obs.pr.headSha, scenarios: parseTicketV2(obs.issue.body).observe ?? [] });
+      const errors = evidence.results.filter(r => r.status !== "ok").map(r => `${r.scenario}: ${r.error ?? "evidence failed"}`);
+      if (errors.length) record.evidenceError = errors.join("\n");
+      else {
+        const acceptance = obs.issue.body.split(/\r?\n/).map(l => l.replace(/^\s*[-*]\s+(?:\[[ xX]\]\s*)?/, "").trim()).filter(l => l.startsWith("Observe:"));
+        const result = await env.judge({ cfg, cwd, issue: obs.issue, prNumber: obs.pr.number, sha: obs.pr.headSha,
+          author: obs.author, acceptance, checkout: evidence.checkout, results: evidence.results });
+        if (result.kind === "verdict") {
+          record.overall = result.verdict.overall;
+          record.lines = result.verdict.lines;
+          record.concerns = result.verdict.concerns;
+        }
+        else record.concerns = [result.reason];
+      }
+    } catch (error) { record.evidenceError = error instanceof Error ? error.message : String(error); }
+    if (await env.headOf(obs.pr.number) !== obs.pr.headSha) return failure("PR head moved during observe; it will be observed again");
+    await env.status(obs.pr.headSha, record.overall === "verified" ? "success" : "failure", record.overall);
+    if (await env.headOf(obs.pr.number) !== obs.pr.headSha) return failure("PR head moved before observe comment");
+    await env.comment(obs.pr.number, formatObserveComment(record, evidence?.results.map(r => r.outDir) ?? []));
+    return { signal: "observe.finished", detail: record.overall };
+  } catch (error) { return failure(error instanceof Error ? error.message : String(error)); }
+  finally {
+    if (evidence) await evidence.checkout.release().catch(error => log.warn(`could not remove observe checkout ${evidence!.checkout.path}: ${String(error)}`));
   }
 }
 
@@ -223,7 +274,7 @@ function followUpLog(cwd: string, issue: number, tag: string): string {
  */
 export async function executeFix(
   obs: TaskObservation,
-  reason: "review" | "ci",
+  reason: "review" | "ci" | "observe",
   cfg: OrchConfig,
   cwd: string,
   env: StepEnv = defaultEnv(cfg),
@@ -243,7 +294,7 @@ export async function executeFix(
   const round = obs.facts.rounds + 1;
   const prompt = (resumed: boolean): string =>
     formatFixPrompt({
-      issue: obs.issue, pr: obs.pr, worktree, reason, notes: obs.feedback, failingChecks: failing,
+      issue: obs.issue, pr: obs.pr, worktree, reason, notes: reason === "observe" ? obs.observeFeedback ?? null : obs.feedback, failingChecks: failing,
       resumed, baseName: base.name, leadGuidance: obs.guidance,
     });
 

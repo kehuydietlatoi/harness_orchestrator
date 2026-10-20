@@ -64,29 +64,30 @@ flowchart LR
     n42["Observe PRs"]
     n43{"Decide step"}
     n44(["none"])
-    n45["review"]
-    n46["fix"]
-    n47["resolve-conflict"]
-    n48["Push + requeue review"]
-    n49["wait"]
-    n50(["await-human"])
-    n51["merge"]
-    n52["cascade"]
-    n53["triage"]
-    n54["escalate"]
-    n55(["Human handoff"])
-    n56(["Run report"])
+    n45["observe"]
+    n46["review"]
+    n47["fix"]
+    n48["resolve-conflict"]
+    n49["Push + requeue review"]
+    n50["wait"]
+    n51(["await-human"])
+    n52["merge"]
+    n53["cascade"]
+    n54["triage"]
+    n55["escalate"]
+    n56(["Human handoff"])
+    n57(["Run report"])
   end
   subgraph lane_recovery["Recovery"]
-    n57["needs-attention"]
-    n58["orch repair"]
-    n59{"Project state"}
-    n60["inconsistent"]
-    n61["orch abandon"]
-    n62{"Safe to remove?"}
-    n63(["Retained + named"])
-    n64["--discard"]
-    n65{"Back to todo"}
+    n58["needs-attention"]
+    n59["orch repair"]
+    n60{"Project state"}
+    n61["inconsistent"]
+    n62["orch abandon"]
+    n63{"Safe to remove?"}
+    n64(["Retained + named"])
+    n65["--discard"]
+    n66{"Back to todo"}
   end
   n0 -->|"tickets.json written"| n3
   n3 -->|"errors block"| n4
@@ -113,7 +114,7 @@ flowchart LR
   n18 -->|"step failed"| n19
   n19 -->|"verified: delta restored, own lock deleted"| n16
   n19 -->|"worktree usable and projection proven: roll forward"| n20
-  n19 -->|"unverifiable: ownership retained"| n63
+  n19 -->|"unverifiable: ownership retained"| n64
   n20 -->|"start-work"| n21
   n21 -->|"harness exits"| n22
   n22 -->|"commits made"| n23
@@ -122,13 +123,13 @@ flowchart LR
   n22 -->|"no commits"| n25
   n24 -->|"safe cleanup"| n26
   n25 -->|"safe cleanup"| n26
-  n26 -->|"worktree removed: failure telemetry"| n57
-  n26 -->|"work retained + failure telemetry"| n60
+  n26 -->|"worktree removed: failure telemetry"| n58
+  n26 -->|"work retained + failure telemetry"| n61
   n22 -->|"own log shows a limit"| n27
   n27 -->|"no commits, no open PR, worktree removed, lock released"| n28
   n27 -->|"requeue guard failed: commits ahead, open PR, worktree retained or lock not released"| n24
   n28 -->|"status:todo, harness paused"| n16
-  n28 -->|"autopilot: agent.unavailable"| n49
+  n28 -->|"autopilot: agent.unavailable"| n50
   n29 -->|"review:needed"| n30
   n30 -->|"other harness available"| n31
   n30 -->|"all others paused (cross-or-self)"| n32
@@ -145,54 +146,58 @@ flowchart LR
   n38 -->|"stale head or no accepted approval"| n29
   n39 -->|"merged, lock released"| n41
   n41 -->|"worktree removed: resources released"| n40
-  n41 -->|"worktree retained, lock released"| n60
+  n41 -->|"worktree retained, lock released"| n61
   n29 -->|"autopilot polls open PRs"| n42
   n21 -->|"autopilot polls author bounce"| n42
   n42 -->|"observed facts"| n43
   n43 -->|"needs-attention or no PR"| n44
-  n43 -->|"no accepted approval"| n45
-  n45 -->|"runs the reviewer"| n30
-  n43 -->|"changes requested"| n46
-  n43 -->|"CI failing"| n46
-  n46 -->|"agent fixed, orch pushes"| n48
-  n43 -->|"branch conflicts with base"| n47
-  n47 -->|"base merged, ancestor verified"| n48
-  n48 -->|"review:needed restored"| n29
-  n43 -->|"CI pending or mergeability unknown"| n49
-  n49 -->|"poll again"| n42
-  n43 -->|"approved and green"| n51
-  n43 -->|"requireHumanMerge"| n50
-  n50 -->|"human runs orch merge"| n38
-  n51 -->|"always through the gate"| n38
-  n43 -->|"failed fix, next member available"| n52
-  n52 -->|"route relabelled, hop recorded"| n42
-  n43 -->|"budget spent, triages left"| n53
-  n53 -->|"retry: guidance recorded, re-observe"| n42
-  n53 -->|"escalate, paused, failed or unparseable"| n54
-  n43 -->|"budget spent, no triage left (spent or off)"| n54
-  n43 -->|"ticket budget spent"| n54
-  n43 -->|"worker diff violates scope"| n54
-  n54 -->|"label + PR comment"| n55
-  n55 -->|"loop ignores the task until handed back"| n44
-  n43 -->|"drained or plan-complete"| n56
-  n57 -->|"human runs orch repair"| n58
-  n58 -->|"observe facts"| n59
-  n59 -->|"converged: reset for retry"| n16
-  n59 -->|"lock and worktree restored, no work yet"| n20
-  n59 -->|"work ahead under the lock, or changes requested on the open PR"| n21
-  n59 -->|"open PR: review projections restored"| n29
-  n59 -->|"merged: issue closed, retained resources safely removed"| n40
-  n59 -->|"closed PR or unresolved run: still a human's"| n57
-  n59 -->|"invariant violated or work preserved"| n60
-  n60 -->|"--apply one action, re-observe"| n58
-  n57 -->|"orch abandon #60;n#62;"| n61
-  n61 -->|"plain abandon: safe removal"| n62
-  n62 -->|"clean: removed, lock released"| n65
-  n62 -->|"dirty or untracked: retained"| n63
-  n61 -->|"--discard (human explicit)"| n64
-  n64 -->|"force removed, lock released"| n65
-  n65 -->|"no failure telemetry, no commits ahead"| n16
-  n65 -->|"failure telemetry remains or commits ahead"| n57
+  n43 -->|"observe missing"| n45
+  n45 -->|"status and verdict recorded"| n42
+  n43 -->|"observe not verified"| n47
+  n43 -->|"observe blocked"| n55
+  n43 -->|"no accepted approval"| n46
+  n46 -->|"runs the reviewer"| n30
+  n43 -->|"changes requested"| n47
+  n43 -->|"CI failing"| n47
+  n47 -->|"agent fixed, orch pushes"| n49
+  n43 -->|"branch conflicts with base"| n48
+  n48 -->|"base merged, ancestor verified"| n49
+  n49 -->|"review:needed restored"| n29
+  n43 -->|"CI pending or mergeability unknown"| n50
+  n50 -->|"poll again"| n42
+  n43 -->|"approved and green"| n52
+  n43 -->|"requireHumanMerge"| n51
+  n51 -->|"human runs orch merge"| n38
+  n52 -->|"always through the gate"| n38
+  n43 -->|"failed fix, next member available"| n53
+  n53 -->|"route relabelled, hop recorded"| n42
+  n43 -->|"budget spent, triages left"| n54
+  n54 -->|"retry: guidance recorded, re-observe"| n42
+  n54 -->|"escalate, paused, failed or unparseable"| n55
+  n43 -->|"budget spent, no triage left (spent or off)"| n55
+  n43 -->|"ticket budget spent"| n55
+  n43 -->|"worker diff violates scope"| n55
+  n55 -->|"label + PR comment"| n56
+  n56 -->|"loop ignores the task until handed back"| n44
+  n43 -->|"drained or plan-complete"| n57
+  n58 -->|"human runs orch repair"| n59
+  n59 -->|"observe facts"| n60
+  n60 -->|"converged: reset for retry"| n16
+  n60 -->|"lock and worktree restored, no work yet"| n20
+  n60 -->|"work ahead under the lock, or changes requested on the open PR"| n21
+  n60 -->|"open PR: review projections restored"| n29
+  n60 -->|"merged: issue closed, retained resources safely removed"| n40
+  n60 -->|"closed PR or unresolved run: still a human's"| n58
+  n60 -->|"invariant violated or work preserved"| n61
+  n61 -->|"--apply one action, re-observe"| n59
+  n58 -->|"orch abandon #60;n#62;"| n62
+  n62 -->|"plain abandon: safe removal"| n63
+  n63 -->|"clean: removed, lock released"| n66
+  n63 -->|"dirty or untracked: retained"| n64
+  n62 -->|"--discard (human explicit)"| n65
+  n65 -->|"force removed, lock released"| n66
+  n66 -->|"no failure telemetry, no commits ahead"| n16
+  n66 -->|"failure telemetry remains or commits ahead"| n58
 ```
 
 ## Plan to issues
@@ -295,7 +300,7 @@ flowchart LR
     n22{"Run outcome"}
     n23["Submit"]
     n29["in-review"]
-    n63(["Retained + named"])
+    n64(["Retained + named"])
   n16 -->|"next / run / autopilot"| n12
   n14 -->|"lowest preference first"| n17
   n17 -->|"lock + projection + worktree"| n18
@@ -303,7 +308,7 @@ flowchart LR
   n18 -->|"step failed"| n19
   n19 -->|"verified: delta restored, own lock deleted"| n16
   n19 -->|"worktree usable and projection proven: roll forward"| n20
-  n19 -->|"unverifiable: ownership retained"| n63
+  n19 -->|"unverifiable: ownership retained"| n64
   n20 -->|"start-work"| n21
   n21 -->|"harness exits"| n22
   n22 -->|"commits made"| n23
@@ -350,8 +355,8 @@ flowchart LR
     n40["done"]
     n41{"Safe cleanup"}
     n43{"Decide step"}
-    n45["review"]
-    n60["inconsistent"]
+    n46["review"]
+    n61["inconsistent"]
   n29 -->|"review:needed"| n30
   n30 -->|"other harness available"| n31
   n31 -->|"read-only checkout of the head"| n33
@@ -366,9 +371,9 @@ flowchart LR
   n38 -->|"stale head or no accepted approval"| n29
   n39 -->|"merged, lock released"| n41
   n41 -->|"worktree removed: resources released"| n40
-  n41 -->|"worktree retained, lock released"| n60
-  n43 -->|"no accepted approval"| n45
-  n45 -->|"runs the reviewer"| n30
+  n41 -->|"worktree retained, lock released"| n61
+  n43 -->|"no accepted approval"| n46
+  n46 -->|"runs the reviewer"| n30
 ```
 
 Code references:
@@ -408,29 +413,33 @@ flowchart LR
     n42["Observe PRs"]
     n43{"Decide step"}
     n44(["none"])
-    n45["review"]
-    n46["fix"]
-    n48["Push + requeue review"]
-    n49["wait"]
-    n50(["await-human"])
-    n51["merge"]
-    n52["cascade"]
+    n45["observe"]
+    n46["review"]
+    n47["fix"]
+    n49["Push + requeue review"]
+    n50["wait"]
+    n51(["await-human"])
+    n52["merge"]
+    n53["cascade"]
   n29 -->|"autopilot polls open PRs"| n42
   n21 -->|"autopilot polls author bounce"| n42
   n42 -->|"observed facts"| n43
   n43 -->|"needs-attention or no PR"| n44
-  n43 -->|"no accepted approval"| n45
-  n43 -->|"changes requested"| n46
-  n46 -->|"agent fixed, orch pushes"| n48
-  n48 -->|"review:needed restored"| n29
-  n43 -->|"CI pending or mergeability unknown"| n49
-  n49 -->|"poll again"| n42
-  n43 -->|"approved and green"| n51
-  n43 -->|"requireHumanMerge"| n50
-  n50 -->|"human runs orch merge"| n38
-  n51 -->|"always through the gate"| n38
-  n43 -->|"failed fix, next member available"| n52
-  n52 -->|"route relabelled, hop recorded"| n42
+  n43 -->|"observe missing"| n45
+  n45 -->|"status and verdict recorded"| n42
+  n43 -->|"observe not verified"| n47
+  n43 -->|"no accepted approval"| n46
+  n43 -->|"changes requested"| n47
+  n47 -->|"agent fixed, orch pushes"| n49
+  n49 -->|"review:needed restored"| n29
+  n43 -->|"CI pending or mergeability unknown"| n50
+  n50 -->|"poll again"| n42
+  n43 -->|"approved and green"| n52
+  n43 -->|"requireHumanMerge"| n51
+  n51 -->|"human runs orch merge"| n38
+  n52 -->|"always through the gate"| n38
+  n43 -->|"failed fix, next member available"| n53
+  n53 -->|"route relabelled, hop recorded"| n42
 ```
 
 Code references:
@@ -439,6 +448,7 @@ Code references:
 - [src/board/review.ts](../src/board/review.ts) — `checkMergeGate`
 - [src/tasks/observe.ts](../src/tasks/observe.ts) — `observeTasks`
 - [src/tasks/steps.ts](../src/tasks/steps.ts) — `decideStep`
+- [src/tasks/step-exec.ts](../src/tasks/step-exec.ts) — `executeObserve`
 - [src/board/review-run.ts](../src/board/review-run.ts) — `runAutomatedReview`
 - [src/tasks/step-exec.ts](../src/tasks/step-exec.ts) — `executeFix`
 - [src/board/review.ts](../src/board/review.ts) — `merge`
@@ -449,6 +459,7 @@ Scenarios:
 - **Changes, resumed fix, re-review, merge** (`autopilot-review-fix`): The loop re-derives each step from observed facts and reviews every changed head before merging.
 - **Wait for CI** (`autopilot-wait-ci`): An approved head waits for external facts to settle.
 - **Wait for mergeability** (`autopilot-wait-mergeability`): An approved head waits for external facts to settle.
+- **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
 - **Cascade after a failed fix** (`autopilot-cascade`): One failed fix switches to the next configured model before retrying.
 - **Human merge required** (`autopilot-await-human`): An approved green PR waits for the configured human merge gate.
 - **Ambiguous twin PRs** (`autopilot-ambiguous`): Twin PRs are reported and neither is driven.
@@ -465,11 +476,11 @@ Design: [ADR-0009](adr/0009-autonomous-task-loop.md)
 flowchart LR
     n29["in-review"]
     n43{"Decide step"}
-    n46["fix"]
-    n48["Push + requeue review"]
-  n43 -->|"CI failing"| n46
-  n46 -->|"agent fixed, orch pushes"| n48
-  n48 -->|"review:needed restored"| n29
+    n47["fix"]
+    n49["Push + requeue review"]
+  n43 -->|"CI failing"| n47
+  n47 -->|"agent fixed, orch pushes"| n49
+  n49 -->|"review:needed restored"| n29
 ```
 
 Code references:
@@ -492,11 +503,11 @@ Design: [ADR-0009](adr/0009-autonomous-task-loop.md)
 flowchart LR
     n29["in-review"]
     n43{"Decide step"}
-    n47["resolve-conflict"]
-    n48["Push + requeue review"]
-  n43 -->|"branch conflicts with base"| n47
-  n47 -->|"base merged, ancestor verified"| n48
-  n48 -->|"review:needed restored"| n29
+    n48["resolve-conflict"]
+    n49["Push + requeue review"]
+  n43 -->|"branch conflicts with base"| n48
+  n48 -->|"base merged, ancestor verified"| n49
+  n49 -->|"review:needed restored"| n29
 ```
 
 Code references:
@@ -520,11 +531,11 @@ Design: [ADR-0010](adr/0010-lead-at-decision-points.md)
 flowchart LR
     n42["Observe PRs"]
     n43{"Decide step"}
-    n53["triage"]
-    n54["escalate"]
-  n43 -->|"budget spent, triages left"| n53
-  n53 -->|"retry: guidance recorded, re-observe"| n42
-  n53 -->|"escalate, paused, failed or unparseable"| n54
+    n54["triage"]
+    n55["escalate"]
+  n43 -->|"budget spent, triages left"| n54
+  n54 -->|"retry: guidance recorded, re-observe"| n42
+  n54 -->|"escalate, paused, failed or unparseable"| n55
 ```
 
 Code references:
@@ -550,15 +561,16 @@ Design: [ADR-0009](adr/0009-autonomous-task-loop.md)
 flowchart LR
     n43{"Decide step"}
     n44(["none"])
-    n53["triage"]
-    n54["escalate"]
-    n55(["Human handoff"])
-  n53 -->|"escalate, paused, failed or unparseable"| n54
-  n43 -->|"budget spent, no triage left (spent or off)"| n54
-  n43 -->|"ticket budget spent"| n54
-  n43 -->|"worker diff violates scope"| n54
-  n54 -->|"label + PR comment"| n55
-  n55 -->|"loop ignores the task until handed back"| n44
+    n54["triage"]
+    n55["escalate"]
+    n56(["Human handoff"])
+  n43 -->|"observe blocked"| n55
+  n54 -->|"escalate, paused, failed or unparseable"| n55
+  n43 -->|"budget spent, no triage left (spent or off)"| n55
+  n43 -->|"ticket budget spent"| n55
+  n43 -->|"worker diff violates scope"| n55
+  n55 -->|"label + PR comment"| n56
+  n56 -->|"loop ignores the task until handed back"| n44
 ```
 
 Code references:
@@ -569,6 +581,7 @@ Code references:
 
 Scenarios:
 
+- **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
 - **Ticket budget spent** (`autopilot-budget-spent`): Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.
 - **Worker diff outside role scope** (`autopilot-scope-rejected`): A worker pushed a forbidden path without orch submit; no review starts and the worktree is retained.
 - **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.
@@ -588,12 +601,12 @@ flowchart LR
     n24["Run failed"]
     n27{"Usage limit?"}
     n28["Requeue"]
-    n49["wait"]
+    n50["wait"]
   n22 -->|"own log shows a limit"| n27
   n27 -->|"no commits, no open PR, worktree removed, lock released"| n28
   n27 -->|"requeue guard failed: commits ahead, open PR, worktree retained or lock not released"| n24
   n28 -->|"status:todo, harness paused"| n16
-  n28 -->|"autopilot: agent.unavailable"| n49
+  n28 -->|"autopilot: agent.unavailable"| n50
 ```
 
 Code references:
@@ -655,20 +668,20 @@ flowchart LR
     n26{"Safe cleanup"}
     n27{"Usage limit?"}
     n41{"Safe cleanup"}
-    n57["needs-attention"]
-    n58["orch repair"]
-    n60["inconsistent"]
-    n63(["Retained + named"])
-  n19 -->|"unverifiable: ownership retained"| n63
+    n58["needs-attention"]
+    n59["orch repair"]
+    n61["inconsistent"]
+    n64(["Retained + named"])
+  n19 -->|"unverifiable: ownership retained"| n64
   n22 -->|"non-zero exit"| n24
   n22 -->|"no commits"| n25
   n24 -->|"safe cleanup"| n26
   n25 -->|"safe cleanup"| n26
-  n26 -->|"worktree removed: failure telemetry"| n57
-  n26 -->|"work retained + failure telemetry"| n60
+  n26 -->|"worktree removed: failure telemetry"| n58
+  n26 -->|"work retained + failure telemetry"| n61
   n27 -->|"requeue guard failed: commits ahead, open PR, worktree retained or lock not released"| n24
-  n41 -->|"worktree retained, lock released"| n60
-  n57 -->|"human runs orch repair"| n58
+  n41 -->|"worktree retained, lock released"| n61
+  n58 -->|"human runs orch repair"| n59
 ```
 
 Code references:
@@ -710,20 +723,20 @@ flowchart LR
     n21["in-progress"]
     n29["in-review"]
     n40["done"]
-    n57["needs-attention"]
-    n58["orch repair"]
-    n59{"Project state"}
-    n60["inconsistent"]
-  n57 -->|"human runs orch repair"| n58
-  n58 -->|"observe facts"| n59
-  n59 -->|"converged: reset for retry"| n16
-  n59 -->|"lock and worktree restored, no work yet"| n20
-  n59 -->|"work ahead under the lock, or changes requested on the open PR"| n21
-  n59 -->|"open PR: review projections restored"| n29
-  n59 -->|"merged: issue closed, retained resources safely removed"| n40
-  n59 -->|"closed PR or unresolved run: still a human's"| n57
-  n59 -->|"invariant violated or work preserved"| n60
-  n60 -->|"--apply one action, re-observe"| n58
+    n58["needs-attention"]
+    n59["orch repair"]
+    n60{"Project state"}
+    n61["inconsistent"]
+  n58 -->|"human runs orch repair"| n59
+  n59 -->|"observe facts"| n60
+  n60 -->|"converged: reset for retry"| n16
+  n60 -->|"lock and worktree restored, no work yet"| n20
+  n60 -->|"work ahead under the lock, or changes requested on the open PR"| n21
+  n60 -->|"open PR: review projections restored"| n29
+  n60 -->|"merged: issue closed, retained resources safely removed"| n40
+  n60 -->|"closed PR or unresolved run: still a human's"| n58
+  n60 -->|"invariant violated or work preserved"| n61
+  n61 -->|"--apply one action, re-observe"| n59
 ```
 
 Code references:
@@ -752,20 +765,20 @@ Design: [ADR-0006](adr/0006-recoverable-task-lifecycle.md)
 ```mermaid
 flowchart LR
     n16["ready"]
-    n57["needs-attention"]
-    n61["orch abandon"]
-    n62{"Safe to remove?"}
-    n63(["Retained + named"])
-    n64["--discard"]
-    n65{"Back to todo"}
-  n57 -->|"orch abandon #60;n#62;"| n61
-  n61 -->|"plain abandon: safe removal"| n62
-  n62 -->|"clean: removed, lock released"| n65
-  n62 -->|"dirty or untracked: retained"| n63
-  n61 -->|"--discard (human explicit)"| n64
-  n64 -->|"force removed, lock released"| n65
-  n65 -->|"no failure telemetry, no commits ahead"| n16
-  n65 -->|"failure telemetry remains or commits ahead"| n57
+    n58["needs-attention"]
+    n62["orch abandon"]
+    n63{"Safe to remove?"}
+    n64(["Retained + named"])
+    n65["--discard"]
+    n66{"Back to todo"}
+  n58 -->|"orch abandon #60;n#62;"| n62
+  n62 -->|"plain abandon: safe removal"| n63
+  n63 -->|"clean: removed, lock released"| n66
+  n63 -->|"dirty or untracked: retained"| n64
+  n62 -->|"--discard (human explicit)"| n65
+  n65 -->|"force removed, lock released"| n66
+  n66 -->|"no failure telemetry, no commits ahead"| n16
+  n66 -->|"failure telemetry remains or commits ahead"| n58
 ```
 
 Code references:
@@ -842,8 +855,8 @@ Design: [ADR-0009](adr/0009-autonomous-task-loop.md)
 ```mermaid
 flowchart LR
     n43{"Decide step"}
-    n56(["Run report"])
-  n43 -->|"drained or plan-complete"| n56
+    n57(["Run report"])
+  n43 -->|"drained or plan-complete"| n57
 ```
 
 Code references:

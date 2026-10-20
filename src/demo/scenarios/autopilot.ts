@@ -40,7 +40,7 @@ class Walk {
     this.to("auto.decide", "Re-observe the current head, review, CI and budgets; signals alone never authorize work.", observation);
     const result = decide("decideStep", decideStep, input);
     this.to(`step.${result.output.kind}`, `decideStep chooses ${JSON.stringify(result.output)}.`, result.decision,
-      result.output.kind === "escalate" ? input.scopeFailure ? "worker diff violates scope" : input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
+      result.output.kind === "escalate" ? input.observe?.state === "blocked" ? "observe blocked" : input.scopeFailure ? "worker diff violates scope" : input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : result.output.reason === "observe" ? "observe not verified" : "changes requested" : undefined);
     return result.output;
   }
   review(changes: boolean): void {
@@ -173,11 +173,22 @@ cascade.to("auto.observe", "Replace the routing labels and record cascade.hop, r
 cascade.step(facts({ review: { approved: false, changesRequested: true } }));
 cascade.push();
 
+const observe = new Walk("autopilot-observe", "Observe evidence before review", ["autopilot-fix", "escalation"], "Only observe tickets run head-bound evidence and an independent vision judge.");
+observe.step(facts({ observe: { required: true, state: "missing" } }));
+observe.to("auto.observe", "Run scenarios, judge the evidence, write studio/observe and the head-bound verdict comment, release the checkout.");
+observe.step(facts({ observe: { required: true, state: "not-verified" } }));
+observe.push();
+observe.step(facts({ observe: { required: true, state: "verified" } }));
+observe.review(false);
+const blockedObserve = facts({ observe: { required: true, state: "blocked" }, observeReason: "evidence failed" });
+observe.step(blockedObserve);
+observe.handoff(blockedObserve);
+
 export const AUTOPILOT_SCENARIOS: readonly Scenario[] = [
   fixScenario("autopilot-review-fix", "Changes, resumed fix, re-review, merge", "review"),
   fixScenario("autopilot-ci-fix", "Fix failing CI", "ci"),
   fixScenario("autopilot-conflict", "Merge the base to resolve conflict", "conflict"),
   waitScenario("autopilot-wait-ci", false), waitScenario("autopilot-wait-mergeability", true),
-  capped.b.build(), scoped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
+  observe.b.build(), capped.b.build(), scoped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
   triageScenario("autopilot-triage-escalate", false), triageScenario("autopilot-triage-disabled", false, true), ambiguous,
 ];

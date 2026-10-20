@@ -21,6 +21,31 @@ function facts(over: {
 }
 
 describe("decideStep", () => {
+  it("keeps every ordinary PR combination unchanged when observe is not required", () => {
+    for (const checks of ["pass", "fail", "pending", "none"] as const)
+      for (const mergeable of ["clean", "conflicting", "unknown"] as const)
+        for (const approved of [false, true]) for (const changesRequested of [false, true])
+          for (const rounds of [0, 3]) for (const attention of [false, true]) {
+            const f = facts({ pr: { checks, mergeable }, review: { approved, changesRequested }, rounds, attention });
+            expect(decideStep({ ...f, observe: { required: false, state: "missing" } })).toEqual(decideStep(f));
+          }
+  });
+  it("observes before review and uses the review round budget", () => {
+    const f = (state: NonNullable<StepFacts["observe"]>["state"]): StepFacts => ({ ...facts(), observe: { required: true, state } });
+    expect(decideStep(f("missing"))).toEqual({ kind: "observe" });
+    expect(decideStep(f("verified"))).toEqual({ kind: "review" });
+    expect(decideStep(f("not-verified"))).toEqual({ kind: "fix", reason: "observe" });
+    expect(decideStep({ ...f("blocked"), observeReason: "capture failed" })).toEqual({ kind: "escalate", reason: "capture failed" });
+    expect(decideStep({ ...f("not-verified"), rounds: 3 }).kind).toBe("escalate");
+    expect(decideStep({ ...f("not-verified"), rounds: 3, maxTriages: 1 }).kind).toBe("triage");
+    expect(decideStep({ ...f("missing"), pr: { ...facts().pr!, checks: "pending" } }).kind).toBe("observe");
+    for (const state of ["missing", "verified", "not-verified", "blocked"] as const) {
+      expect(decideStep({ ...f(state), attention: true }).kind).toBe("none");
+      expect(decideStep({ ...f(state), review: { approved: false, changesRequested: true } })).toEqual({ kind: "fix", reason: "review" });
+      expect(decideStep({ ...f(state), pr: { ...facts().pr!, checks: "fail" } })).toEqual({ kind: "fix", reason: "ci" });
+      expect(decideStep({ ...f(state), pr: { ...facts().pr!, mergeable: "conflicting" } }).kind).toBe("resolve-conflict");
+    }
+  });
   it("escalates scope violations ahead of review, fixes, triage or merging", () => {
     for (const over of [{}, { review: { changesRequested: true } }, { review: { approved: true } }, { pr: { checks: "fail" as const } }]) {
       expect(decideStep({ ...facts(over), scopeFailure: "design/a.md: forbidden by design/**", maxTriages: 10 }))
