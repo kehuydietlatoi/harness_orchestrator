@@ -253,7 +253,7 @@ export function assertNoExternalLinks(worktree: string): void {
 }
 
 /** Git for Windows can recurse through junctions, even without --force. */
-function prepareWorktreeRemoval(path: string): boolean {
+export function prepareWorktreeRemoval(path: string): boolean {
   try {
     for (const link of worktreeLinks(path)) {
       try {

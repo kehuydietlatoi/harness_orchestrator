@@ -14,6 +14,7 @@ import { issueScope, scopeFailure, ScopeRejected } from "../tasks/scope-guard.js
 import { hasDefinitionOfDone } from "../tasks/definition-of-done.js";
 import { recordRun, resolveTaskModel } from "../tasks/runner.js";
 import { exec } from "../util/exec.js";
+import { prepareWorktreeRemoval } from "../git/worktree.js";
 import { log } from "../util/log.js";
 import { logSize } from "../util/log-file.js";
 import { normalizeFollowups, withFollowups, type ReviewMode } from "./approval.js";
@@ -247,7 +248,9 @@ export async function prepareReviewCheckout(
 
   const dir = mkdtempSync(join(tmpdir(), `orch-review-${pr.number}-`));
   const release = async (): Promise<void> => {
-    await git(["worktree", "remove", "--force", dir], cwd);
+    if (!prepareWorktreeRemoval(dir)) throw new Error(`could not safely remove review checkout ${dir}`);
+    const removed = await git(["worktree", "remove", "--force", dir], cwd);
+    if (removed.code !== 0) throw new Error(`could not remove review checkout ${dir}: ${removed.stderr.trim()}`);
     rmSync(dir, { recursive: true, force: true });
   };
   try {
