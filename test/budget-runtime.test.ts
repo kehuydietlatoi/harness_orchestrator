@@ -30,4 +30,14 @@ describe("budget execution limits", () => {
     expect(runBudget(capped, DEFAULT_CONFIG, ".").maxBudgetUsd).toBe(2);
     expect(() => runBudget(capped, DEFAULT_CONFIG, ".")).toThrow("budget spent");
   });
+  it("counts flat-rate runs with no reported cost as $0, but keeps unknown API cost fail-closed", () => {
+    const capped = { ...issue, body: "Budget: $2" };
+    vi.mocked(readRuns).mockReturnValue([run({ agent: "codex", costUsd: null }), run({ costUsd: 0.5 })]);
+    expect(issueBudgetStatus(capped, DEFAULT_CONFIG, ".")).toMatchObject({ spent: false, used: { usd: 0.5 }, remaining: { usd: 1.5 } });
+    vi.mocked(readRuns).mockReturnValue([run({ agent: "codex", costUsd: null }), run({ costUsd: null })]);
+    expect(() => runBudget(capped, DEFAULT_CONFIG, ".")).toThrow("budget spent");
+    const apiCodex = { ...DEFAULT_CONFIG, adapters: { ...DEFAULT_CONFIG.adapters, codex: { ...DEFAULT_CONFIG.adapters.codex, pricingMode: "api" as const } } };
+    vi.mocked(readRuns).mockReturnValue([run({ agent: "codex", costUsd: null })]);
+    expect(issueBudgetStatus(capped, apiCodex, ".").spent).toBe(true);
+  });
 });

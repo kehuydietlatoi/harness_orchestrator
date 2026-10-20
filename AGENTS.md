@@ -4,7 +4,7 @@
 > **Work loop:** `orch next --agent <you>` → work in the printed worktree → `orch submit`.
 > **Review:** when `orch review-queue --agent <you>` is non-empty, review the other harness's PRs.
 
-- **Ticket budgets (#126)**: `src/tasks/budget.ts` owns pure budget parsing, precedence (default < effort tier < issue, per dimension), and aggregation over all issue run phases. Unknown cost blocks another run only when USD is capped. Requests count harness invocations; legacy records imply one. Recheck remaining limits before fallback attempts after recording their predecessor; ticket exhaustion bypasses triage.
+- **Ticket budgets (#126)**: `src/tasks/budget.ts` owns pure budget parsing, precedence (default < effort tier < issue, per dimension), and aggregation over all issue run phases. Unknown cost blocks another run only when USD is capped; `issueBudgetStatus` counts a null-cost run as $0 when its agent is not API-billed (`resolvePricingMode`), and `resolvePlan` warns when a USD-capped ticket can go to a flat-rate agent. Requests count harness invocations; legacy records imply one. Recheck remaining limits before fallback attempts after recording their predecessor; ticket exhaustion bypasses triage.
 
 ## Conventions
 
