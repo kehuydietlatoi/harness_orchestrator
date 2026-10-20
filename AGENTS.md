@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Disputed observe verdicts (#234)**: a failed no-commit fix on a current-head `not-verified` verdict permits one same-SHA observe rerun without spending a fix round; two newest consecutive not-verified records escalate with the author's dispute and verdict notes. `observeTasks` counts matching records only for not-verified facts; the coordinator retains the failed observe fix through the rerun. Observe alone never cascades; review, CI, and conflict policy is unchanged.
+
 - **Observe handback (#233)**: a `needs-attention` removal strictly newer than the newest current-head blocked observe comment makes its fact missing, permitting one fresh observe on the same SHA. Issue events are paginated and read only for blocked facts; unreadable events leave the PR unobserved. A newer blocked comment consumes the handback and escalates again.
 
 - **Run process ownership (#231)**: `src/util/process-group.ts` launches harnesses and opt-in `exec({contain:true})` verify/setup/evidence commands through an owned supervisor; await it before cleanup or another command. Windows uses a suspended root assigned to a kill-on-close Job Object; POSIX uses a new session/group, with Linux subreaping to also kill and reap detached/double-fork descendants. Timeout/abort tree killing goes through the supervisor so it survives to drain the container. Helpers compile once per coordinator (`csc.exe` from Windows .NET Framework; `cc` on POSIX); unavailable containment fails before running user code. Other POSIX systems warn about unaccountable detached descendants. See [process containment](docs/process-containment.md).

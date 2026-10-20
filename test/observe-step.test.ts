@@ -86,6 +86,22 @@ describe("observe record and observation", () => {
       latestLabelRemoval: vi.fn(async () => null),
       editIssue: vi.fn(), closeIssue: vi.fn(), commentOnPr: vi.fn() };
   }
+  it("counts only the newest consecutive not-verified records for this PR and head", async () => {
+    const b = board();
+    const rejected = { ...record, overall: "not-verified" as const };
+    b.observeStatus = async () => "failure";
+    b.listPrComments = async () => [comment(rejected), comment(rejected, 2),
+      comment({ ...rejected, sha: "b".repeat(40) }, 3), comment({ ...rejected, pr: 301 }, 4),
+      { id: 5, created_at: recordedAt, body: '<!-- orch-observe:v1 {broken} -->' }];
+    expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observeNotVerifiedCount).toBe(2);
+    b.listPrComments = async () => [comment(rejected), comment(record, 2), comment(rejected, 3)];
+    expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observeNotVerifiedCount).toBe(1);
+    b.listPrComments = async () => [comment(rejected), comment({ ...rejected, evidenceError: "capture failed" }, 2), comment(rejected, 3)];
+    expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observeNotVerifiedCount).toBe(1);
+    b.observeStatus = async () => "success";
+    b.listPrComments = async () => [comment(record)];
+    expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observeNotVerifiedCount).toBeUndefined();
+  });
   it("uses current-head status and comment; older verified records are missing", async () => {
     const b = board();
     expect((await observeTasks(DEFAULT_CONFIG, ".", {}, b)).tasks[0].facts.observe?.state).toBe("verified");
