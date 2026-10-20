@@ -200,7 +200,7 @@ const CHECKS: Record<string, Check> = {
     if (e.from === "auto.decide" && e.to === "auto.report") {
       return step.kind === "none" && noPr ? null : `only a PR-less 'none' step reports (got '${step.kind}')`;
     }
-    if (step.kind === "fix" && !e.label.includes(step.reason === "ci" ? "CI failing" : "changes requested")) return "fix reason contradicts the edge";
+    if (step.kind === "fix" && !e.label.includes(step.reason === "ci" ? "CI failing" : step.reason === "observe" ? "observe not verified" : "changes requested")) return "fix reason contradicts the edge";
     return e.from === "auto.decide" && e.to === STEP_NODES[step.kind] ? null : `decideStep -> '${step.kind}' leads to ${STEP_NODES[step.kind]}, not ${e.to}`;
   },
   parseTriageDecision(d, e) {

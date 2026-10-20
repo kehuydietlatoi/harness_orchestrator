@@ -126,6 +126,11 @@ describe("prDiff", () => {
 });
 
 describe("prChecksState", () => {
+  it("ignores failed observe statuses when computing CI", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: JSON.stringify([{ name: "studio/observe", bucket: "fail" }, { name: "test", bucket: "pass" }]), stderr: "" });
+    expect(await prChecksState(1, { strict: true })).toBe("pass");
+    expect(execMock.mock.calls.at(-1)?.[1]).toContain("bucket,state,name");
+  });
   const results = (...buckets: string[]) => JSON.stringify(buckets.map((bucket) => ({ bucket, state: "X" })));
   const gh = (code: number, stdout: string, stderr = "") => ({ code, stdout, stderr });
   beforeEach(() => execMock.mockReset());

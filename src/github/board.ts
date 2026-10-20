@@ -3,6 +3,7 @@ import type { ChecksState, Issue, IssueComment, Mergeability, Pr, PrReview } fro
 
 /** GitHub operations used by the autopilot loop. */
 export interface Board {
+  observeStatus?(sha: string, opts?: { cwd?: string }): Promise<string | null>;
   prChangedPaths?(number: number, opts?: { cwd?: string }): Promise<string[]>;
   listIssues(opts?: { cwd?: string; state?: "open" | "closed" | "all" }): Promise<Issue[]>;
   listOpenPrs(opts?: { cwd?: string }): Promise<Pr[]>;
@@ -23,6 +24,7 @@ export interface Board {
 
 /** Production board: retain the existing GitHub functions' behavior and defaults. */
 export const ghBoard: Board = {
+  observeStatus: (sha, opts) => gh.observeStatus(sha, opts),
   prChangedPaths: (number, opts) => gh.prChangedPaths(number, opts),
   listIssues: (opts) => gh.listIssues(opts),
   listOpenPrs: (opts) => gh.listOpenPrs(opts),
