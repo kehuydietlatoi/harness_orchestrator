@@ -9,7 +9,8 @@ import {
   requestChanges,
   prIssueNumber,
 } from "../board/review.js";
-import { getPr } from "../github/github.js";
+import { getIssue, getPr, observeStatus } from "../github/github.js";
+import { parseTicketV2 } from "../tasks/plan.js";
 
 function parsePr(arg: string): number {
   const n = Number(arg);
@@ -90,6 +91,17 @@ export async function reviewApproveCommand(prArg: string, opts: { agent?: string
   const { issue, author } = await approve(prNum, agent, cwd, opts.notes ?? "", opts.head,
     opts.self ? { mode: "self", cfg } : { cfg });
   console.log(pc.green(`PR #${prNum} approved by '${agent}' (issue #${issue}, authored by '${author}').`));
+  try {
+    const ticket = await getIssue(issue, { cwd });
+    if (parseTicketV2(ticket.body).observe?.length) {
+      const state = await observeStatus(opts.head!, { cwd });
+      console.log(pc.dim(`studio/observe is ${state ?? "missing"} on approved head ${opts.head}; merge also requires success on this SHA.`));
+      if (state !== "success") return;
+    }
+  } catch {
+    console.log(pc.dim(`Cross-review satisfied — studio/observe state is unknown on approved head ${opts.head} (could not read issue metadata or observe status); tickets with observe also require success on this SHA to merge.`));
+    return;
+  }
   console.log(pc.dim("Cross-review satisfied — `orch merge` will now accept this PR (if CI is green)."));
 }
 

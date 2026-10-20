@@ -153,6 +153,24 @@ describe("processNext recovery", () => {
     } finally { cleanupDetached(record); }
   }, 25000);
 
+  it.skipIf(process.platform !== "win32")("runs a cmd shim through coordinator verify with literal argv", async () => {
+    const { exec: realExec } = await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js");
+    const args = ["space here", "a&b|c<d>e", "%PATH%", "a^b", 'a"b', "!PATH!", "trailing\\"];
+    const record = join(worktree, "argv.json");
+    writeFileSync(join(worktree, "verify.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0args.cjs" %*\r\n`);
+    writeFileSync(join(worktree, "args.cjs"), "require('fs').writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)))");
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (cmd, argv, opts) => {
+      if (cmd === "verify") return realExec(cmd, argv, opts);
+      if (argv[0] === "commit") expect(JSON.parse(readFileSync(record, "utf8"))).toEqual(args);
+      return { code: 0, stderr: "", stdout: argv[0] === "symbolic-ref" ? "task/35" : argv[0] === "status" ? " M output.ts" : "" };
+    });
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, verify: [["verify", ...args]] }, cwd);
+    expect(result?.outcome).toBe("submitted");
+    expect(JSON.parse(readFileSync(record, "utf8"))).toEqual(args);
+  });
+
   it("hands an exhausted budget to a human without a harness invocation or run record", async () => {
     const result = await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { requests: 0 } } }, cwd);
     expect(result).toMatchObject({ issue: 35, outcome: "needs-attention", reason: "budget spent" });

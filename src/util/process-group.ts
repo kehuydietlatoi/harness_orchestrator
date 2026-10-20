@@ -55,7 +55,9 @@ export function spawnRun(command: string, args: string[], options: SpawnOptionsW
       command = "/bin/sh";
     }
   }
-  const child = spawn(executable, [control, command, ...args], { ...options, shell: false, windowsHide: true });
+  // The supervisor receives normal CRT argv and reconstructs cmd's raw /c
+  // payload itself. Verbatim arguments belong only on a direct cmd spawn.
+  const child = spawn(executable, [control, command, ...args], { ...options, shell: false, windowsHide: true, windowsVerbatimArguments: false });
   child.once("close", () => {
     try { rmSync(control, { recursive: true, force: true }); }
     catch (error) { log.warn(`Could not remove run control directory ${control}: ${String(error)}`); }

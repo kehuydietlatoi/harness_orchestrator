@@ -1,5 +1,6 @@
 import pc from "picocolors";
-import { commandExists } from "../util/exec.js";
+import { commandExists, commandRunError } from "../util/exec.js";
+import { verifyEnvironment } from "../tasks/verify.js";
 import { isGitRepo, gitVersion, supportsWorktree, remoteUrl } from "../git/git.js";
 import { ghInstalled, ghAuthenticated, listLabels, listIssues, getIssue } from "../github/github.js";
 import { configExists, loadConfig } from "../config.js";
@@ -74,7 +75,15 @@ export async function doctorCommand(): Promise<void> {
       const loaded = loadConfig(cwd);
       adapters = configuredAdapterCommands(loaded);
       checks.push({ name: "config and domain pack valid", ok: true });
-      if (loaded.evidence) checks.push({ name: "evidence command present", ok: await commandExists(loaded.evidence[0]), note: loaded.evidence[0] });
+      const commands = [
+        ...(loaded.verify ?? []).map(argv => ({ name: "verify", argv })),
+        ...(loaded.evidenceSetup ?? []).map(argv => ({ name: "evidenceSetup", argv })),
+        ...(loaded.evidence ? [{ name: "evidence", argv: loaded.evidence }] : []),
+      ];
+      for (const { name, argv } of commands) {
+        const error = await commandRunError(argv, { cwd, env: verifyEnvironment() });
+        checks.push({ name: `${name} command runnable`, ok: error === undefined, note: error ?? argv[0] });
+      }
     } catch (error) {
       checks.push({ name: "config and domain pack valid", ok: false, note: String(error) });
     }
