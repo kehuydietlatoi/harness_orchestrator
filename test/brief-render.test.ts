@@ -51,6 +51,21 @@ describe("pack brief rendering", () => {
     expect(readFileSync(second, "utf8")).toBe("next");
   });
 
+  it("renders observe scenarios and evidence commands, or empty when absent", () => {
+    const path = join(cwd, "briefs");
+    mkdirSync(path);
+    writeFileSync(join(path, "brief.md.tmpl"), "before\n{{ticket.observe}}\nafter");
+    const config = { ...cfg, loadedPack: { ...pack, path: cwd }, evidence: ["node", "runner with spaces.mjs"], scenariosDir: "qa/custom" };
+    const rendered = renderPackBrief(issue({ ...ticket, observe: ["combat-hit", "menu"] }), config, cwd);
+    expect(rendered).toContain("# OBSERVE");
+    expect(rendered).toContain('- combat-hit: node "runner with spaces.mjs" qa/custom/combat-hit.json <tmp dir>');
+    expect(rendered).toContain('- menu: node "runner with spaces.mjs" qa/custom/menu.json <tmp dir>');
+    expect(rendered).toContain("Observe: acceptance lines");
+    expect(rendered).toContain("final commit");
+    expect(renderPackBrief(issue(), config, cwd)).toBe("before\n\nafter");
+    expect(renderPackBrief(issue({ ...ticket, observe: ["hit"] }), { ...config, scenariosDir: undefined }, cwd)).toContain("qa/scenarios/hit.json");
+  });
+
   it("lists protected paths once in project-then-role first-seen order", () => {
     const forbidden = pack.roles["gameplay-programmer"].manifest.forbidden;
     writeFileSync(join(cwd, "studio.config.json"), JSON.stringify({

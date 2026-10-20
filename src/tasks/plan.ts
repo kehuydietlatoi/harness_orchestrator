@@ -17,13 +17,14 @@ export interface TicketV2 {
   context?: string[];
   locks?: string[];
   verify?: string[][];
+  observe?: string[];
   needs?: ("shell" | "vision" | "web" | "engine" | "image-gen" | "audio-gen")[];
   sensitivity?: "public" | "internal" | "secret";
   budget?: Budget;
   model?: string;
 }
 
-export const V2_FIELDS = ["role", "kind", "milestone", "decisions", "context", "locks", "verify", "needs", "sensitivity", "budget", "model"] as const;
+export const V2_FIELDS = ["role", "kind", "milestone", "decisions", "context", "locks", "verify", "observe", "needs", "sensitivity", "budget", "model"] as const;
 
 /** Pure projection; these fields never contribute to plan marker identities. */
 export function ticketV2Fields(ticket: TicketV2): TicketV2 {
@@ -96,6 +97,15 @@ function ticketShapes(values: readonly unknown[]): { tickets: Ticket[]; errors: 
       }
     }
     if (raw.kind === "asset" && (!Array.isArray(raw.locks) || !raw.locks.length)) problem("locks", "must be non-empty for kind asset");
+    if (raw.observe !== undefined) {
+      const v = raw.observe;
+      if (!Array.isArray(v) || !v.length || !v.every(x => typeof x === "string" && x === x.trim() && /^[a-z0-9][a-z0-9-]*$/.test(x))) {
+        problem("observe", "must be a non-empty array of scenario names matching ^[a-z0-9][a-z0-9-]*$");
+      } else {
+        out.observe = v;
+        if (new Set(v).size !== v.length) problem("observe", "must contain unique values");
+      }
+    }
     if (raw.verify !== undefined) {
       if (!Array.isArray(raw.verify) || !raw.verify.length || !raw.verify.every((argv) =>
         Array.isArray(argv) && argv.length > 0 && argv.every((arg) => typeof arg === "string" && arg.trim().length > 0))) {
@@ -207,6 +217,7 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     if (!t.title.trim()) errors.push(`${who}: title needs a title`);
     if (t.id && seen.has(t.id)) errors.push(`${who}: id duplicate id "${t.id}"`);
     const cfg = opts.config;
+    if (t.observe !== undefined && !cfg?.evidence?.length) errors.push(`${who}: observe requires config evidence argv`);
     if (t.needs !== undefined || t.sensitivity !== undefined || cfg?.sensitivity !== undefined || cfg?.pack !== undefined) {
       const policy = cfg ?? DEFAULT_CONFIG;
       const tiers = t.effort ? [normalizeEffort(t.effort, policy.tierAliases)].filter((tier): tier is EffortTier => !!tier)

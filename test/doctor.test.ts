@@ -3,6 +3,7 @@ import { cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { doctorCommand } from "../src/commands/doctor.js";
+import { commandExists } from "../src/util/exec.js";
 
 vi.mock("../src/util/exec.js", () => ({ commandExists: vi.fn(async () => true) }));
 vi.mock("../src/git/git.js", () => ({ isGitRepo: vi.fn(async () => true), gitVersion: vi.fn(async () => "2.50"),
@@ -34,4 +35,16 @@ it.each(["missing-directory", "missing-prompt", "malformed", "valid"])("doctor c
   expect(process.exitCode).toBe(mode === "valid" ? 0 : 1);
   expect(output.mock.calls.flat().join("\n")).toContain("config and domain pack valid");
   if (mode === "missing-prompt" || mode === "malformed") expect(output.mock.calls.flat().join("\n")).toContain("explorer.json");
+});
+
+it("reports a missing evidence executable", async () => {
+  dir = mkdtempSync(join(tmpdir(), "orch-doctor-"));
+  writeFileSync(join(dir, "orch.config.json"), JSON.stringify({ evidence: ["missing-evidence", "runner.mjs"] }));
+  vi.mocked(commandExists).mockImplementation(async cmd => cmd !== "missing-evidence");
+  const output = vi.spyOn(console, "log").mockImplementation(() => {});
+  process.chdir(dir);
+  await doctorCommand();
+  expect(commandExists).toHaveBeenCalledWith("missing-evidence");
+  expect(output.mock.calls.flat().join("\n")).toMatch(/evidence command present.*missing-evidence/);
+  expect(process.exitCode).toBe(1);
 });

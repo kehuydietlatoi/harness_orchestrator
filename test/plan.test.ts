@@ -1,7 +1,31 @@
 import { describe, it, expect } from "vitest";
 import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
-import { renderTicketBody } from "../src/tasks/plan-create.js";
+import { renderTicketBody, parseTicketV2, buildPlanMarkers } from "../src/tasks/plan-create.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
+
+describe("observe scenarios", () => {
+  it("round-trips creation metadata without changing marker identities", () => {
+    const base = { id: "look", title: "Observe combat" };
+    const ticket = { ...base, observe: ["combat-hit", "1-start"] };
+    const config = { ...DEFAULT_CONFIG, evidence: ["node", "evidence.mjs"] };
+    const plan = resolvePlan(parseTickets(JSON.stringify([ticket])), { config });
+    expect(plan.errors).toEqual([]);
+    expect(plan.tickets[0].observe).toEqual(ticket.observe);
+    expect(parseTicketV2(renderTicketBody(ticket, []))).toEqual({ observe: ticket.observe });
+    expect(buildPlanMarkers([ticket])).toEqual(buildPlanMarkers([base]));
+  });
+  it.each([[], "combat", null, [1], [""], ["Bad"], ["a_b"], ["../escape"], ["a\nb"], ["hit\n"], ["hit\r"], ["-start"], ["hit", "hit"]])("rejects malformed observe %j with ticket identity", observe => {
+    const tickets = [{ id: "look", title: "Look", observe }];
+    expect(() => parseTickets(JSON.stringify(tickets))).toThrow(/ticket 1.*look.*observe/);
+    expect(resolvePlan(tickets as never).errors.join()).toMatch(/ticket 1.*look.*observe/);
+  });
+  it("requires evidence configuration only for observe tickets", () => {
+    const ticket = { id: "look", title: "Look", observe: ["hit"] };
+    expect(resolvePlan([ticket]).errors.join()).toMatch(/look.*observe.*evidence/);
+    expect(resolvePlan([ticket], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/look.*observe.*evidence/);
+    expect(resolvePlan([{ title: "Legacy" }]).errors).toEqual([]);
+  });
+});
 
 describe("needs and sensitivity planning", () => {
   it("permits vision on Claude, refusing default Codex and web everywhere", () => {

@@ -1,7 +1,8 @@
 import { validateBudget, type Budget } from "./tasks/budget.js";
 export type { Budget } from "./tasks/budget.js";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, existsSync, realpathSync } from "node:fs";
+import { resolve, relative, isAbsolute, dirname, basename } from "node:path";
+import { projectStateDir } from "./board/telemetry.js";
 import { DEFAULT_PRICING, type ModelPricing } from "./board/pricing.js";
 import { loadPack, type DomainPack } from "./pack/load.js";
 
@@ -156,6 +157,12 @@ export interface OrchConfig {
   taskTimeoutMs: number;
   /** Trusted local checks, executed directly in the task worktree before auto-commit. */
   verify?: string[][];
+  /** Trusted argv prefix for collecting scenario evidence. */
+  evidence?: string[];
+  evidenceSetup?: string[][];
+  scenariosDir?: string;
+  evidenceDir?: string;
+  evidenceTimeoutMs?: number;
   /** Repository-relative globs whose changes require a current lead-tier approval. */
   protectedPaths?: string[];
   budgets?: { default?: Budget; byTier?: Partial<Record<EffortTier, Budget>> };
@@ -204,6 +211,8 @@ export const DEFAULT_CONFIG: OrchConfig = {
   worktreeRoot: "../wt",
   maxConcurrent: 2,
   taskTimeoutMs: 1_800_000, // 30 minutes
+  scenariosDir: "qa/scenarios",
+  evidenceTimeoutMs: 300_000,
   reviewTimeoutMs: 900_000, // 15 minutes
   defaultEffort: "lead",
   // All tiers default to the same capable model at medium effort; set `models.lead`
@@ -248,6 +257,18 @@ export function configExists(cwd: string = process.cwd()): boolean {
   return existsSync(configPath(cwd));
 }
 
+/** Resolve aliases even for paths whose final directories have not been created. */
+function canonicalPath(path: string): string {
+  if (existsSync(path)) return realpathSync.native(path);
+  const parent = dirname(path);
+  return parent === path ? path : resolve(canonicalPath(parent), basename(path));
+}
+
+function pathWithin(root: string, path: string): boolean {
+  const rel = relative(root, path);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`));
+}
+
 export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   const p = configPath(cwd);
   if (!existsSync(p)) {
@@ -255,6 +276,30 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   }
   const text = readFileSync(p, "utf8").replace(/^\uFEFF/, ""); // tolerate a UTF-8 BOM
   const raw = JSON.parse(text) as Partial<OrchConfig>;
+  const argvValid = (argv: unknown): argv is string[] => Array.isArray(argv) && argv.length > 0 &&
+    argv.every(arg => typeof arg === "string" && arg.trim().length > 0 && !arg.includes("\0"));
+  if (Object.hasOwn(raw, "evidence") && !argvValid(raw.evidence)) {
+    throw new Error("evidence must be a non-empty argv array of non-empty strings");
+  }
+  if (Object.hasOwn(raw, "evidenceSetup") && (!Array.isArray(raw.evidenceSetup) || !raw.evidenceSetup.every(argvValid))) {
+    throw new Error("evidenceSetup must be a list of non-empty argv arrays of non-empty strings");
+  }
+  const scenariosDir = raw.scenariosDir === undefined ? DEFAULT_CONFIG.scenariosDir! : raw.scenariosDir;
+  if (typeof scenariosDir !== "string" || !scenariosDir.trim() || /[\x00-\x1f:]/.test(scenariosDir) ||
+      /^[\\/]/.test(scenariosDir) || scenariosDir.split(/[\\/]/).includes("..") ||
+      !pathWithin(canonicalPath(cwd), canonicalPath(resolve(cwd, scenariosDir)))) {
+    throw new Error("scenariosDir must be a repository-relative path that does not escape the repo");
+  }
+  if (raw.evidenceDir !== undefined && (typeof raw.evidenceDir !== "string" || !raw.evidenceDir.trim() || /[\x00-\x1f]/.test(raw.evidenceDir))) {
+    throw new Error("evidenceDir must be a non-empty path outside the repository");
+  }
+  const evidenceDir = resolve(cwd, raw.evidenceDir ?? resolve(projectStateDir(cwd), "evidence"));
+  if (pathWithin(canonicalPath(cwd), canonicalPath(evidenceDir))) {
+    throw new Error("evidenceDir must be outside the repository checkout");
+  }
+  if (Object.hasOwn(raw, "evidenceTimeoutMs") && (!Number.isInteger(raw.evidenceTimeoutMs) || raw.evidenceTimeoutMs! < 1)) {
+    throw new Error("evidenceTimeoutMs must be a positive integer (milliseconds)");
+  }
   if (raw.sensitivity !== undefined) {
     const s = raw.sensitivity;
     if (!s || typeof s !== "object" || Array.isArray(s) ||
@@ -276,9 +321,7 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
     throw new Error("protectedPaths must be a list of repository-relative path globs");
   }
   if (Object.prototype.hasOwnProperty.call(raw, "verify") &&
-      (!Array.isArray(raw.verify) || !raw.verify.every((argv) =>
-        Array.isArray(argv) && argv.length > 0 && argv.every((arg) =>
-          typeof arg === "string" && arg.trim().length > 0 && !arg.includes("\0"))))) {
+      (!Array.isArray(raw.verify) || !raw.verify.every(argvValid))) {
     throw new Error("verify must be a list of non-empty argv arrays of non-empty strings");
   }
   if (
@@ -456,6 +499,8 @@ export function loadConfig(cwd: string = process.cwd()): OrchConfig {
   return {
     ...DEFAULT_CONFIG,
     ...raw,
+    scenariosDir,
+    evidenceDir,
     adapters,
     roles,
     loadedPack,

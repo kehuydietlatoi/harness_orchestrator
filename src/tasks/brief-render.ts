@@ -48,6 +48,14 @@ export function renderPackBrief(issue: Issue, cfg: OrchConfig, cwd: string, prio
   const memoryPath = resolve(cwd, "AGENTS.md");
   const conventions = existsSync(memoryPath) ? sectionBody(readFileSync(memoryPath, "utf8"), "Conventions") : "";
   const budget = issueBudgetStatus(issue, cfg, cwd).remaining;
+  if (ticket.observe && !cfg.evidence?.length) errors.push("observe requires config evidence argv");
+  const command = (argv: string[]) => argv.map(arg => /^[\w./:@%+=,-]+$/.test(arg) ? arg : JSON.stringify(arg)).join(" ");
+  const scenariosDir = (cfg.scenariosDir ?? "qa/scenarios").replace(/\\/g, "/").replace(/\/$/, "");
+  const observe = ticket.observe ? [
+    "# OBSERVE",
+    "A judge checks the Observe: acceptance lines against these scenarios on the final commit.",
+    ...ticket.observe.map(name => `- ${name}: ${command([...(cfg.evidence ?? []), `${scenariosDir}/${name}.json`])} <tmp dir>`),
+  ].join("\n") : "";
   const values: Record<string, string> = {
     "role.prompt": role.prompt.replace(/\r\n/g, "\n").trim(),
     "project.standing": [conventions, bullets(role.manifest.standing)].filter(Boolean).join("\n\n"),
@@ -59,6 +67,7 @@ export function renderPackBrief(issue: Issue, cfg: OrchConfig, cwd: string, prio
     "ticket.context_sections": context,
     "ticket.prior_attempt": priorAttempt,
     "ticket.acceptance": listSection(issue.body, "Definition of done"),
+    "ticket.observe": observe,
     "ticket.verify": [...new Set([...(cfg.verify ?? []), ...(ticket.verify ?? [])]
       .map(argv => argv.map(arg => /^[\w./:@%+=,-]+$/.test(arg) ? arg : JSON.stringify(arg)).join(" ")))].join("\n"),
     "ticket.budget": Object.keys(budget).length ? JSON.stringify(budget) : `Timeout: ${cfg.taskTimeoutMs / 60000} minutes`,
