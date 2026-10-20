@@ -43,6 +43,8 @@ node dist/cli.js serve --demo   # open http://127.0.0.1:4000
 ## Requirements
 
 - Node.js ≥ 20 and Git with worktree support
+- Run containment needs the Windows .NET Framework C# compiler, or `cc` on POSIX;
+  Linux supports cleanup of detached descendants. See [process containment](docs/process-containment.md).
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated
 - `claude` and `codex` on PATH and authenticated for the default two-agent setup
 - A local repository with a GitHub `origin` and an available base branch

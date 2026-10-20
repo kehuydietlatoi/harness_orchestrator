@@ -86,8 +86,9 @@ describe("spawnLogged", () => {
 ` +
         "setInterval(() => {}, 1000);");
 
-      const r = await spawnLogged(process.execPath, [join(d, "parent.js")], { timeoutMs: 1200, shell: true });
-      expect(r.timedOut).toBe(true);
+      const logFile = join(d, "shell.log");
+      const r = await spawnLogged(process.execPath, [join(d, "parent.js")], { timeoutMs: 1200, shell: true, logFile });
+      expect(r.timedOut, readFileSync(logFile, "utf8")).toBe(true);
       const alive = statSync(beat).size;
       expect(alive).toBeGreaterThan(0); // the grandchild really was running while the parent was
 

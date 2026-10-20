@@ -6,6 +6,8 @@ import { DEFAULT_CONFIG } from "../src/config.js";
 import { loadPack } from "../src/pack/load.js";
 import { renderTicketV2 } from "../src/tasks/ticket-metadata.js";
 import { readEvents } from "../src/tasks/events.js";
+import { spawnLogged } from "../src/util/spawn.js";
+import { assertStopped, cleanupDetached, detachedFixture } from "./helpers/process-containment.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -113,6 +115,43 @@ describe("processNext recovery", () => {
     expect(mocks.discardWorktree).not.toHaveBeenCalled();
     rmSync(cwd, { recursive: true, force: true });
   });
+
+  it.each(["exit", "timeout", "abort"])("processClaimed drains a fake harness's detached server on %s", async mode => {
+    const record = join(cwd, "harness-child.json");
+    mocks.runTask.mockImplementation(async () => {
+      const result = await spawnLogged(process.execPath, [detachedFixture, record, mode === "exit" ? "exit" : "wait"], {
+        cwd: worktree, timeoutMs: mode === "timeout" ? 3000 : 15000,
+        abortOn: mode === "abort" ? line => line === "READY" ? "test abort" : undefined : undefined,
+      });
+      return { ...result, ok: result.code === 0 };
+    });
+    mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-review"] });
+    // Recovery must never see a still-running harness descendant.
+    mocks.removeWorktree.mockImplementation(async () => { await assertStopped(record); return true; });
+    try {
+      const result = await processNext("codex", DEFAULT_CONFIG, cwd);
+      expect(result?.outcome).toBe(mode === "exit" ? "submitted" : "failed");
+      await assertStopped(record);
+    } finally { cleanupDetached(record); }
+  }, 25000);
+
+  it("drains a coordinator verify command before committing or submitting", async () => {
+    const record = join(cwd, "verify-child.json");
+    const { exec: realExec } = await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js");
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (cmd, args, opts) => {
+      if (cmd === process.execPath) return realExec(cmd, args, opts);
+      if (args[0] === "add" || args[0] === "commit") await assertStopped(record);
+      return { code: 0, stderr: "", stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M output.ts" : "" };
+    });
+    try {
+      const result = await processNext("codex", { ...DEFAULT_CONFIG, verify: [[process.execPath, detachedFixture, record]] }, cwd);
+      expect(result?.outcome).toBe("submitted");
+      expect(mocks.submit).toHaveBeenCalled();
+      await assertStopped(record);
+    } finally { cleanupDetached(record); }
+  }, 25000);
 
   it("hands an exhausted budget to a human without a harness invocation or run record", async () => {
     const result = await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { requests: 0 } } }, cwd);
@@ -310,7 +349,7 @@ describe("processNext recovery", () => {
       ["git", ["commit", "-m", "Recover runner failures (#35)", "-m",
         `Worker: ${agent}; model: ${agent === "opencode" ? "default" : agent === "codex" ? "gpt-6.1-sol@medium" : "claude-sonnet-5-5@medium"}`]],
     ]);
-    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object) });
+    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object), contain: true });
     expect(mocks.submit).toHaveBeenCalledWith(35, agent, cfg, cwd);
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });

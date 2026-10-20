@@ -1,9 +1,11 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "./spawn.js";
+import { spawnRun } from "./process-group.js";
+import { log } from "./log.js";
 
 export interface ExecResult {
   code: number;
@@ -27,15 +29,26 @@ export const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 export function exec(
   cmd: string,
   args: string[] = [],
-  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv;
+    /** Commands executing project code must drain all descendants before returning. */
+    contain?: boolean } = {},
 ): Promise<ExecResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, shell: false, ...(opts.env ? { env: opts.env } : {}) });
+    const options = { cwd: opts.cwd, shell: false, ...(opts.env ? { env: opts.env } : {}) };
+    let child: ChildProcess;
+    try {
+      child = opts.contain ? spawnRun(cmd, args, options) : spawn(cmd, args, options);
+    } catch (error) {
+      log.warn(`${cmd}: ${String(error)}`);
+      resolve({ code: 127, stdout: "", stderr: String(error) });
+      return;
+    }
+    const stop = (): void => killProcessTree(child);
     let timedOut = false;
     const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
       timedOut = true;
-      killProcessTree(child);
+      stop();
     }, opts.timeoutMs);
     let stdout = "";
     let stderr = "";
@@ -56,16 +69,16 @@ export function exec(
       bytes += chunk.length;
       if (bytes > maxBuffer) {
         overflowed = true;
-        child.kill();
+        stop();
         return false;
       }
       return true;
     };
 
-    child.stdout.on("data", (d: Buffer) => {
+    child.stdout?.on("data", (d: Buffer) => {
       if (accept(d)) stdout += outDecoder.write(d);
     });
-    child.stderr.on("data", (d: Buffer) => {
+    child.stderr?.on("data", (d: Buffer) => {
       if (accept(d)) stderr += errDecoder.write(d);
     });
     child.on("error", (err) => {
@@ -94,7 +107,7 @@ export function exec(
       }
       resolve({ code: code ?? 0, stdout, stderr });
     });
-    if (opts.input !== undefined) {
+    if (opts.input !== undefined && child.stdin) {
       child.stdin.write(opts.input);
       child.stdin.end();
     }

@@ -48,6 +48,7 @@ export async function runEvidence(
   const checkout = await deps.checkout({ number: prNumber, headSha: sha }, cwd);
   try {
     const options = {
+      contain: true,
       cwd: checkout.path,
       env: { ...verifyEnvironment(), PWD: resolve(checkout.path) },
       timeoutMs: cfg.evidenceTimeoutMs ?? DEFAULT_CONFIG.evidenceTimeoutMs!,
