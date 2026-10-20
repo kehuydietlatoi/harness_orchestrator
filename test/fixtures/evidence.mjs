@@ -1,6 +1,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import process from "node:process";
+import console from "node:console";
+import { setInterval } from "node:timers";
 
 const [scenarioFile, outDir] = process.argv.slice(2);
 const scenario = JSON.parse(readFileSync(scenarioFile, "utf8"));
