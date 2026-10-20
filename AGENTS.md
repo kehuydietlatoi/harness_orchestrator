@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe gate (#220)**: [ADR-0015](docs/adr/0015-observe-gate.md) owns observe ordering, config-only evidence execution, independent standard-tier vision judging, the SHA-bound status/comment record, and local evidence retention. Read it when changing these boundaries; `studio/observe` is a separate merge gate excluded from CI roll-up.
+
 - **Observe merge gate and reports (#219)**: `checkMergeGate` requires current-head `studio/observe` success for v2 observe tickets; missing, non-success and unreadable statuses block both merge callers. Run reports count completed observe step attempts and retain the newest `observe.finished` overall, with observe/review fixes split from `round N (reason)` details. Existing aggregate rounds, runs and costs include all phases; reports without observe activity keep their previous shape and text.
 
 - **Autopilot observe (#218)**: observe tickets read current-head `studio/observe` plus the newest matching `orch-observe:v1` PR comment; unreadable reads leave the PR unobserved. Observe runs after conflict resolution and before review, independently of pending CI; its context is excluded from CI checks. Not-verified verdicts use the normal fix/triage round budget; blocked evidence or judges escalate. The executor checks the head before publishing and always releases its evidence checkout.

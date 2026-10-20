@@ -422,6 +422,8 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Multi-provider routing](docs/adr/0012-multi-provider-routing.md) — tiers, fallback ladders, budgets, and provider boundaries
 - [Domain packs and ticket schema v2](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) — pack roles, validation, briefs, verification, routing filters, and path locks
 
+- [Observe gate](docs/adr/0015-observe-gate.md) — trusted runtime evidence, independent visual judging, and head-bound merge approval
+
 ## Development
 
 ```bash
