@@ -69,6 +69,31 @@ describe("runEvidence", () => {
 
   const run = (scenarios: string[]) => runEvidence({ cfg, cwd: repo, issue: 216, prNumber: 300, sha, scenarios }, deps);
 
+  it.skipIf(process.platform !== "win32")("runs setup and evidence cmd shims with literal argv", async () => {
+    const args = ["space here", "a&b|c<d>e", "%PATH%", "a^b", 'a"b', "!PATH!", "trailing\\"];
+    writeFileSync(join(repo, "literal.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0literal.cjs" %*\r\n`);
+    writeFileSync(join(repo, "literal.cjs"), `
+      const fs = require('fs');
+      const args = process.argv.slice(2);
+      const mode = args.shift();
+      if (mode === 'setup') fs.writeFileSync('setup-argv.json', JSON.stringify(args));
+      else {
+        const out = args.pop(); args.pop();
+        fs.writeFileSync(require('path').join(out, 'argv.json'), JSON.stringify(args));
+        fs.writeFileSync(require('path').join(out, 'run.json'), JSON.stringify({ok:true, sha:require('child_process').execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()}));
+      }
+    `);
+    git(repo, "add", "literal.cmd", "literal.cjs");
+    git(repo, "commit", "-qm", "shim fixtures");
+    sha = git(repo, "rev-parse", "HEAD");
+    cfg.evidenceSetup = [["literal", "setup", ...args]];
+    cfg.evidence = ["literal", "evidence", ...args];
+    const { checkout, results } = await run(["one"]);
+    expect(results[0].status, results[0].error).toBe("ok");
+    expect(JSON.parse(readFileSync(join(checkout.path, "setup-argv.json"), "utf8"))).toEqual(args);
+    expect(JSON.parse(readFileSync(join(results[0].outDir, "argv.json"), "utf8"))).toEqual(args);
+  });
+
   it("runs two scenarios at the exact detached head with scrubbed credentials, fresh output and events", async () => {
     const old = join(cfg.evidenceDir!, "216", sha, "one");
     mkdirSync(old, { recursive: true });
