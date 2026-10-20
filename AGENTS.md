@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe merge gate and reports (#219)**: `checkMergeGate` requires current-head `studio/observe` success for v2 observe tickets; missing, non-success and unreadable statuses block both merge callers. Run reports count completed observe step attempts and retain the newest `observe.finished` overall, with observe/review fixes split from `round N (reason)` details. Existing aggregate rounds, runs and costs include all phases; reports without observe activity keep their previous shape and text.
+
 - **Autopilot observe (#218)**: observe tickets read current-head `studio/observe` plus the newest matching `orch-observe:v1` PR comment; unreadable reads leave the PR unobserved. Observe runs after conflict resolution and before review, independently of pending CI; its context is excluded from CI checks. Not-verified verdicts use the normal fix/triage round budget; blocked evidence or judges escalate. The executor checks the head before publishing and always releases its evidence checkout.
 
 - **Observe judging (#217)**: `src/tasks/observe-judge.ts` selects a vision-capable standard-tier judge from another provider family regardless of `reviewPolicy`. It stages regular evidence files under `.orch-observe/` in the evidence checkout, requires a head-bound fenced verdict, and records `observe.verdict` plus phase `observe` telemetry with distinct outcomes. The caller retains checkout ownership and must release it after judging.
