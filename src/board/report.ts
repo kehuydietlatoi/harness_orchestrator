@@ -18,10 +18,15 @@ export interface TaskReport {
   outcome: TaskOutcome;
   /** Fix and conflict rounds pushed. */
   fixRounds: number;
+  /** Observe step attempts and newest completed overall; absent on legacy reports. */
+  observe?: { runs: number; lastOverall: string | null };
+  /** Successful fixes by reason, exposed separately when observe activity exists. */
+  observeFixRounds?: number;
+  reviewFixRounds?: number;
   reviews: { approved: number; changesRequested: number };
   /** The lead granted another round at least once. */
   triaged: boolean;
-  /** Harness runs recorded for the task (implement, fix, conflict, review, triage). */
+  /** Harness runs recorded for the task, including observe judges. */
   agentRuns: number;
   /** Sum of the known run costs (USD); null when no run reported one. */
   costUsd: number | null;
@@ -74,6 +79,9 @@ function mean(values: readonly number[]): number | null {
 export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunRecord[], scope: ReportScope = {}): RunReport {
   const terminalAt = new Map<number, number>();
   const latestRun = new Map<number, RunRecord>();
+  const latestObserve = new Map<number, number>();
+  const observeFixes = new Map<number, number>();
+  const reviewFixes = new Map<number, number>();
   const byIssue = new Map<number, TaskReport & { firstAt: number | null; mergedAt: number | null }>();
   const task = (issue: number) => {
     let t = byIssue.get(issue);
@@ -96,6 +104,20 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
     const t = task(e.issue);
     seen(t, e.ts);
     if (e.type !== "step.finished") continue;
+    if (e.step === "observe" || e.signal === "observe.finished") {
+      t.observe ??= { runs: 0, lastOverall: null };
+      t.observe.runs += 1;
+      if (e.signal === "observe.finished" && Date.parse(e.ts) >= (latestObserve.get(e.issue) ?? -Infinity)) {
+        t.observe.lastOverall = e.detail ?? null;
+        latestObserve.set(e.issue, Date.parse(e.ts));
+      }
+    }
+    if (e.signal === "fix.pushed") {
+      // executeFix writes `round N (reason)`, optionally followed by a push warning.
+      const reason = /^round \d+ \((review|observe)\)(?:;|$)/.exec(e.detail ?? "")?.[1];
+      const counts = reason === "observe" ? observeFixes : reason === "review" ? reviewFixes : null;
+      if (counts) counts.set(e.issue, (counts.get(e.issue) ?? 0) + 1);
+    }
     switch (e.signal) {
       case "fix.pushed": case "conflict.resolved": t.fixRounds += 1; break;
       case "review.approved": t.reviews.approved += 1; break;
@@ -134,6 +156,11 @@ export function buildRunReport(events: readonly OrchEvent[], runs: readonly RunR
     .sort((a, b) => a.issue - b.issue)
     .map(({ firstAt, mergedAt, ...t }) => ({
       ...t,
+      ...(t.observe || observeFixes.has(t.issue) ? {
+        observe: t.observe ?? { runs: 0, lastOverall: null },
+        observeFixRounds: observeFixes.get(t.issue) ?? 0,
+        reviewFixRounds: reviewFixes.get(t.issue) ?? 0,
+      } : {}),
       durationMs: t.outcome === "merged" && firstAt !== null && mergedAt !== null ? Math.max(0, mergedAt - firstAt) : null,
     }));
 
@@ -187,6 +214,9 @@ export function formatRunReport(report: RunReport): string {
         `${`${t.reviews.approved}/${t.reviews.changesRequested}`.padEnd(13)} ${(t.triaged ? "yes" : "-").padEnd(8)} ` +
         `${String(t.agentRuns).padEnd(5)} ${money(t.costUsd, t.costComplete).padEnd(10)} ${minutes(t.durationMs)}`,
     );
+    if (t.observe) {
+      lines.push(`         Observe: runs ${t.observe.runs}, last overall ${t.observe.lastOverall ?? "-"}; fix rounds: observe ${t.observeFixRounds ?? 0}, review ${t.reviewFixRounds ?? 0}`);
+    }
   }
   return lines.join("\n");
 }
