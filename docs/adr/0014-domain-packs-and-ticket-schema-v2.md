@@ -197,7 +197,7 @@ authorship/review threat boundary in
 
 `src/config.ts` accepts replacement `capabilities` arrays on model specs and tier
 members, including an empty array. Defaults from `resolveCapabilities` are
-Claude `shell, vision`, Codex `shell`, OpenCode `shell`; no model defaults to
+Claude `shell, vision`, Codex `shell, vision`, OpenCode `shell`; no model defaults to
 web, and model names never imply vision. `src/routing/route-policy.ts` requires
 all ticket needs and applies sensitivity independently of the role allowance.
 Manifest needs are not automatically appended to ticket needs.
