@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CONFIG } from "../src/config.js";
+import { DEFAULT_CONFIG, loadConfig } from "../src/config.js";
 import { formatReview, parseReview } from "../src/board/approval.js";
+vi.mock("../src/config.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/config.js")>(),
+  loadConfig: vi.fn(() => DEFAULT_CONFIG),
+}));
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
   prChangedPaths: vi.fn(),
@@ -12,11 +16,13 @@ vi.mock("../src/git/lock.js", () => ({ release: vi.fn() }));
 import * as gh from "../src/github/github.js";
 import { removeWorktree } from "../src/git/worktree.js";
 import { approve, checkMergeGate, merge, requestChanges, reviewQueue } from "../src/board/review.js";
+import { reviewApproveCommand } from "../src/commands/review.js";
 const head = "a".repeat(40);
 const issue = { number: 38, title: "task", body: "", state: "OPEN", labels: ["agent:codex", "reviewed-by:claude"], assignees: [] };
 const pr = { number: 62, title: "task", body: "Closes #38", state: "OPEN", headSha: head, headRefName: "task/38-task", htmlUrl: "" };
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(loadConfig).mockReturnValue(DEFAULT_CONFIG);
   vi.mocked(gh.prChangedPaths).mockResolvedValue([]);
   vi.mocked(gh.getPr).mockResolvedValue(pr);
   vi.mocked(gh.getIssue).mockResolvedValue(issue);
@@ -26,6 +32,52 @@ beforeEach(() => {
 });
 describe("review and merge boundary", () => {
   const observeIssue = { ...issue, body: '## Ticket metadata (v2)\n\n```json\n{"observe":["smoke"]}\n```' };
+  const positiveMessage = "Cross-review satisfied — `orch merge` will now accept this PR (if CI is green).";
+  it.each([null, "failure", "pending", "error", "success"])("approval reports observe status %s on the approved head", async (state) => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    vi.mocked(gh.observeStatus).mockResolvedValue(state);
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await reviewApproveCommand("62", { agent: "claude", head });
+      const messages = output.mock.calls.flat().join("\n");
+      expect(messages).toContain(`studio/observe is ${state ?? "missing"} on approved head ${head}`);
+      expect(messages).toContain("merge also requires success on this SHA");
+      expect(messages.includes(positiveMessage)).toBe(state === "success");
+      expect(gh.observeStatus).toHaveBeenCalledWith(head, { cwd: process.cwd() });
+      expect(gh.recordPrReview).toHaveBeenCalledOnce();
+      expect(gh.editIssue).toHaveBeenCalledOnce();
+    } finally {
+      output.mockRestore();
+    }
+  });
+  it("keeps the positive approval message without observe", async () => {
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await reviewApproveCommand("62", { agent: "claude", head });
+      expect(output.mock.calls.flat().join("\n")).toContain(positiveMessage);
+      expect(gh.observeStatus).not.toHaveBeenCalled();
+    } finally {
+      output.mockRestore();
+    }
+  });
+  it.each(["status", "metadata"])("reports unknown observe state when %s is unreadable after approval", async (unreadable) => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    if (unreadable === "status") vi.mocked(gh.observeStatus).mockRejectedValue(new Error("offline"));
+    else vi.mocked(gh.getIssue).mockResolvedValueOnce(observeIssue).mockRejectedValue(new Error("offline"));
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await reviewApproveCommand("62", { agent: "claude", head });
+      const messages = output.mock.calls.flat().join("\n");
+      expect(messages).toContain(`studio/observe state is unknown on approved head ${head}`);
+      expect(messages).toContain("could not read");
+      expect(messages).toContain("require success on this SHA");
+      expect(messages).not.toContain(positiveMessage);
+      expect(gh.recordPrReview).toHaveBeenCalledOnce();
+      expect(gh.editIssue).toHaveBeenCalledOnce();
+    } finally {
+      output.mockRestore();
+    }
+  });
   it("requires success on the exact PR head for observe tickets", async () => {
     vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
     vi.mocked(gh.observeStatus).mockResolvedValue("success");
