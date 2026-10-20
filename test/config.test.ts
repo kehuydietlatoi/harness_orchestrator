@@ -31,9 +31,11 @@ describe("loadConfig", () => {
     const config = loadConfig(writeConfig({ adapters: { codex: { models: { lead: { capabilities: ["vision"] } } } },
       tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", capabilities: [] }] } }));
     expect(resolveCapabilities("claude")).toEqual(["shell", "vision"]);
-    expect(resolveCapabilities("codex")).toEqual(["shell"]);
+    expect(resolveCapabilities("codex")).toEqual(["shell", "vision"]);
     expect(resolveCapabilities("opencode")).toEqual(["shell"]);
     expect(resolveCapabilities("codex", config.adapters.codex.models!.lead)).toEqual(["vision"]);
+    expect(resolveCapabilities("codex", { capabilities: ["shell"] })).toEqual(["shell"]);
+    expect(resolveCapabilities("codex", { capabilities: [] })).toEqual([]);
     expect(resolveCapabilities("claude", resolveTierModel("claude", "lead", config))).toEqual([]);
   });
   it.each([null, "vision", [1], [""]])("rejects malformed capabilities %j", capabilities => {

@@ -122,7 +122,7 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
-  it.each([{ needs: ["vision"] as const }, { sensitivity: "secret" as const }])("refuses dispatch filters before claiming or constructing an adapter: %j", async metadata => {
+  it.each([{ needs: ["web"] as const }, { sensitivity: "secret" as const }])("refuses dispatch filters before claiming or constructing an adapter: %j", async metadata => {
     const agent = "needs" in metadata ? "codex" : "opencode";
     const task = { ...issue, body: renderTicketV2({ ...metadata, needs: "needs" in metadata ? [...metadata.needs] : undefined }), labels: ["agent:" + agent, "status:todo"] };
     mocks.listIssues.mockResolvedValue([task]);
@@ -140,7 +140,7 @@ describe("processNext recovery", () => {
   });
 
   it.each(["nonzero", "rejected"])("preserves a spawn refusal when commenting fails: %s", async failure => {
-    const task = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["agent:codex", "status:todo"] };
+    const task = { ...issue, body: renderTicketV2({ needs: ["web"] }), labels: ["agent:codex", "status:todo"] };
     mocks.listIssues.mockResolvedValue([task]);
     if (failure === "nonzero") mocks.exec.mockResolvedValue({ code: 1, stdout: "", stderr: "GitHub unavailable" });
     else mocks.exec.mockRejectedValue(new Error("GitHub unavailable"));
@@ -149,25 +149,28 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
     expect(mocks.makeAdapter).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
-    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs vision/);
+    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs web/);
   });
 
   it("rechecks filters on an already claimed task without recording a harness run", async () => {
-    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: renderTicketV2({ needs: ["vision"] }) }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: renderTicketV2({ needs: ["web"] }) }, worktree: { path: worktree, branch: "task/35" } });
     expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention" });
     expect(mocks.makeAdapter).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
-  it("leaves an unpinned vision task ready for Claude after Codex skips it", async () => {
+  it("leaves an unpinned vision task ready for Claude after shell-only Codex skips it", async () => {
+    const config = { ...DEFAULT_CONFIG, adapters: { ...DEFAULT_CONFIG.adapters, codex: {
+      ...DEFAULT_CONFIG.adapters.codex, models: { standard: { capabilities: ["shell"] }, lead: { capabilities: ["shell"] } },
+    } } };
     const candidate = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["status:todo"] };
     mocks.claimNext.mockImplementation(async (_agent, _cfg, _cwd, opts) => {
       if (!(await opts.canClaim(candidate))) return null;
       return { issue: candidate, worktree: { path: worktree, branch: "task/35" } };
     });
 
-    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toBeNull();
+    expect(await processNext("codex", config, cwd)).toBeNull();
     expect(candidate.labels).toEqual(["status:todo"]);
     expect(mocks.editIssue).not.toHaveBeenCalled();
     expect(readEvents(cwd)).toEqual([]);

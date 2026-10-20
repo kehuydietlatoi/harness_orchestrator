@@ -301,8 +301,8 @@ Issues without a role label remain unrestricted. Unknown roles are rejected.
 Tickets can declare `needs: ["shell", "vision", "web"]` and `sensitivity` as
 `public`, `internal`, or `secret`. Planning rejects routes whose selected model
 cannot meet every need; dispatch rechecks the policy before spawning, and cascades
-skip incompatible members. Claude defaults to shell and vision; Codex and
-OpenCode default to shell. No harness defaults to web. A model spec or ladder
+skip incompatible members. Claude and Codex default to shell and vision;
+OpenCode defaults to shell. No harness defaults to web. A model spec or ladder
 member's `capabilities` array replaces these defaults, including `[]`.
 `engine`, `image-gen`, and `audio-gen` needs require tooling from Phases 3-4.
 
