@@ -21,7 +21,7 @@ describe("nextHop", () => {
     const policy = { ...cfg, tierMembers: { ...cfg.tierMembers!, cheap: [c, codex], standard: [d, claude] } };
     expect(nextHop(a, [], undefined, policy, undefined, { sensitivity: "secret" })).toEqual({ ...DEFAULT_CONFIG.adapters.codex.models!.cheap, ...codex });
     expect(nextHop(a, [], undefined, { ...policy, sensitivity: { internal: { allow: ["zen/c"] } } }, undefined, { sensitivity: "internal" })).toEqual(c);
-    expect(nextHop(a, [], undefined, policy, undefined, { needs: ["vision"] })).toEqual({ ...DEFAULT_CONFIG.adapters.claude.models!.standard, ...claude });
+    expect(nextHop(a, [], undefined, policy, undefined, { needs: ["vision"] })).toEqual({ ...DEFAULT_CONFIG.adapters.codex.models!.cheap, ...codex });
     expect(nextHop(a, [], undefined, policy, undefined, { needs: ["web"] })).toBeNull();
   });
   it.each([

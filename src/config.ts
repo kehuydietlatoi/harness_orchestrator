@@ -117,7 +117,7 @@ function validateCapabilities(value: unknown, field: string): void {
 
 /** Defaults describe proven headless worker tools, never inferred from model names. */
 export function resolveCapabilities(agent: string, spec?: ModelSpec): readonly string[] {
-  return spec?.capabilities ?? ({ claude: ["shell", "vision"], codex: ["shell"], opencode: ["shell"] } as Record<string, string[]>)[agent] ?? [];
+  return spec?.capabilities ?? ({ claude: ["shell", "vision"], codex: ["shell", "vision"], opencode: ["shell"] } as Record<string, string[]>)[agent] ?? [];
 }
 
 export interface OrchConfig {

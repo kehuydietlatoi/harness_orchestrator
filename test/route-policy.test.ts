@@ -24,7 +24,9 @@ describe("validateRoute", () => {
   });
   it("checks capabilities on the selected member, including empty overrides", () => {
     expect(validateRoute({ agent: "claude", tier: "lead", needs: ["vision"] }, cfg).ok).toBe(true);
-    expect(validateRoute({ agent: "codex", tier: "lead", needs: ["vision"] }, cfg).ok).toBe(false);
+    expect(validateRoute({ agent: "codex", tier: "lead", needs: ["vision"] }, cfg).ok).toBe(true);
+    expect(validateRoute({ agent: "codex", tier: "lead", needs: ["vision"], model: { capabilities: ["shell"] } }, cfg).ok).toBe(false);
+    expect(validateRoute({ agent: "opencode", tier: "lead", needs: ["vision"], sensitivity: "public" }, cfg).ok).toBe(false);
     expect(validateRoute({ agent: "claude", tier: "lead", needs: ["shell"], model: { capabilities: [] } }, cfg).ok).toBe(false);
     expect(validateRoute({ agent: "codex", tier: "lead", needs: ["vision"], model: { capabilities: ["vision"] } }, cfg).ok).toBe(true);
   });
