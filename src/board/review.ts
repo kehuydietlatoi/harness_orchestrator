@@ -13,6 +13,7 @@ import {
   prChecksPass,
   mergePr,
   prChangedPaths,
+  observeStatus,
 } from "../github/github.js";
 import { ghBoard } from "../github/board.js";
 import { log } from "../util/log.js";
@@ -25,6 +26,7 @@ import { DEFAULT_PROTECTED_PATHS } from "../config.js";
 import { pathMatchesGlob } from "../git/path-locks.js";
 import { acceptedReviewers, defaultFamily, formatReview, reviewState, type ReviewMode, type ReviewIdentity } from "./approval.js";
 import { assertSelfReviewAllowed } from "./reviewer.js";
+import { parseTicketV2 } from "../tasks/plan.js";
 
 /** Map a PR back to its issue via the `task/<n>-` branch or a `Closes #n` line. */
 export function prIssueNumber(pr: Pick<Pr, "headRefName" | "body">): number | null {
@@ -241,6 +243,16 @@ export async function checkMergeGate(
   }
   const issue = await getIssue(n, { cwd });
   const author = issueAgent(issue);
+  if (parseTicketV2(issue.body).observe?.length) {
+    try {
+      const state = await observeStatus(pr.headSha, { cwd });
+      if (state !== "success") {
+        reasons.push(`studio/observe is ${state ?? "missing"} on current head ${pr.headSha}; requires success on this SHA (success on an older SHA does not count)`);
+      }
+    } catch (error) {
+      reasons.push(`cannot read studio/observe on current head ${pr.headSha}: ${(error as Error).message}`);
+    }
+  }
   let protectedPathsChanged: string[] = [];
   const protectedPaths = cfg.protectedPaths ?? DEFAULT_PROTECTED_PATHS;
   if (protectedPaths.length) {

@@ -4,6 +4,7 @@ import { formatReview, parseReview } from "../src/board/approval.js";
 vi.mock("../src/github/github.js", () => ({
   getPr: vi.fn(), getIssue: vi.fn(), listPrReviews: vi.fn(), recordPrReview: vi.fn(),
   prChangedPaths: vi.fn(),
+  observeStatus: vi.fn(),
   editIssue: vi.fn(), prChecksPass: vi.fn(), mergePr: vi.fn(), listIssues: vi.fn(), listOpenPrs: vi.fn(),
 }));
 vi.mock("../src/git/worktree.js", () => ({ worktreePath: () => "/worktree", removeWorktree: vi.fn() }));
@@ -24,6 +25,44 @@ beforeEach(() => {
   vi.mocked(gh.prChecksPass).mockResolvedValue({ pass: true, detail: "ok" });
 });
 describe("review and merge boundary", () => {
+  const observeIssue = { ...issue, body: '## Ticket metadata (v2)\n\n```json\n{"observe":["smoke"]}\n```' };
+  it("requires success on the exact PR head for observe tickets", async () => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    vi.mocked(gh.observeStatus).mockResolvedValue("success");
+    const gate = await checkMergeGate(62, DEFAULT_CONFIG, "/repo");
+    expect(gate.ok).toBe(true);
+    expect(gh.observeStatus).toHaveBeenCalledWith(head, { cwd: "/repo" });
+    await merge(62, DEFAULT_CONFIG, "/repo");
+    expect(gh.mergePr).toHaveBeenCalledWith(62, expect.objectContaining({ expectedHead: head }));
+  });
+  it.each([null, "failure", "pending", "error"])("refuses observe status %s", async (state) => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    vi.mocked(gh.observeStatus).mockResolvedValue(state);
+    const gate = await checkMergeGate(62, DEFAULT_CONFIG, "/repo");
+    expect(gate.ok).toBe(false);
+    expect(gate.reasons.join(" ")).toContain(`studio/observe is ${state ?? "missing"} on current head ${head}`);
+    await expect(merge(62, DEFAULT_CONFIG, "/repo")).rejects.toThrow("studio/observe");
+    expect(gh.mergePr).not.toHaveBeenCalled();
+  });
+  it("does not accept success on an older SHA", async () => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    vi.mocked(gh.observeStatus).mockImplementation(async sha => sha === "b".repeat(40) ? "success" : null);
+    const gate = await checkMergeGate(62, DEFAULT_CONFIG, "/repo");
+    expect(gate.ok).toBe(false);
+    expect(gate.reasons.join(" ")).toContain("success on an older SHA does not count");
+  });
+  it("fails closed when observe status is unreadable, even without cross-review", async () => {
+    vi.mocked(gh.getIssue).mockResolvedValue(observeIssue);
+    vi.mocked(gh.observeStatus).mockRejectedValue(new Error("offline"));
+    const gate = await checkMergeGate(62, { ...DEFAULT_CONFIG, requireCrossReview: false }, "/repo");
+    expect(gate.ok).toBe(false);
+    expect(gate.reasons.join(" ")).toContain("cannot read studio/observe");
+    expect(gate.reasons.join(" ")).toContain("offline");
+  });
+  it("does not read observe status for tickets without observe", async () => {
+    expect((await checkMergeGate(62, DEFAULT_CONFIG, "/repo")).ok).toBe(true);
+    expect(gh.observeStatus).not.toHaveBeenCalled();
+  });
   it.each(["package.json", "vitest.config.ts", "jest.config.cjs", ".mocharc.json", "playwright.config.js", "orch.config.json", "packages/game/package.json"])("requires lead approval for %s", async (path) => {
     vi.mocked(gh.prChangedPaths).mockResolvedValue([path]);
     const setApproval = (tier?: "standard" | "lead", family = "anthropic", approvedHead = head) =>

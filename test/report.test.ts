@@ -34,6 +34,47 @@ const runs: RunRecord[] = [
 ];
 
 describe("buildRunReport", () => {
+  it("reports observe attempts, last overall, and fixes separately without changing aggregate rounds", () => {
+    const activity = [
+      ...events,
+      finished(1, 13, "observe", "observe.finished", "not-verified"),
+      finished(1, 14, "fix", "fix.pushed", "round 1 (observe); label warning"),
+      finished(1, 15, "fix", "fix.pushed", "round 2 (review)"),
+      finished(1, 16, "fix", "fix.pushed", "round 3 (ci)"),
+      finished(1, 17, "resolve-conflict", "conflict.resolved"),
+      finished(1, 18, "observe", "observe.finished", "verified"),
+      finished(1, 19, "observe", "step.failed", "head moved"),
+      // Judge events describe the same step, not another observe attempt.
+      { ts: at(18), issue: 1, type: "observe.verdict", detail: '{"overall":"verified"}' },
+      finished(1, 11, "observe", "observe.finished", "verifier-blocked"),
+    ];
+    const report = buildRunReport(activity, [...runs, run(1, 18, "codex", null, "observe")]);
+    expect(report.tasks[0]).toMatchObject({
+      fixRounds: 5, observe: { runs: 4, lastOverall: "verified" }, observeFixRounds: 1, reviewFixRounds: 1,
+      agentRuns: 4, costUsd: 2,
+    });
+    expect(report.totals.meanFixRounds).toBe(2.5);
+    expect(formatRunReport(report)).toContain("Observe: runs 4, last overall verified; fix rounds: observe 1, review 1");
+    expect(report.tasks[1]).not.toHaveProperty("observe");
+  });
+  it("scopes observe activity and preserves a blocked overall when no judge ran", () => {
+    const activity = [...events,
+      finished(1, 13, "observe", "observe.finished", "not-verified"),
+      finished(1, 16, "observe", "observe.finished", "verifier-blocked"),
+      finished(2, 17, "observe", "observe.finished", "inconclusive")];
+    const report = buildRunReport(activity, [], { since: new Date(at(14)), issues: new Set([1]) });
+    expect(report.tasks).toHaveLength(1);
+    expect(report.tasks[0].observe).toEqual({ runs: 1, lastOverall: "verifier-blocked" });
+  });
+  it("reports observe fixes even if the preceding observe attempt is outside the range", () => {
+    const report = buildRunReport([finished(1, 20, "fix", "fix.pushed", "round 1 (observe)")], []);
+    expect(report.tasks[0]).toMatchObject({ observe: { runs: 0, lastOverall: null }, observeFixRounds: 1, reviewFixRounds: 0 });
+  });
+  it("leaves legacy reports and terminal output unchanged without observe activity", () => {
+    const report = buildRunReport(events, runs);
+    expect(report.tasks.every(t => t.observe === undefined && t.observeFixRounds === undefined && t.reviewFixRounds === undefined)).toBe(true);
+    expect(formatRunReport(report)).not.toContain("Observe:");
+  });
   it("reports a budget cutoff separately from open tasks", () => {
     const report = buildRunReport(events, [...runs, { ...run(3, 16, "codex", null), outcome: "budget-spent" }]);
     expect(report.tasks.find(t => t.issue === 3)?.outcome).toBe("budget-stopped");
