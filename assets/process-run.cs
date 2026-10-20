@@ -78,7 +78,9 @@ class RunOwner {
             startup.flags = 0x100; // STARTF_USESTDHANDLES
             startup.input = GetStdHandle(-10); startup.output = GetStdHandle(-11); startup.error = GetStdHandle(-12);
             var command = new StringBuilder();
-            bool shell = args.Length == 6 && Path.GetFileName(args[1]).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase) && args[2] == "/d" && args[3] == "/s" && args[4] == "/c";
+            bool shell = Path.GetFileName(args[1]).Equals("cmd.exe", StringComparison.OrdinalIgnoreCase) &&
+                ((args.Length == 6 && args[2] == "/d" && args[3] == "/s" && args[4] == "/c") ||
+                 (args.Length == 7 && args[2] == "/d" && args[3] == "/s" && args[4] == "/v:off" && args[5] == "/c"));
             for (int i = 1; i < args.Length; i++) {
                 if (i > 1) command.Append(' ');
                 command.Append(shell && i >= 2 ? args[i] : Quote(args[i]));

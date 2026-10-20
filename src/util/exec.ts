@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "./spawn.js";
 import { spawnRun } from "./process-group.js";
 import { log } from "./log.js";
+import { resolveWindowsCommand, windowsInvocation } from "./win-command.js";
 
 export interface ExecResult {
   code: number;
@@ -23,7 +24,8 @@ export interface ExecResult {
 export const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * Run a subprocess without a shell (avoids injection / quoting issues).
+ * Run literal argv with shell:false. Windows batch shims use an explicitly
+ * escaped cmd.exe launch plan; native executables and POSIX argv stay direct.
  * Never rejects — failures come back as a non-zero `code`.
  */
 export function exec(
@@ -35,10 +37,15 @@ export function exec(
 ): Promise<ExecResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve) => {
-    const options = { cwd: opts.cwd, shell: false, ...(opts.env ? { env: opts.env } : {}) };
     let child: ChildProcess;
     try {
-      child = opts.contain ? spawnRun(cmd, args, options) : spawn(cmd, args, options);
+      const invocation = process.platform === "win32"
+        ? windowsInvocation(resolveWindowsCommand(cmd, opts.cwd ?? process.cwd(), opts.env ?? process.env), args, opts.env ?? process.env)
+        : { command: cmd, args, env: opts.env };
+      const options = { cwd: opts.cwd, shell: false,
+        ...(invocation.env ? { env: invocation.env } : {}),
+        ...("windowsVerbatimArguments" in invocation ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments } : {}) };
+      child = opts.contain ? spawnRun(invocation.command, invocation.args, options) : spawn(invocation.command, invocation.args, options);
     } catch (error) {
       log.warn(`${cmd}: ${String(error)}`);
       resolve({ code: 127, stdout: "", stderr: String(error) });
@@ -112,6 +119,17 @@ export function exec(
       child.stdin.end();
     }
   });
+}
+
+/** Validate the same launch plan as exec, without executing project code. */
+export async function commandRunError(argv: readonly string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<string | undefined> {
+  try {
+    if (process.platform === "win32") {
+      const env = opts.env ?? process.env;
+      windowsInvocation(resolveWindowsCommand(argv[0], opts.cwd ?? process.cwd(), env), argv.slice(1), env);
+    } else if (!await commandExists(argv[0])) return `Command not found: ${argv[0]}`;
+    return undefined;
+  } catch (error) { return String(error); }
 }
 
 /** True if `cmd` is an executable absolute file path or resolvable on PATH. */
