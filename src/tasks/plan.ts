@@ -2,7 +2,7 @@ import { designReferenceErrors, type DesignContext } from "./brief-context.js";
 import { listIssues, editIssue } from "../github/github.js";
 import { agentLabel } from "../github/labels.js";
 import { issueAgent, isEligible } from "../board/board.js";
-import { DEFAULT_CONFIG, EFFORT_TIERS, normalizeEffort, resolveTierModel, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
+import { DEFAULT_CONFIG, EFFORT_TIERS, normalizeEffort, resolvePricingMode, resolveTierModel, type TierAliases, type EffortTier, type OrchConfig } from "../config.js";
 import { definitionOfDoneWarnings } from "./definition-of-done.js";
 import type { Budget } from "./budget.js";
 import { lockPathsOverlap, normalizeLockPath } from "../git/path-locks.js";
@@ -295,6 +295,18 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
     if (effort && !agent) {
       warnings.push(`ticket ${index} has an effort but no agent; dropped so the judge routes it whole`);
       effort = undefined;
+    }
+
+    if (cfg) {
+      // A flat-rate agent's runs cost no extra dollars, so a USD cap never limits them.
+      const tiers = effort ? [effort] : agent ? [cfg.defaultEffort ?? "lead"] : EFFORT_TIERS;
+      const capped = tiers.some((tier) => (t.budget?.usd ?? cfg.budgets?.byTier?.[tier]?.usd ?? cfg.budgets?.default?.usd) !== undefined);
+      // Cascade members can hand a routed ticket to another agent.
+      const candidates = new Set([...(agent ? [agent] : opts.agents ?? cfg.agents), ...tiers.flatMap((tier) => cfg.tierMembers?.[tier]?.map((m) => m.agent) ?? [])]);
+      const flat = capped ? [...candidates].filter((a) => cfg.adapters[a] && resolvePricingMode(a, cfg) !== "api") : [];
+      if (flat.length) {
+        warnings.push(`ticket ${index} has a USD budget, but flat-rate agent(s) ${flat.join(", ")} can work on it; their runs do not count toward it`);
+      }
     }
 
     if (t.id) seen.add(t.id);

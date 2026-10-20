@@ -34,7 +34,8 @@ export function resolveBudget(cfg: Pick<OrchConfig, "budgets">, tier: EffortTier
 }
 
 /** Caller supplies this issue's records across all phases and agents. One invocation
- * is one request; legacy records predate the explicit count. Unknown USD fails closed. */
+ * is one request; legacy records predate the explicit count. Unknown USD fails closed;
+ * callers map flat-rate (non-API) runs to $0 first. */
 export function budgetStatus(
   runs: readonly { durationMs: number; costUsd: number | null; requests?: number }[],
   budget: Budget = {},

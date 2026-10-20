@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { budgetStatus, parseBudget, resolveBudget, validateBudget } from "../src/tasks/budget.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 import { applyBudget, decideStep } from "../src/tasks/steps.js";
+import { resolvePlan } from "../src/tasks/plan.js";
 
 describe("ticket budgets", () => {
   const runs = [{ durationMs: 60_000, costUsd: 0.5 }, { durationMs: 120_000, costUsd: 1.5 }];
@@ -44,5 +45,18 @@ describe("ticket budgets", () => {
     expect(applyBudget({ kind: "merge" }, true)).toEqual({ kind: "merge" });
     expect(decideStep({ attention: true, budgetSpent: true, pr: null, review: { approved: false, changesRequested: false },
       rounds: 0, maxRounds: 3, requireHumanMerge: false }).kind).toBe("none");
+  });
+  it("warns when planning a USD-capped ticket a flat-rate agent can work on", () => {
+    const cfg = { ...DEFAULT_CONFIG, budgets: { byTier: { cheap: { usd: 1 } } } };
+    const warn = (t: Parameters<typeof resolvePlan>[0][number]) =>
+      resolvePlan([t], { config: cfg }).warnings.filter((w) => w.includes("USD budget"));
+    expect(warn({ title: "a" })).toEqual(["ticket 1 has a USD budget, but flat-rate agent(s) codex can work on it; their runs do not count toward it"]);
+    expect(warn({ title: "a", agent: "codex", effort: "cheap" })).toHaveLength(1);
+    expect(warn({ title: "a", agent: "claude", effort: "cheap" })).toEqual([]);
+    const ladder = { ...cfg, tierMembers: { free: [], cheap: [{ agent: "claude" }, { agent: "codex" }], standard: [], lead: [] } };
+    expect(resolvePlan([{ title: "a", agent: "claude", effort: "cheap" }], { config: ladder }).warnings.filter((w) => w.includes("USD budget"))).toHaveLength(1);
+    expect(warn({ title: "a", agent: "codex", effort: "lead" })).toEqual([]);
+    expect(warn({ title: "a", agent: "codex", effort: "lead", budget: { usd: 3 } })).toHaveLength(1);
+    expect(resolvePlan([{ title: "a", budget: { usd: 3 } }]).warnings.filter((w) => w.includes("USD budget"))).toEqual([]);
   });
 });
