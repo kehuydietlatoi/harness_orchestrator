@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Approval observe messaging (#235)**: `review-approve` reads v2 observe metadata and `studio/observe` best-effort after recording approval, using the approved SHA. Missing/non-success or unreadable state suppresses the merge-acceptance message; observe success and tickets without observe retain it.
+
 - **Trusted Windows argv (#232)**: `src/util/win-command.ts` shares PATH/PATHEXT resolution and launch validation between `exec` and doctor for verify/setup/evidence. Native `.exe`/`.com` keep direct argv; `.cmd`/`.bat` use cmd with delayed expansion off, single environment expansion indirection for percent literals, and escaping for launch plus `%*` forwarding. Control characters and oversized shim argv fail before execution. Contained cmd launches retain the owned supervisor; its outer argv uses CRT quoting and only the inner cmd payload is verbatim.
 
 - **Observe handback (#233)**: a `needs-attention` removal strictly newer than the newest current-head blocked observe comment makes its fact missing, permitting one fresh observe on the same SHA. Issue events are paginated and read only for blocked facts; unreadable events leave the PR unobserved. A newer blocked comment consumes the handback and escalates again.
