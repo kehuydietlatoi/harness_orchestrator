@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe gate (#220)**: [ADR-0015](docs/adr/0015-observe-gate.md) owns observe ordering, config-only evidence execution, independent standard-tier vision judging, the SHA-bound status/comment record, and local evidence retention. Read it when changing these boundaries; `studio/observe` is a separate merge gate excluded from CI roll-up.
+
 - **Autopilot observe (#218)**: observe tickets read current-head `studio/observe` plus the newest matching `orch-observe:v1` PR comment; unreadable reads leave the PR unobserved. Observe runs after conflict resolution and before review, independently of pending CI; its context is excluded from CI checks. Not-verified verdicts use the normal fix/triage round budget; blocked evidence or judges escalate. The executor checks the head before publishing and always releases its evidence checkout.
 
 - **Observe judging (#217)**: `src/tasks/observe-judge.ts` selects a vision-capable standard-tier judge from another provider family regardless of `reviewPolicy`. It stages regular evidence files under `.orch-observe/` in the evidence checkout, requires a head-bound fenced verdict, and records `observe.verdict` plus phase `observe` telemetry with distinct outcomes. The caller retains checkout ownership and must release it after judging.
