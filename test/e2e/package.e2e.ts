@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../..", import.meta.url));
@@ -39,7 +39,7 @@ it("packs reproducibly, excludes private files, and installs a working CLI with 
     const first = pack();
     expect(pack().integrity).toBe(first.integrity);
     const files = first.files.map((f) => f.path);
-    for (const file of ["dist/cli.js", "public/index.html", "assets/skills/orch-plan/SKILL.md", "tickets.example.json", "docs/WORKFLOW.md"]) {
+    for (const file of ["dist/cli.js", "public/index.html", "assets/skills/orch-plan/SKILL.md", "assets/process-run.cs", "assets/process-run.c", "tickets.example.json", "docs/WORKFLOW.md"]) {
       expect(files).toContain(file);
     }
     const readme = readFileSync(path.join(root, "README.md"), "utf8");
@@ -54,6 +54,12 @@ it("packs reproducibly, excludes private files, and installs a working CLI with 
     const packageRoot = path.join(installed, "node_modules/harness-orchestrator");
     const output = execFileSync(process.execPath, [path.join(packageRoot, "dist/cli.js"), "--help"], { encoding: "utf8", cwd: installed });
     expect(output).toContain("Usage: orch");
+    // Exercise the installed supervisor and its shipped source, not just CLI imports.
+    const spawnModule = pathToFileURL(path.join(packageRoot, "dist/util/spawn.js")).href;
+    const contained = execFileSync(process.execPath, ["--input-type=module", "-e",
+      `const { spawnLogged } = await import(${JSON.stringify(spawnModule)}); const r = await spawnLogged(process.execPath, ['-e', 'process.exit(0)']); process.exit(r.code);`,
+    ], { cwd: installed, encoding: "utf8", timeout: 30_000 });
+    expect(contained).toBe("");
     expect(readFileSync(path.join(packageRoot, "assets/skills/orch-plan/SKILL.md"), "utf8")).toContain("tickets.json");
     expect(readFileSync(path.join(packageRoot, "public/index.html"), "utf8")).toContain("<html");
     expect(existsSync(path.join(installed, "node_modules/.bin", process.platform === "win32" ? "orch.cmd" : "orch"))).toBe(true);
