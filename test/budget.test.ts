@@ -53,6 +53,8 @@ describe("ticket budgets", () => {
     expect(warn({ title: "a" })).toEqual(["ticket 1 has a USD budget, but flat-rate agent(s) codex can work on it; their runs do not count toward it"]);
     expect(warn({ title: "a", agent: "codex", effort: "cheap" })).toHaveLength(1);
     expect(warn({ title: "a", agent: "claude", effort: "cheap" })).toEqual([]);
+    const ladder = { ...cfg, tierMembers: { free: [], cheap: [{ agent: "claude" }, { agent: "codex" }], standard: [], lead: [] } };
+    expect(resolvePlan([{ title: "a", agent: "claude", effort: "cheap" }], { config: ladder }).warnings.filter((w) => w.includes("USD budget"))).toHaveLength(1);
     expect(warn({ title: "a", agent: "codex", effort: "lead" })).toEqual([]);
     expect(warn({ title: "a", agent: "codex", effort: "lead", budget: { usd: 3 } })).toHaveLength(1);
     expect(resolvePlan([{ title: "a", budget: { usd: 3 } }]).warnings.filter((w) => w.includes("USD budget"))).toEqual([]);

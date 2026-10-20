@@ -301,7 +301,9 @@ export function resolvePlan(tickets: readonly Ticket[], opts: ResolveOptions = {
       // A flat-rate agent's runs cost no extra dollars, so a USD cap never limits them.
       const tiers = effort ? [effort] : agent ? [cfg.defaultEffort ?? "lead"] : EFFORT_TIERS;
       const capped = tiers.some((tier) => (t.budget?.usd ?? cfg.budgets?.byTier?.[tier]?.usd ?? cfg.budgets?.default?.usd) !== undefined);
-      const flat = capped ? (agent ? [agent] : opts.agents ?? cfg.agents).filter((a) => cfg.adapters[a] && resolvePricingMode(a, cfg) !== "api") : [];
+      // Cascade members can hand a routed ticket to another agent.
+      const candidates = new Set([...(agent ? [agent] : opts.agents ?? cfg.agents), ...tiers.flatMap((tier) => cfg.tierMembers?.[tier]?.map((m) => m.agent) ?? [])]);
+      const flat = capped ? [...candidates].filter((a) => cfg.adapters[a] && resolvePricingMode(a, cfg) !== "api") : [];
       if (flat.length) {
         warnings.push(`ticket ${index} has a USD budget, but flat-rate agent(s) ${flat.join(", ")} can work on it; their runs do not count toward it`);
       }
