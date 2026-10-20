@@ -74,6 +74,7 @@ export async function doctorCommand(): Promise<void> {
       const loaded = loadConfig(cwd);
       adapters = configuredAdapterCommands(loaded);
       checks.push({ name: "config and domain pack valid", ok: true });
+      if (loaded.evidence) checks.push({ name: "evidence command present", ok: await commandExists(loaded.evidence[0]), note: loaded.evidence[0] });
     } catch (error) {
       checks.push({ name: "config and domain pack valid", ok: false, note: String(error) });
     }

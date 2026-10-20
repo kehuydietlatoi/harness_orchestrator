@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe ticket configuration (#215)**: `observe` is validated and projected with v2 metadata, outside marker identities; planning requires config `evidence`. `loadConfig` validates evidence argv/setup and resolves evidence storage outside the canonical checkout; pack briefs expose scenario commands through `ticket.observe`. This ticket configures evidence only; execution and judging are separate work.
+
 - **Codex vision (#214)**: `resolveCapabilities` defaults Codex to `shell, vision` following the 2026-10-20 read-only PNG probe (codex-cli 0.160.1; ADR-0012). Explicit model capabilities replace defaults, including `[]`; OpenCode vision still requires an explicit declaration.
 
 - **Concurrent base fetches (#207)**: `resolveBaseBranch` coalesces in-process fetches by canonical Git common directory and base ref, sharing across linked worktrees and serializing different bases. Ref-lock failures re-read the tracking ref and retry once; other failures propagate. `claimNext` surfaces candidate errors after trying alternatives. Coordinator claim errors back off until success or the idle deadline; only an empty claim result marks the agent drained.
