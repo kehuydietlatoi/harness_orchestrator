@@ -8,6 +8,7 @@ import { prepareReviewCheckout, type ReviewCheckout } from "../src/board/review-
 import { exec } from "../src/util/exec.js";
 import { appendEvent, readEvents } from "../src/tasks/events.js";
 import { runEvidence, type EvidenceRunDeps } from "../src/tasks/evidence.js";
+import { assertStopped, cleanupDetached, detachedFixture } from "./helpers/process-containment.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -91,7 +92,7 @@ describe("runEvidence", () => {
       expect(options).toMatchObject({ cwd: checkout.path, timeoutMs: 10000 });
       expect(options!.env!.GH_TOKEN).toBeUndefined();
     }
-    const commands = vi.mocked(spawn).mock.calls.filter(([command]) => command === process.execPath);
+    const commands = vi.mocked(spawn).mock.calls.filter(([, args]) => Array.isArray(args) && args[1] === process.execPath);
     expect(commands).toHaveLength(3); // setup and both scenarios
     for (const call of commands) {
       expect(call[2]).toMatchObject({ shell: false, cwd: checkout.path });
@@ -101,6 +102,42 @@ describe("runEvidence", () => {
     })));
     expect(readFileSync(join(repo, "dirty.txt"), "utf8")).toBe("preserve me");
   });
+
+  it("drains setup and evidence descendants before the next command and checkout release", async () => {
+    const setupRecord = join(root, "setup-child.json");
+    const evidenceRecord = join(root, "evidence-child.json");
+    cfg.evidenceSetup = [[process.execPath, detachedFixture, setupRecord]];
+    cfg.evidence = [process.execPath, detachedFixture, evidenceRecord, "evidence"];
+    let calls = 0;
+    deps.runner = vi.fn(async (cmd, args, opts) => {
+      if (calls > 0) await assertStopped(setupRecord);
+      if (calls++ > 1) await assertStopped(evidenceRecord);
+      return exec(cmd, args, opts);
+    });
+    try {
+      const { results, checkout } = await run(["one", "two"]);
+      expect(results.map(result => result.status)).toEqual(["ok", "ok"]);
+      await assertStopped(setupRecord);
+      await assertStopped(evidenceRecord);
+      await checkout.release();
+    } finally {
+      cleanupDetached(setupRecord);
+      cleanupDetached(evidenceRecord);
+    }
+  }, 25000);
+
+  it.each(["setup", "evidence"])("drains detached descendants when %s times out", async phase => {
+    const record = join(root, "timeout-child.json");
+    const command = [process.execPath, detachedFixture, record, "wait"];
+    if (phase === "setup") cfg.evidenceSetup = [command];
+    else cfg.evidence = command;
+    cfg.evidenceTimeoutMs = 3000;
+    try {
+      const { results } = await run(["one"]);
+      expect(results[0]).toMatchObject({ status: "failed", error: expect.stringContaining("timed out") });
+      await assertStopped(record);
+    } finally { cleanupDetached(record); }
+  }, 25000);
 
   it.each([
     ["failed", "the player fell through the floor"], ["missing", "missing or invalid run.json"],

@@ -4,12 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandExists, exec } from "../src/util/exec.js";
 import { verifyEnvironment } from "../src/tasks/verify.js";
+import { assertStopped, cleanupDetached, detachedFixture } from "./helpers/process-containment.js";
 
 // Real subprocesses (no mocks) via the current Node binary, so these run the
 // same on Linux and Windows.
 const node = process.execPath;
 
 describe("exec", () => {
+  it("preserves literal argv through the containment launcher", async () => {
+    const args = ["", "space here", "a&b|c^d%PATH%", 'a"b', "trailing\\", "a\\\"b", "中文"];
+    const result = await exec(node, ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", "--", ...args], { contain: true });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(args);
+  });
+  it.each(["exit", "timeout"])("drains contained command descendants on %s", async mode => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch-exec-contained-"));
+    const record = join(cwd, "child.json");
+    try {
+      const result = await exec(node, [detachedFixture, record, mode === "exit" ? "exit" : "wait"], {
+        contain: true, timeoutMs: mode === "timeout" ? 3000 : 15000,
+      });
+      expect(result.code).toBe(mode === "timeout" ? 124 : 0);
+      await assertStopped(record);
+    } finally {
+      cleanupDetached(record);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 25000);
   it("replaces inherited environment for verify subprocesses and uses the supplied worktree cwd", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "orch-verify-env-"));
     try {
