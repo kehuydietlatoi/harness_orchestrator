@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Evidence execution (#216)**: `src/tasks/evidence.ts` runs trusted setup/evidence argv only in `prepareReviewCheckout`'s detached head checkout, with `verifyEnvironment` and per-command timeouts. Results and `observe.evidence` events are scenario/head-bound; output folders are replaced per run. Callers own the returned checkout and must release it after judging. Review checkout release shares `prepareWorktreeRemoval`'s non-recursive link guard and retains the checkout on unsafe cleanup or Git removal failure.
+
 - **Observe ticket configuration (#215)**: `observe` is validated and projected with v2 metadata, outside marker identities; planning requires config `evidence`. `loadConfig` validates evidence argv/setup and resolves evidence storage outside the canonical checkout; pack briefs expose scenario commands through `ticket.observe`. This ticket configures evidence only; execution and judging are separate work.
 
 - **Codex vision (#214)**: `resolveCapabilities` defaults Codex to `shell, vision` following the 2026-10-20 read-only PNG probe (codex-cli 0.160.1; ADR-0012). Explicit model capabilities replace defaults, including `[]`; OpenCode vision still requires an explicit declaration.
