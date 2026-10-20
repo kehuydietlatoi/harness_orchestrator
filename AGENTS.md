@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Observe handback (#233)**: a `needs-attention` removal strictly newer than the newest current-head blocked observe comment makes its fact missing, permitting one fresh observe on the same SHA. Issue events are paginated and read only for blocked facts; unreadable events leave the PR unobserved. A newer blocked comment consumes the handback and escalates again.
+
 - **Observe gate (#220)**: [ADR-0015](docs/adr/0015-observe-gate.md) owns observe ordering, config-only evidence execution, independent standard-tier vision judging, the SHA-bound status/comment record, and local evidence retention. Read it when changing these boundaries; `studio/observe` is a separate merge gate excluded from CI roll-up.
 
 - **Observe merge gate and reports (#219)**: `checkMergeGate` requires current-head `studio/observe` success for v2 observe tickets; missing, non-success and unreadable statuses block both merge callers. Run reports count completed observe step attempts and retain the newest `observe.finished` overall, with observe/review fixes split from `round N (reason)` details. Existing aggregate rounds, runs and costs include all phases; reports without observe activity keep their previous shape and text.

@@ -98,6 +98,13 @@ PR number and SHA. Merge requires both `success` and the matching `verified`
 record. Missing, malformed, unreadable, stale, or inconsistent records grant no
 approval; a new head needs new evidence and judgement.
 
+After a human handback (#233), a blocked current-head record becomes missing
+when the issue's latest `needs-attention` removal is strictly newer than the
+record comment's GitHub creation time. The loop retries observe on the same SHA;
+a fresh blocked record is newer than that handback and escalates again. Only
+blocked facts read the paginated issue events. An unreadable event list leaves
+the PR unobserved for that pass.
+
 The CI roll-up excludes `studio/observe` from `ChecksFact`. Otherwise a failed
 visual verdict would appear as red CI and dispatch `fix ci`, losing the observe
 feedback and blocked-verifier distinction. Excluding this context does not
