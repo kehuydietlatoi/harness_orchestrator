@@ -500,14 +500,25 @@ export async function prMergeability(number: number, opts: { cwd?: string; head?
     // Read head/base and the computed result together. A separate PR-list read may lag a push.
     const r = await exec("gh", ["api", `repos/{owner}/{repo}/pulls/${number}`], { cwd: opts.cwd });
     if (r.code !== 0) throw new Error(`gh PR #${number} mergeability failed: ${r.stderr.trim()}`);
-    const pr = JSON.parse(r.stdout) as { head?: { sha?: string }; base?: { sha?: string }; mergeable?: boolean | null };
+    const pr = JSON.parse(r.stdout) as { head?: { sha?: string }; base?: { sha?: string; ref?: string }; mergeable?: boolean | null };
     if (pr.head?.sha !== opts.head || typeof pr.mergeable !== "boolean") return "unknown";
     if (pr.mergeable) return "clean";
 
     // GitHub can briefly keep the previous 'conflicting' result even on the new head.
-    // A head containing this exact base cannot conflict with it. Do not use a timeout:
+    // A head containing the base cannot conflict with it. Do not use a timeout:
     // a genuinely newer base must remain eligible for conflict resolution immediately.
-    const base = pr.base?.sha;
+    // Judge against the base branch's current tip: the pull's `base.sha` is not updated when the
+    // base branch moves, so a head containing that stale commit can still conflict (#239 stalled).
+    const ref = pr.base?.ref;
+    if (!ref) return "unknown";
+    const tip = await exec("gh", ["api", `repos/{owner}/{repo}/git/ref/heads/${ref.split("/").map(encodeURIComponent).join("/")}`], { cwd: opts.cwd });
+    if (tip.code !== 0) return "unknown";
+    let base: string | undefined;
+    try {
+      base = (JSON.parse(tip.stdout) as { object?: { sha?: string } }).object?.sha;
+    } catch {
+      return "unknown";
+    }
     if (!base || !/^[a-f0-9]{40}$/i.test(base) || !/^[a-f0-9]{40}$/i.test(opts.head)) return "unknown";
     const args = ["merge-base", "--is-ancestor", base, opts.head];
     let ancestry = await exec("git", args, { cwd: opts.cwd });
