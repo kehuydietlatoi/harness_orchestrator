@@ -179,6 +179,7 @@ flowchart LR
   n43 -->|"worker diff violates scope"| n55
   n55 -->|"label + PR comment"| n56
   n56 -->|"loop ignores the task until handed back"| n44
+  n44 -->|"human handback: retry observe"| n42
   n43 -->|"drained or plan-complete"| n57
   n58 -->|"human runs orch repair"| n59
   n59 -->|"observe facts"| n60
@@ -440,6 +441,7 @@ flowchart LR
   n52 -->|"always through the gate"| n38
   n43 -->|"failed fix, next member available"| n53
   n53 -->|"route relabelled, hop recorded"| n42
+  n44 -->|"human handback: retry observe"| n42
 ```
 
 Code references:
@@ -460,6 +462,7 @@ Scenarios:
 - **Wait for CI** (`autopilot-wait-ci`): An approved head waits for external facts to settle.
 - **Wait for mergeability** (`autopilot-wait-mergeability`): An approved head waits for external facts to settle.
 - **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
+- **Retry blocked observe after human handback** (`autopilot-observe-handback`): Removing needs-attention after a blocked record permits one fresh observe on the unchanged head.
 - **Cascade after a failed fix** (`autopilot-cascade`): One failed fix switches to the next configured model before retrying.
 - **Human merge required** (`autopilot-await-human`): An approved green PR waits for the configured human merge gate.
 - **Ambiguous twin PRs** (`autopilot-ambiguous`): Twin PRs are reported and neither is driven.
@@ -559,6 +562,7 @@ Design: [ADR-0009](adr/0009-autonomous-task-loop.md)
 
 ```mermaid
 flowchart LR
+    n42["Observe PRs"]
     n43{"Decide step"}
     n44(["none"])
     n54["triage"]
@@ -571,10 +575,12 @@ flowchart LR
   n43 -->|"worker diff violates scope"| n55
   n55 -->|"label + PR comment"| n56
   n56 -->|"loop ignores the task until handed back"| n44
+  n44 -->|"human handback: retry observe"| n42
 ```
 
 Code references:
 
+- [src/tasks/observe.ts](../src/tasks/observe.ts) — `observeTasks`
 - [src/tasks/steps.ts](../src/tasks/steps.ts) — `decideStep`
 - [src/tasks/step-exec.ts](../src/tasks/step-exec.ts) — `executeTriage`
 - [src/tasks/step-exec.ts](../src/tasks/step-exec.ts) — `executeEscalate`
@@ -582,6 +588,7 @@ Code references:
 Scenarios:
 
 - **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
+- **Retry blocked observe after human handback** (`autopilot-observe-handback`): Removing needs-attention after a blocked record permits one fresh observe on the unchanged head.
 - **Ticket budget spent** (`autopilot-budget-spent`): Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.
 - **Worker diff outside role scope** (`autopilot-scope-rejected`): A worker pushed a forbidden path without orch submit; no review starts and the worktree is retained.
 - **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.

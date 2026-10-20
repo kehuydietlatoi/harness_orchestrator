@@ -272,6 +272,24 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
   },
   {
     "frames": [
+      "autopilot-observe-handback:01 auto.observe <- cut",
+      "autopilot-observe-handback:02 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-handback:03 step.escalate <- auto.decide>step.escalate:observe-blocked",
+      "autopilot-observe-handback:04 auto.handoff <- step.escalate>auto.handoff:label-pr-comment",
+      "autopilot-observe-handback:05 step.none <- auto.handoff>step.none:loop-ignores-the-task-until-handed-back",
+      "autopilot-observe-handback:06 auto.observe <- step.none>auto.observe:human-handback-retry-observe",
+      "autopilot-observe-handback:07 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-handback:08 step.observe <- auto.decide>step.observe:observe-missing",
+      "autopilot-observe-handback:09 auto.observe <- step.observe>auto.observe:status-and-verdict-recorded",
+      "autopilot-observe-handback:10 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-handback:11 step.escalate <- auto.decide>step.escalate:observe-blocked",
+      "autopilot-observe-handback:12 auto.handoff <- step.escalate>auto.handoff:label-pr-comment",
+      "autopilot-observe-handback:13 step.none <- auto.handoff>step.none:loop-ignores-the-task-until-handed-back",
+    ],
+    "id": "autopilot-observe-handback",
+  },
+  {
+    "frames": [
       "autopilot-budget-spent:01 auto.observe <- cut",
       "autopilot-budget-spent:02 auto.decide <- auto.observe>auto.decide:observed-facts",
       "autopilot-budget-spent:03 step.escalate <- auto.decide>step.escalate:ticket-budget-spent",

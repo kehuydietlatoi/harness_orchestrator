@@ -200,6 +200,10 @@ The executor refuses publication when it detects a moved head and always release
 continue to review; not-verified results send the author the unverified lines and notes through a normal
 fix round (including `maxReviewRounds`, cascade and lead triage rules). Inconclusive or verifier-blocked
 results, evidence errors, and unavailable judges escalate with the diagnosis and set `needs-attention`.
+After fixing the environment, a human can remove `needs-attention` to retry a blocked observe on the
+same SHA. The removal must be strictly newer than the newest blocked record's comment; a fresh blocked
+record after that handback escalates again. Only blocked observe facts read issue events, and an
+unreadable event list leaves the PR unobserved until a later pass.
 
 `orch autopilot` (`src/tasks/coordinator.ts`) only *starts* issues that carry an `agent:` label (`--no-claim`: none), and drives
 every open task PR. `--issues <list>` (what the `orch plan` pipeline starts) narrows both to the listed issues. It derives each open task PR's next step from facts
