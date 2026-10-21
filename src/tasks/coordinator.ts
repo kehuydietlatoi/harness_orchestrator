@@ -294,6 +294,10 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         retryAt.delete(issue);
         break;
       default:
+        // A read-only rerun must retain the author's head-bound dispute until its
+        // verdict is decided. It neither fixes the code nor spends a fix round.
+        if (result.signal === "observe.finished" && failing.get(issue)?.step === "fix (observe)" &&
+            failing.get(issue)?.head === head) break;
         failing.delete(issue);
         retryAt.delete(issue);
     }
@@ -443,7 +447,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       let step = obs.step;
       const previous = failing.get(n);
       const fails = previous?.head === obs.pr.headSha ? previous : undefined;
-      if (fails && (step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade")) {
+      if (fails && ((step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade") ||
+          fails.step === "fix (observe)" && obs.facts.observe?.state === "not-verified")) {
         step = decideStep({ ...obs.facts, failedFixAttempts: fails.count });
       }
       if (AGENT_STEPS.has(step.kind)) step = applyBudget(step, deps.budgetSpent?.(obs.issue) ?? false);

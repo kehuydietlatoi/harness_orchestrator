@@ -152,6 +152,9 @@ flowchart LR
   n42 -->|"observed facts"| n43
   n43 -->|"needs-attention or no PR"| n44
   n43 -->|"observe missing"| n45
+  n43 -->|"author disputes observe verdict"| n45
+  n47 -->|"observe fix made no commit"| n42
+  n43 -->|"observe dispute confirmed"| n55
   n45 -->|"status and verdict recorded"| n42
   n43 -->|"observe not verified"| n47
   n43 -->|"observe blocked"| n55
@@ -427,6 +430,8 @@ flowchart LR
   n42 -->|"observed facts"| n43
   n43 -->|"needs-attention or no PR"| n44
   n43 -->|"observe missing"| n45
+  n43 -->|"author disputes observe verdict"| n45
+  n47 -->|"observe fix made no commit"| n42
   n45 -->|"status and verdict recorded"| n42
   n43 -->|"observe not verified"| n47
   n43 -->|"no accepted approval"| n46
@@ -463,6 +468,7 @@ Scenarios:
 - **Wait for mergeability** (`autopilot-wait-mergeability`): An approved head waits for external facts to settle.
 - **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
 - **Retry blocked observe after human handback** (`autopilot-observe-handback`): Removing needs-attention after a blocked record permits one fresh observe on the unchanged head.
+- **Recheck a disputed observe verdict** (`autopilot-observe-dispute`): An author who makes no commit disputes the visual verdict. Re-observe once on the same SHA before asking a human.
 - **Cascade after a failed fix** (`autopilot-cascade`): One failed fix switches to the next configured model before retrying.
 - **Human merge required** (`autopilot-await-human`): An approved green PR waits for the configured human merge gate.
 - **Ambiguous twin PRs** (`autopilot-ambiguous`): Twin PRs are reported and neither is driven.
@@ -568,6 +574,7 @@ flowchart LR
     n54["triage"]
     n55["escalate"]
     n56(["Human handoff"])
+  n43 -->|"observe dispute confirmed"| n55
   n43 -->|"observe blocked"| n55
   n54 -->|"escalate, paused, failed or unparseable"| n55
   n43 -->|"budget spent, no triage left (spent or off)"| n55
@@ -589,6 +596,7 @@ Scenarios:
 
 - **Observe evidence before review** (`autopilot-observe`): Only observe tickets run head-bound evidence and an independent vision judge.
 - **Retry blocked observe after human handback** (`autopilot-observe-handback`): Removing needs-attention after a blocked record permits one fresh observe on the unchanged head.
+- **Recheck a disputed observe verdict** (`autopilot-observe-dispute`): An author who makes no commit disputes the visual verdict. Re-observe once on the same SHA before asking a human.
 - **Ticket budget spent** (`autopilot-budget-spent`): Accumulated ticket minutes, USD or requests prevent another agent run, even with triages left.
 - **Worker diff outside role scope** (`autopilot-scope-rejected`): A worker pushed a forbidden path without orch submit; no review starts and the worktree is retained.
 - **Lead grants a guided lead retry** (`autopilot-triage-retry`): Three spent fix rounds exhaust the budget; the lead may grant one guided round or hand off to a human.

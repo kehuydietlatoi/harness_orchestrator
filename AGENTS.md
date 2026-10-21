@@ -8,6 +8,8 @@
 
 ## Conventions
 
+- **Disputed observe verdicts (#234)**: a failed no-commit fix on a current-head `not-verified` verdict permits one same-SHA observe rerun without spending a fix round; two newest consecutive not-verified records escalate with the author's dispute and verdict notes. `observeTasks` counts matching records only for not-verified facts; the coordinator retains the failed observe fix through the rerun. Observe alone never cascades; review, CI, and conflict policy is unchanged.
+
 - **Approval observe messaging (#235)**: `review-approve` reads v2 observe metadata and `studio/observe` best-effort after recording approval, using the approved SHA. Missing/non-success or unreadable state suppresses the merge-acceptance message; observe success and tickets without observe retain it.
 
 - **Trusted Windows argv (#232)**: `src/util/win-command.ts` shares PATH/PATHEXT resolution and launch validation between `exec` and doctor for verify/setup/evidence. Native `.exe`/`.com` keep direct argv; `.cmd`/`.bat` use cmd with delayed expansion off, single environment expansion indirection for percent literals, and escaping for launch plus `%*` forwarding. Control characters and oversized shim argv fail before execution. Contained cmd launches retain the owned supervisor; its outer argv uses CRT quoting and only the inner cmd payload is verbatim.

@@ -38,6 +38,13 @@ lead-triage budgets. Missing or failed evidence, an inconclusive or blocked
 verifier, or a failed judge escalates to `needs-attention` rather than pretending
 to be a code acceptance failure.
 
+After a fix makes no commit on a `not-verified` head (#234), the author disputes
+the verdict: rerun observe once on that same SHA without spending a fix round.
+If the newest two matching records are both `not-verified`, escalate with the
+dispute and verdict notes. An intervening verified or blocked record breaks the
+pair. Observe alone never selects a model cascade; other fix policies retain
+their precedence.
+
 ### Trusted execution and checkout ownership
 
 `evidence` is a nonempty argv array and `evidenceSetup` is a list of argv arrays

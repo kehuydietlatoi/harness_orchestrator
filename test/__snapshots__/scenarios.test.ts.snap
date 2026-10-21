@@ -290,6 +290,22 @@ exports[`scenario registry > matches the frame id/edge snapshot 1`] = `
   },
   {
     "frames": [
+      "autopilot-observe-dispute:01 auto.observe <- cut",
+      "autopilot-observe-dispute:02 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-dispute:03 step.fix <- auto.decide>step.fix:observe-not-verified",
+      "autopilot-observe-dispute:04 auto.observe <- step.fix>auto.observe:observe-fix-made-no-commit",
+      "autopilot-observe-dispute:05 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-dispute:06 step.observe <- auto.decide>step.observe:author-disputes-observe-verdict",
+      "autopilot-observe-dispute:07 auto.observe <- step.observe>auto.observe:status-and-verdict-recorded",
+      "autopilot-observe-dispute:08 auto.decide <- auto.observe>auto.decide:observed-facts",
+      "autopilot-observe-dispute:09 step.escalate <- auto.decide>step.escalate:observe-dispute-confirmed",
+      "autopilot-observe-dispute:10 auto.handoff <- step.escalate>auto.handoff:label-pr-comment",
+      "autopilot-observe-dispute:11 step.none <- auto.handoff>step.none:loop-ignores-the-task-until-handed-back",
+    ],
+    "id": "autopilot-observe-dispute",
+  },
+  {
+    "frames": [
       "autopilot-budget-spent:01 auto.observe <- cut",
       "autopilot-budget-spent:02 auto.decide <- auto.observe>auto.decide:observed-facts",
       "autopilot-budget-spent:03 step.escalate <- auto.decide>step.escalate:ticket-budget-spent",

@@ -1,5 +1,5 @@
 import { nextHop } from "./cascade.js";
-import { newestObserveEntry, observeFeedback, observeRecordFact } from "./observe-record.js";
+import { newestObserveEntry, notVerifiedObserveCount, observeFeedback, observeRecordFact } from "./observe-record.js";
 import { issueScope, scopeFailure } from "./scope-guard.js";
 import { parseTicketV2 } from "./plan.js";
 import { availabilityKey, unavailableUntil } from "../board/availability.js";
@@ -168,6 +168,9 @@ export async function observeTasks(
         const entry = newestObserveEntry(comments, pr.number, pr.headSha);
         const record = entry?.record ?? null;
         facts.observe = observeRecordFact(status, record);
+        if (facts.observe.state === "not-verified") {
+          facts.observeNotVerifiedCount = notVerifiedObserveCount(comments, pr.number, pr.headSha);
+        }
         if (facts.observe.state === "blocked" && entry) {
           if (!board.latestLabelRemoval) throw new Error("Cannot read issue handback events");
           const removedAt = await board.latestLabelRemoval(n, NEEDS_ATTENTION, { cwd });

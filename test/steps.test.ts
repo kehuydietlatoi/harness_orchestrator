@@ -187,6 +187,20 @@ describe("decideStep: lead triage before human escalation", () => {
 
 describe("fix cascade", () => {
   const route = { agent: "claude", tier: "lead" } as const;
+  it.each([undefined, route])("re-observes a disputed verdict once, then quotes the notes for a human: %j", (nextCascade) => {
+    const f: StepFacts = {
+      ...facts(), nextCascade, failedFixAttempts: 1,
+      observe: { required: true, state: "not-verified" },
+      observeReason: "The screenshot shows the old page",
+      observeNotVerifiedCount: 1,
+    };
+    expect(decideStep(f)).toEqual({ kind: "observe" });
+    expect(decideStep({ ...f, rounds: 3, maxTriages: 1 })).toEqual({ kind: "observe" });
+    expect(decideStep({ ...f, observeNotVerifiedCount: 2 })).toEqual({
+      kind: "escalate", reason: 'The author disputes the observe verdict after a fix made no commit; observe was not-verified twice on this head. Verdict notes: "The screenshot shows the old page"',
+    });
+    expect(decideStep({ ...f, failedFixAttempts: 0 })).toEqual({ kind: "fix", reason: "observe" });
+  });
   const gates: Partial<StepFacts>[] = [
     { review: { approved: false, changesRequested: true } },
     { pr: { number: 9, head: "h", checks: "pass", mergeable: "conflicting" } },

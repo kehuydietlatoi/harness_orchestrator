@@ -20,6 +20,8 @@ export interface PrStepFacts {
 export interface StepFacts {
   observe?: { required: boolean; state: "missing" | "verified" | "not-verified" | "blocked" };
   observeReason?: string;
+  /** Consecutive newest not-verified records on the current head; supplied only in that state. */
+  observeNotVerifiedCount?: number;
   /** A successful local push has not yet settled in GitHub's observations. */
   pushPending?: boolean;
   /** A complete PR path observation rejected the worker's scope. */
@@ -116,7 +118,7 @@ function decidePrStep(f: StepFacts): Step {
   }
 
   if ((f.failedFixAttempts ?? 0) >= 1 && f.nextCascade &&
-      (f.review.changesRequested || pr.checks === "fail" || pr.mergeable === "conflicting" || (f.observe?.required && f.observe.state === "not-verified"))) {
+      (f.review.changesRequested || pr.checks === "fail" || pr.mergeable === "conflicting")) {
     return { kind: "cascade", route: f.nextCascade };
   }
 
@@ -131,7 +133,14 @@ function decidePrStep(f: StepFacts): Step {
   }
   if (f.observe?.required) {
     if (f.observe.state === "missing") return { kind: "observe" };
-    if (f.observe.state === "not-verified") return exhausted ? spent("observe acceptance is still unresolved") : { kind: "fix", reason: "observe" };
+    if (f.observe.state === "not-verified") {
+      if ((f.failedFixAttempts ?? 0) >= 1) {
+        return (f.observeNotVerifiedCount ?? 1) >= 2
+          ? { kind: "escalate", reason: `The author disputes the observe verdict after a fix made no commit; observe was not-verified twice on this head. Verdict notes: "${f.observeReason ?? "No verdict notes supplied"}"` }
+          : { kind: "observe" };
+      }
+      return exhausted ? spent("observe acceptance is still unresolved") : { kind: "fix", reason: "observe" };
+    }
     if (f.observe.state === "blocked") return { kind: "escalate", reason: f.observeReason || "observe verifier blocked" };
   }
   if (!f.review.approved) return { kind: "review" };

@@ -25,6 +25,20 @@ export function newestObserveRecord(comments: readonly IssueComment[], pr: numbe
 
 /** Keep GitHub's write time beside the record without changing the persisted marker. */
 export function newestObserveEntry(comments: readonly IssueComment[], pr: number, sha: string): { record: ObserveRecord; createdAt: string } | null {
+  return observeEntries(comments, pr, sha).next().value ?? null;
+}
+
+/** An intervening verified or blocked record breaks a disputed-verdict pair. */
+export function notVerifiedObserveCount(comments: readonly IssueComment[], pr: number, sha: string): number {
+  let count = 0;
+  for (const { record } of observeEntries(comments, pr, sha)) {
+    if (record.overall !== "not-verified" || record.evidenceError) break;
+    count++;
+  }
+  return count;
+}
+
+function* observeEntries(comments: readonly IssueComment[], pr: number, sha: string): Generator<{ record: ObserveRecord; createdAt: string }> {
   for (const c of [...comments].sort((a, b) => b.id - a.id)) {
     const match = c.body.match(/<!-- orch-observe:v1 (.+) -->\s*$/);
     if (!match) continue;
@@ -32,10 +46,9 @@ export function newestObserveEntry(comments: readonly IssueComment[], pr: number
       const r = JSON.parse(match[1]) as ObserveRecord;
       if (r.pr !== pr || r.sha !== sha || (r.evidenceError !== undefined && typeof r.evidenceError !== "string")) continue;
       const verdict = parseObserveVerdict("```json\n" + JSON.stringify({ ...r, gate: "observe" }) + "\n```", sha);
-      if (!("kind" in verdict)) return { record: r, createdAt: c.created_at };
+      if (!("kind" in verdict)) yield { record: r, createdAt: c.created_at };
     } catch { /* Malformed records grant nothing. */ }
   }
-  return null;
 }
 
 export function observeRecordFact(status: string | null, record: ObserveRecord | null,
