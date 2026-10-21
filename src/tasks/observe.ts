@@ -1,4 +1,5 @@
 import { nextHop } from "./cascade.js";
+import { newestObserveEntry, notVerifiedObserveCount, observeFeedback, observeRecordFact } from "./observe-record.js";
 import { issueScope, scopeFailure } from "./scope-guard.js";
 import { parseTicketV2 } from "./plan.js";
 import { availabilityKey, unavailableUntil } from "../board/availability.js";
@@ -19,6 +20,7 @@ import { triageFacts, type TriageFacts } from "./triage.js";
 
 /** Everything the loop knows about one in-flight task, observed fresh from GitHub. */
 export interface TaskObservation {
+  observeFeedback?: string | null;
   issue: Issue;
   /** The harness that wrote the change (`agent:` label). */
   author: string;
@@ -157,6 +159,26 @@ export async function observeTasks(
         triage = triageFacts(await board.listPrComments(pr.number, { cwd }), pr.number, cfg.maxLeadTriage);
         facts = assembleFacts({ ...base, triage });
       }
+      let observedFeedback: string | null = null;
+      if (parseTicketV2(issue.body).observe?.length) {
+        if (!board.observeStatus) throw new Error("Cannot read studio/observe status");
+        const [status, comments] = await Promise.all([
+          board.observeStatus(pr.headSha, { cwd }), board.listPrComments(pr.number, { cwd }),
+        ]);
+        const entry = newestObserveEntry(comments, pr.number, pr.headSha);
+        const record = entry?.record ?? null;
+        facts.observe = observeRecordFact(status, record);
+        if (facts.observe.state === "not-verified") {
+          facts.observeNotVerifiedCount = notVerifiedObserveCount(comments, pr.number, pr.headSha);
+        }
+        if (facts.observe.state === "blocked" && entry) {
+          if (!board.latestLabelRemoval) throw new Error("Cannot read issue handback events");
+          const removedAt = await board.latestLabelRemoval(n, NEEDS_ATTENTION, { cwd });
+          facts.observe = observeRecordFact(status, record, { recordedAt: entry.createdAt, removedAt });
+        }
+        observedFeedback = record ? observeFeedback(record) : null;
+        facts.observeReason = observedFeedback || "observe verifier blocked";
+      }
       // Only the latest attempt's pushes matter. An older PR-list read may still carry the
       // review we just answered; never spend another round against that superseded head.
       for (let i = events.length - 1; i >= 0; i--) {
@@ -173,6 +195,7 @@ export async function observeTasks(
         issue, author, pr, reviews, facts, step: decideStep(facts),
         feedback: latestChangeRequestNotes(reviews, pr.number, pr.headSha),
         guidance: triage?.guidance ?? null,
+        observeFeedback: observedFeedback,
       });
     } catch (error) {
       unobserved.push(pr.number);

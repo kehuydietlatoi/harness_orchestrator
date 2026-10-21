@@ -2,6 +2,7 @@
 import { evaluateGate } from "../../board/review.js";
 import { parseVerdict } from "../../board/review-run.js";
 import { decideStep, type StepFacts } from "../../tasks/steps.js";
+import { observeRecordFact, type ObserveRecord } from "../../tasks/observe-record.js";
 import { formatTriageComment, parseTriageDecision, triageFacts } from "../../tasks/triage.js";
 import { baseTask, decide, ScenarioBuilder, type Decision, type Scenario } from "../scenario-engine.js";
 import type { FlowId } from "../flow-graph.js";
@@ -40,7 +41,8 @@ class Walk {
     this.to("auto.decide", "Re-observe the current head, review, CI and budgets; signals alone never authorize work.", observation);
     const result = decide("decideStep", decideStep, input);
     this.to(`step.${result.output.kind}`, `decideStep chooses ${JSON.stringify(result.output)}.`, result.decision,
-      result.output.kind === "escalate" ? input.scopeFailure ? "worker diff violates scope" : input.budgetSpent ? "ticket budget spent" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : "changes requested" : undefined);
+      result.output.kind === "observe" ? input.observe?.state === "not-verified" ? "author disputes observe verdict" : "observe missing" :
+      result.output.kind === "escalate" ? input.observe?.state === "blocked" ? "observe blocked" : input.scopeFailure ? "worker diff violates scope" : input.budgetSpent ? "ticket budget spent" : input.observe?.state === "not-verified" && (input.failedFixAttempts ?? 0) >= 1 ? "observe dispute confirmed" : "budget spent, no triage left (spent or off)" : result.output.kind === "fix" ? result.output.reason === "ci" ? "CI failing" : result.output.reason === "observe" ? "observe not verified" : "changes requested" : undefined);
     return result.output;
   }
   review(changes: boolean): void {
@@ -173,11 +175,50 @@ cascade.to("auto.observe", "Replace the routing labels and record cascade.hop, r
 cascade.step(facts({ review: { approved: false, changesRequested: true } }));
 cascade.push();
 
+const observe = new Walk("autopilot-observe", "Observe evidence before review", ["autopilot-fix", "escalation"], "Only observe tickets run head-bound evidence and an independent vision judge.");
+observe.step(facts({ observe: { required: true, state: "missing" } }));
+observe.to("auto.observe", "Run scenarios, judge the evidence, write studio/observe and the head-bound verdict comment, release the checkout.");
+observe.step(facts({ observe: { required: true, state: "not-verified" } }));
+observe.push();
+observe.step(facts({ observe: { required: true, state: "verified" } }));
+observe.review(false);
+const blockedObserve = facts({ observe: { required: true, state: "blocked" }, observeReason: "evidence failed" });
+observe.step(blockedObserve);
+observe.handoff(blockedObserve);
+
+const handback = new Walk("autopilot-observe-handback", "Retry blocked observe after human handback", ["autopilot-fix", "escalation"],
+  "Removing needs-attention after a blocked record permits one fresh observe on the unchanged head.");
+handback.step(blockedObserve);
+handback.handoff(blockedObserve);
+handback.b.patch(ISSUE, { status: "status:in-review" });
+handback.to("auto.observe", "The human fixes the evidence environment and removes needs-attention; the PR SHA stays the same.");
+const blockedRecord: ObserveRecord = { pr: PR, sha: HEAD, overall: "verifier-blocked", lines: [], concerns: ["setup failed"] };
+const removal = "2026-10-20T11:00:00Z";
+handback.step(facts({ observe: observeRecordFact("failure", blockedRecord,
+  { recordedAt: "2026-10-20T10:00:00Z", removedAt: removal }) }));
+handback.to("auto.observe", "Run evidence once more on the same SHA and publish a new blocked record after the handback.");
+const blockedAgain = facts({ observe: observeRecordFact("failure", blockedRecord,
+  { recordedAt: "2026-10-20T12:00:00Z", removedAt: removal }) });
+handback.step(blockedAgain);
+handback.handoff(blockedAgain);
+
+const dispute = new Walk("autopilot-observe-dispute", "Recheck a disputed observe verdict", ["autopilot-fix", "escalation"],
+  "An author who makes no commit disputes the visual verdict. Re-observe once on the same SHA before asking a human.");
+const disputedFacts = facts({ observe: { required: true, state: "not-verified" }, observeNotVerifiedCount: 1,
+  observeReason: "The screenshot shows the old page", nextCascade: { agent: "claude", tier: "lead" } });
+dispute.step(disputedFacts);
+dispute.to("auto.observe", "The fix made no commit: retain the head and spent rounds, and record a failed observe fix.");
+dispute.step({ ...disputedFacts, failedFixAttempts: 1 });
+dispute.to("auto.observe", "Run evidence and the independent judge again on the unchanged SHA; no fix round is spent.");
+const confirmedDispute = { ...disputedFacts, failedFixAttempts: 1, observeNotVerifiedCount: 2 };
+dispute.step(confirmedDispute);
+dispute.handoff(confirmedDispute);
+
 export const AUTOPILOT_SCENARIOS: readonly Scenario[] = [
   fixScenario("autopilot-review-fix", "Changes, resumed fix, re-review, merge", "review"),
   fixScenario("autopilot-ci-fix", "Fix failing CI", "ci"),
   fixScenario("autopilot-conflict", "Merge the base to resolve conflict", "conflict"),
   waitScenario("autopilot-wait-ci", false), waitScenario("autopilot-wait-mergeability", true),
-  capped.b.build(), scoped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
+  observe.b.build(), handback.b.build(), dispute.b.build(), capped.b.build(), scoped.b.build(), cascade.b.build(), human.b.build(), triageScenario("autopilot-triage-retry", true),
   triageScenario("autopilot-triage-escalate", false), triageScenario("autopilot-triage-disabled", false, true), ambiguous,
 ];

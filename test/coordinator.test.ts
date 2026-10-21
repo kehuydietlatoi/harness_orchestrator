@@ -14,6 +14,9 @@ vi.mock("../src/git/lock.js", () => ({ isLocked: vi.fn(async () => false) }));
 
 /** A tiny fake GitHub: PR state that the fake executors mutate and `observe` reads back. */
 interface SimPr {
+  observe?: StepFacts["observe"];
+  observeNotVerifiedCount?: number;
+  observeResults?: NonNullable<StepFacts["observe"]>["state"][];
   scopeFailure?: string;
   nextCascade?: StepFacts["nextCascade"];
   issue: number;
@@ -80,6 +83,9 @@ class World {
     }
     const tasks = open.map((p) => {
       const facts = {
+        observe: p.observe,
+        observeNotVerifiedCount: p.observeNotVerifiedCount,
+        observeReason: "The screenshot shows the old page",
         scopeFailure: p.scopeFailure,
         nextCascade: p.nextCascade,
         attention: p.attention,
@@ -108,6 +114,10 @@ class World {
     const scripted = p.overrides[step.kind]?.shift();
     if (scripted) return scripted;
     switch (step.kind) {
+      case "observe":
+        p.observe = { required: true, state: p.observeResults?.shift() ?? "verified" };
+        p.observeNotVerifiedCount = p.observe.state === "not-verified" ? (p.observeNotVerifiedCount ?? 0) + 1 : 0;
+        return { signal: "observe.finished" };
       case "cascade": p.nextCascade = null; return { signal: "cascade.hop" };
       case "review": {
         if ((p.verdicts.shift() ?? "approve") === "approve") { p.approved = true; return { signal: "review.approved" }; }
@@ -115,6 +125,8 @@ class World {
         return { signal: "review.changes_requested" };
       }
       case "fix":
+        p.observeNotVerifiedCount = 0;
+        if (p.observe?.required) p.observe = { required: true, state: "missing" };
         p.version += 1; p.changes = false; p.approved = false; p.rounds += 1; p.checks = "pass";
         return { signal: "fix.pushed" };
       case "resolve-conflict":
@@ -182,6 +194,46 @@ async function drive(world: World, opts: Partial<AutopilotOptions> = {}) {
 }
 
 describe("runAutopilot", () => {
+  it("re-observes a no-commit observe fix on the same SHA once, then escalates without a cascade or fix round", async () => {
+    const w = new World();
+    const p = w.add(pr(234, {
+      observe: { required: true, state: "missing" },
+      observeResults: ["not-verified", "not-verified"],
+      nextCascade: { agent: "claude", tier: "lead" },
+      overrides: { fix: [{ signal: "step.failed", detail: "the agent made no new commits" }] },
+    }));
+    const heads: string[] = [];
+    const execute = w.execute;
+    w.execute = async (obs, step) => {
+      if (step.kind === "observe") heads.push(obs.pr.headSha);
+      return execute(obs, step);
+    };
+    const summary = await drive(w, { claim: "none" });
+    expect(w.calls).toEqual(["observe:234", "fix:observe:234", "observe:234", "escalate:234"]);
+    expect(heads).toEqual(["h1", "h1"]);
+    expect(p.rounds).toBe(0);
+    expect(summary.escalated).toEqual([234]);
+    expect(w.events.some(e => e.signal === "cascade.hop")).toBe(false);
+    expect(w.events).toContainEqual(expect.objectContaining({ type: "step.finished", signal: "task.escalated",
+      detail: expect.stringMatching(/author disputes.*The screenshot shows the old page/) }));
+  });
+  it("schedules observe before review and records its step events", async () => {
+    const w = new World();
+    w.add(pr(218, { observe: { required: true, state: "missing" } }));
+    await drive(w, { claim: "none" });
+    expect(w.calls).toEqual(["observe:218", "review:218", "merge:218"]);
+    expect(w.events).toContainEqual(expect.objectContaining({ type: "step.started", issue: 218, step: "observe" }));
+    expect(w.events).toContainEqual(expect.objectContaining({ type: "step.finished", issue: 218, step: "observe", signal: "observe.finished" }));
+  });
+  it("counts observe fixes toward the round limit, triages, then escalates", async () => {
+    const w = new World(); w.maxRounds = 1; w.maxTriages = 1;
+    const p = w.add(pr(218, { observe: { required: true, state: "missing" }, observeResults: ["not-verified", "not-verified", "not-verified"] }));
+    const result = await drive(w, { claim: "none" });
+    expect(w.calls).toEqual(["observe:218", "fix:observe:218", "observe:218", "triage:218", "fix:observe:218", "observe:218", "escalate:218"]);
+    expect(p.rounds).toBe(2);
+    expect(result.escalated).toEqual([218]);
+    expect(w.calls).not.toContain("review:218");
+  });
   it("persists both heads of a successful push for subsequent observations", async () => {
     const w = new World();
     w.add(pr(38, { changes: true }));

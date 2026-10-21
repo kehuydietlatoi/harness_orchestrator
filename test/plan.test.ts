@@ -1,19 +1,43 @@
 import { describe, it, expect } from "vitest";
 import { MAX_BRIEF_CHARS, parseTickets, resolvePlan } from "../src/tasks/plan.js";
-import { renderTicketBody } from "../src/tasks/plan-create.js";
+import { renderTicketBody, parseTicketV2, buildPlanMarkers } from "../src/tasks/plan-create.js";
 import { DEFAULT_CONFIG } from "../src/config.js";
 
+describe("observe scenarios", () => {
+  it("round-trips creation metadata without changing marker identities", () => {
+    const base = { id: "look", title: "Observe combat" };
+    const ticket = { ...base, observe: ["combat-hit", "1-start"] };
+    const config = { ...DEFAULT_CONFIG, evidence: ["node", "evidence.mjs"] };
+    const plan = resolvePlan(parseTickets(JSON.stringify([ticket])), { config });
+    expect(plan.errors).toEqual([]);
+    expect(plan.tickets[0].observe).toEqual(ticket.observe);
+    expect(parseTicketV2(renderTicketBody(ticket, []))).toEqual({ observe: ticket.observe });
+    expect(buildPlanMarkers([ticket])).toEqual(buildPlanMarkers([base]));
+  });
+  it.each([[], "combat", null, [1], [""], ["Bad"], ["a_b"], ["../escape"], ["a\nb"], ["hit\n"], ["hit\r"], ["-start"], ["hit", "hit"]])("rejects malformed observe %j with ticket identity", observe => {
+    const tickets = [{ id: "look", title: "Look", observe }];
+    expect(() => parseTickets(JSON.stringify(tickets))).toThrow(/ticket 1.*look.*observe/);
+    expect(resolvePlan(tickets as never).errors.join()).toMatch(/ticket 1.*look.*observe/);
+  });
+  it("requires evidence configuration only for observe tickets", () => {
+    const ticket = { id: "look", title: "Look", observe: ["hit"] };
+    expect(resolvePlan([ticket]).errors.join()).toMatch(/look.*observe.*evidence/);
+    expect(resolvePlan([ticket], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/look.*observe.*evidence/);
+    expect(resolvePlan([{ title: "Legacy" }]).errors).toEqual([]);
+  });
+});
+
 describe("needs and sensitivity planning", () => {
-  it("permits vision on Claude, refusing default Codex and web everywhere", () => {
+  it("permits vision on Claude and Codex, refusing web everywhere", () => {
     expect(resolvePlan([{ title: "See", agent: "claude", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors).toEqual([]);
-    expect(resolvePlan([{ id: "see", title: "See", agent: "codex", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/ticket 1.*see.*needs.*vision/);
+    expect(resolvePlan([{ id: "see", title: "See", agent: "codex", needs: ["vision"] }], { config: DEFAULT_CONFIG }).errors).toEqual([]);
     expect(resolvePlan([{ title: "Search", needs: ["web"] }], { config: DEFAULT_CONFIG }).errors.join()).toMatch(/no satisfying.*web/);
   });
   it.each(["engine", "image-gen", "audio-gen"] as const)("defers %s to Phases 3-4", need => {
     expect(resolvePlan([{ title: "Future", needs: [need] }]).errors.join()).toContain("Phases 3-4");
   });
   it("finds a capable later member but rejects an explicit incapable selection", () => {
-    const config = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex", model: "a" }, { agent: "codex", model: "b", capabilities: ["vision"] }] } };
+    const config = { ...DEFAULT_CONFIG, tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "codex", model: "a", capabilities: ["shell"] }, { agent: "codex", model: "b", capabilities: ["vision"] }] } };
     expect(resolvePlan([{ title: "See", needs: ["vision"] }], { config }).errors).toEqual([]);
     expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "a", needs: ["vision"] }], { config }).errors.join()).toContain("no satisfying");
     expect(resolvePlan([{ title: "See", agent: "codex", effort: "lead", model: "b", needs: ["vision"] }], { config }).errors).toEqual([]);

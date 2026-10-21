@@ -7,10 +7,10 @@ import { EFFORT_TIERS, type CascadeRoute } from "../config.js";
 import { reduceOpencode } from "../adapters/opencode-events.js";
 
 /** Which part of the task loop produced a run record (absent on records written before the loop). */
-export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "triage";
+export type RunPhase = "implement" | "fix" | "resolve-conflict" | "review" | "triage" | "observe";
 
 /** Every phase a record may carry; anything else is dropped when reading (one list, so a new phase cannot be forgotten). */
-export const RUN_PHASES: readonly RunPhase[] = ["implement", "fix", "resolve-conflict", "review", "triage"];
+export const RUN_PHASES: readonly RunPhase[] = ["implement", "fix", "resolve-conflict", "review", "triage", "observe"];
 
 export interface RunRecord {
   cascadeFrom?: CascadeRoute;

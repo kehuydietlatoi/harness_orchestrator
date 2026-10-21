@@ -151,6 +151,7 @@ const RAW_NODES: readonly FlowNode[] = [
   node("auto.observe", "Observe PRs", "stage", "autopilot", 0, 0, "src/tasks/observe.ts#observeTasks", "Re-derives reviews, CI and mergeability from GitHub; skips what it cannot read.", "ADR-0009"),
   node("auto.decide", "Decide step", "decision", "autopilot", 1, 0, "src/tasks/steps.ts#decideStep", "Pure map from observed PR facts to exactly one step.", "ADR-0009"),
   node("step.none", "none", "terminal", "autopilot", 2, 0, "src/tasks/steps.ts#decideStep", "needs-attention or no open PR: nothing for the loop to do."),
+  node("step.observe", "observe", "stage", "autopilot", 3, 2, "src/tasks/step-exec.ts#executeObserve", "Run evidence and an independent vision judge; record studio/observe on this head."),
   node("step.review", "review", "stage", "autopilot", 3, 0, "src/board/review-run.ts#runAutomatedReview", "No accepted approval on the current head."),
   node("step.fix", "fix", "stage", "autopilot", 4, 0, "src/tasks/step-exec.ts#executeFix", "Resumes the author's session for review feedback or failing CI.", "ADR-0009"),
   node("step.resolve-conflict", "resolve-conflict", "stage", "autopilot", 5, 0, "src/tasks/step-exec.ts#executeResolveConflict", "Merges origin/<base> (never rebase) and verifies the ancestor before pushing.", "ADR-0009"),
@@ -267,6 +268,13 @@ export const EDGES: readonly FlowEdge[] = [
   edge("state.in-progress", "auto.observe", "autopilot polls author bounce", "autopilot-fix"),
   edge("auto.observe", "auto.decide", "observed facts", "autopilot-fix"),
   edge("auto.decide", "step.none", "needs-attention or no PR", "autopilot-fix"),
+  edge("auto.decide", "step.observe", "observe missing", "autopilot-fix"),
+  edge("auto.decide", "step.observe", "author disputes observe verdict", "autopilot-fix"),
+  edge("step.fix", "auto.observe", "observe fix made no commit", "autopilot-fix"),
+  edge("auto.decide", "step.escalate", "observe dispute confirmed", "escalation"),
+  edge("step.observe", "auto.observe", "status and verdict recorded", "autopilot-fix"),
+  edge("auto.decide", "step.fix", "observe not verified", "autopilot-fix"),
+  edge("auto.decide", "step.escalate", "observe blocked", "escalation"),
   edge("auto.decide", "step.review", "no accepted approval", "autopilot-fix", "cross-review"),
   edge("step.review", "review.pick", "runs the reviewer", "cross-review"),
   edge("auto.decide", "step.fix", "changes requested", "autopilot-fix"),
@@ -291,6 +299,7 @@ export const EDGES: readonly FlowEdge[] = [
   edge("auto.decide", "step.escalate", "worker diff violates scope", "escalation"),
   edge("step.escalate", "auto.handoff", "label + PR comment", "escalation"),
   edge("auto.handoff", "step.none", "loop ignores the task until handed back", "escalation"),
+  edge("step.none", "auto.observe", "human handback: retry observe", "autopilot-fix", "escalation"),
   edge("auto.decide", "auto.report", "drained or plan-complete", "report"),
   // recovery
   edge("state.needs-attention", "rec.repair", "human runs orch repair", "repair", "failure-recovery"),
@@ -336,6 +345,7 @@ export const FLOWS: readonly FlowDef[] = [
 /** Every autopilot step maps to a node; adding a `Step` kind breaks the build until it does. */
 export const STEP_NODES: Record<Step["kind"], string> = {
   none: "step.none",
+  observe: "step.observe",
   review: "step.review",
   fix: "step.fix",
   "resolve-conflict": "step.resolve-conflict",

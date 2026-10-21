@@ -1,0 +1,4 @@
+The state value is correct, but the image contradicts readability.
+```json
+{"gate":"observe","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","overall":"not-verified","lines":[{"acceptance":"Observe: health is readable","verdict":"not-verified","evidence":["shots/health.png"],"note":"Health text is clipped on the right."}],"concerns":["Console warns about a missing font."]}
+```

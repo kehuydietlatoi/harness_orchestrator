@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { resolve } from "node:path";
+import { spawnRun, stopRun } from "./process-group.js";
+import { log as diagnostics } from "./log.js";
 
 /** Shell tools may trust PWD over the OS cwd. Never inherit the operator's checkout. */
 function spawnEnv(cwd?: string, env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -15,13 +17,11 @@ function spawnEnv(cwd?: string, env: NodeJS.ProcessEnv = process.env): NodeJS.Pr
 /**
  * Kill `child` and everything it started.
  *
- * On Windows the harnesses are launched through `cmd.exe` (so `.cmd` shims resolve), which makes the direct
- * child a shell wrapper: killing only it leaves the real harness, and anything it spawned, running. That is
- * not hypothetical - a review that hit its timeout was reported as failed while Codex carried on for another
- * 44 minutes, burning usage, and its verdict was lost. `taskkill /T` takes the whole tree. On POSIX the
- * harness is the direct child (no shell), so killing it directly is already right.
+ * Owned runs ask their supervisor to stop and drain the container. Other subprocesses
+ * retain the existing taskkill /T /F (Windows) or direct SIGKILL (POSIX) behavior.
  */
 export function killProcessTree(child: ChildProcess): void {
+  if (stopRun(child)) return;
   const pid = child.pid;
   if (pid === undefined) return;
   if (process.platform === "win32") {
@@ -77,12 +77,16 @@ export function spawnLogged(
       command = [cmd, ...args].map(q).join(" ");
       spawnArgs = [];
     }
-    const child = spawn(command, spawnArgs, {
-      cwd: opts.cwd,
-      shell: useShell,
-      env: spawnEnv(opts.cwd, opts.env),
-      windowsHide: true,
-    });
+    let child: ChildProcess;
+    try {
+      child = spawnRun(command, spawnArgs, {
+        cwd: opts.cwd, shell: useShell, env: spawnEnv(opts.cwd, opts.env), windowsHide: true,
+      });
+    } catch (error) {
+      diagnostics.warn(`${cmd}: ${String(error)}`);
+      resolve({ code: 127, timedOut: false, durationMs: Date.now() - start });
+      return;
+    }
 
     const log = opts.logFile ? createWriteStream(opts.logFile, { flags: "a" }) : null;
     let aborted: string | undefined;
@@ -121,7 +125,10 @@ export function spawnLogged(
         }, opts.timeoutMs)
       : undefined;
 
+    let finished = false;
     const finish = (code: number): void => {
+      if (finished) return;
+      finished = true;
       if (timer) clearTimeout(timer);
       const done = (): void =>
         resolve({

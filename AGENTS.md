@@ -8,6 +8,30 @@
 
 ## Conventions
 
+- **Disputed observe verdicts (#234)**: a failed no-commit fix on a current-head `not-verified` verdict permits one same-SHA observe rerun without spending a fix round; two newest consecutive not-verified records escalate with the author's dispute and verdict notes. `observeTasks` counts matching records only for not-verified facts; the coordinator retains the failed observe fix through the rerun. Observe alone never cascades; review, CI, and conflict policy is unchanged.
+
+- **Approval observe messaging (#235)**: `review-approve` reads v2 observe metadata and `studio/observe` best-effort after recording approval, using the approved SHA. Missing/non-success or unreadable state suppresses the merge-acceptance message; observe success and tickets without observe retain it.
+
+- **Trusted Windows argv (#232)**: `src/util/win-command.ts` shares PATH/PATHEXT resolution and launch validation between `exec` and doctor for verify/setup/evidence. Native `.exe`/`.com` keep direct argv; `.cmd`/`.bat` use cmd with delayed expansion off, single environment expansion indirection for percent literals, and escaping for launch plus `%*` forwarding. Control characters and oversized shim argv fail before execution. Contained cmd launches retain the owned supervisor; its outer argv uses CRT quoting and only the inner cmd payload is verbatim.
+
+- **Observe handback (#233)**: a `needs-attention` removal strictly newer than the newest current-head blocked observe comment makes its fact missing, permitting one fresh observe on the same SHA. Issue events are paginated and read only for blocked facts; unreadable events leave the PR unobserved. A newer blocked comment consumes the handback and escalates again.
+
+- **Run process ownership (#231)**: `src/util/process-group.ts` launches harnesses and opt-in `exec({contain:true})` verify/setup/evidence commands through an owned supervisor; await it before cleanup or another command. Windows uses a suspended root assigned to a kill-on-close Job Object; POSIX uses a new session/group, with Linux subreaping to also kill and reap detached/double-fork descendants. Timeout/abort tree killing goes through the supervisor so it survives to drain the container. Helpers compile once per coordinator (`csc.exe` from Windows .NET Framework; `cc` on POSIX); unavailable containment fails before running user code. Other POSIX systems warn about unaccountable detached descendants. See [process containment](docs/process-containment.md).
+
+- **Observe gate (#220)**: [ADR-0015](docs/adr/0015-observe-gate.md) owns observe ordering, config-only evidence execution, independent standard-tier vision judging, the SHA-bound status/comment record, and local evidence retention. Read it when changing these boundaries; `studio/observe` is a separate merge gate excluded from CI roll-up.
+
+- **Observe merge gate and reports (#219)**: `checkMergeGate` requires current-head `studio/observe` success for v2 observe tickets; missing, non-success and unreadable statuses block both merge callers. Run reports count completed observe step attempts and retain the newest `observe.finished` overall, with observe/review fixes split from `round N (reason)` details. Existing aggregate rounds, runs and costs include all phases; reports without observe activity keep their previous shape and text.
+
+- **Autopilot observe (#218)**: observe tickets read current-head `studio/observe` plus the newest matching `orch-observe:v1` PR comment; unreadable reads leave the PR unobserved. Observe runs after conflict resolution and before review, independently of pending CI; its context is excluded from CI checks. Not-verified verdicts use the normal fix/triage round budget; blocked evidence or judges escalate. The executor checks the head before publishing and always releases its evidence checkout.
+
+- **Observe judging (#217)**: `src/tasks/observe-judge.ts` selects a vision-capable standard-tier judge from another provider family regardless of `reviewPolicy`. It stages regular evidence files under `.orch-observe/` in the evidence checkout, requires a head-bound fenced verdict, and records `observe.verdict` plus phase `observe` telemetry with distinct outcomes. The caller retains checkout ownership and must release it after judging.
+
+- **Evidence execution (#216)**: `src/tasks/evidence.ts` runs trusted setup/evidence argv only in `prepareReviewCheckout`'s detached head checkout, with `verifyEnvironment` and per-command timeouts. Results and `observe.evidence` events are scenario/head-bound; output folders are replaced per run. Callers own the returned checkout and must release it after judging. Review checkout release shares `prepareWorktreeRemoval`'s non-recursive link guard and retains the checkout on unsafe cleanup or Git removal failure.
+
+- **Observe ticket configuration (#215)**: `observe` is validated and projected with v2 metadata, outside marker identities; planning requires config `evidence`. `loadConfig` validates evidence argv/setup and resolves evidence storage outside the canonical checkout; pack briefs expose scenario commands through `ticket.observe`. This ticket configures evidence only; execution and judging are separate work.
+
+- **Codex vision (#214)**: `resolveCapabilities` defaults Codex to `shell, vision` following the 2026-10-20 read-only PNG probe (codex-cli 0.160.1; ADR-0012). Explicit model capabilities replace defaults, including `[]`; OpenCode vision still requires an explicit declaration.
+
 - **Concurrent base fetches (#207)**: `resolveBaseBranch` coalesces in-process fetches by canonical Git common directory and base ref, sharing across linked worktrees and serializing different bases. Ref-lock failures re-read the tracking ref and retry once; other failures propagate. `claimNext` surfaces candidate errors after trying alternatives. Coordinator claim errors back off until success or the idle deadline; only an empty claim result marks the agent drained.
 
 - Never create a symlink, junction or hard link to anything outside your worktree; run `npm ci` inside it.

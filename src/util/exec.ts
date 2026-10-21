@@ -1,9 +1,12 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { constants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { killProcessTree } from "./spawn.js";
+import { spawnRun } from "./process-group.js";
+import { log } from "./log.js";
+import { resolveWindowsCommand, windowsInvocation } from "./win-command.js";
 
 export interface ExecResult {
   code: number;
@@ -21,21 +24,38 @@ export interface ExecResult {
 export const DEFAULT_MAX_BUFFER = 64 * 1024 * 1024;
 
 /**
- * Run a subprocess without a shell (avoids injection / quoting issues).
+ * Run literal argv with shell:false. Windows batch shims use an explicitly
+ * escaped cmd.exe launch plan; native executables and POSIX argv stay direct.
  * Never rejects — failures come back as a non-zero `code`.
  */
 export function exec(
   cmd: string,
   args: string[] = [],
-  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  opts: { cwd?: string; input?: string; maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv;
+    /** Commands executing project code must drain all descendants before returning. */
+    contain?: boolean } = {},
 ): Promise<ExecResult> {
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, shell: false, ...(opts.env ? { env: opts.env } : {}) });
+    let child: ChildProcess;
+    try {
+      const invocation = process.platform === "win32"
+        ? windowsInvocation(resolveWindowsCommand(cmd, opts.cwd ?? process.cwd(), opts.env ?? process.env), args, opts.env ?? process.env)
+        : { command: cmd, args, env: opts.env };
+      const options = { cwd: opts.cwd, shell: false,
+        ...(invocation.env ? { env: invocation.env } : {}),
+        ...("windowsVerbatimArguments" in invocation ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments } : {}) };
+      child = opts.contain ? spawnRun(invocation.command, invocation.args, options) : spawn(invocation.command, invocation.args, options);
+    } catch (error) {
+      log.warn(`${cmd}: ${String(error)}`);
+      resolve({ code: 127, stdout: "", stderr: String(error) });
+      return;
+    }
+    const stop = (): void => killProcessTree(child);
     let timedOut = false;
     const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
       timedOut = true;
-      killProcessTree(child);
+      stop();
     }, opts.timeoutMs);
     let stdout = "";
     let stderr = "";
@@ -56,16 +76,16 @@ export function exec(
       bytes += chunk.length;
       if (bytes > maxBuffer) {
         overflowed = true;
-        child.kill();
+        stop();
         return false;
       }
       return true;
     };
 
-    child.stdout.on("data", (d: Buffer) => {
+    child.stdout?.on("data", (d: Buffer) => {
       if (accept(d)) stdout += outDecoder.write(d);
     });
-    child.stderr.on("data", (d: Buffer) => {
+    child.stderr?.on("data", (d: Buffer) => {
       if (accept(d)) stderr += errDecoder.write(d);
     });
     child.on("error", (err) => {
@@ -94,11 +114,22 @@ export function exec(
       }
       resolve({ code: code ?? 0, stdout, stderr });
     });
-    if (opts.input !== undefined) {
+    if (opts.input !== undefined && child.stdin) {
       child.stdin.write(opts.input);
       child.stdin.end();
     }
   });
+}
+
+/** Validate the same launch plan as exec, without executing project code. */
+export async function commandRunError(argv: readonly string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<string | undefined> {
+  try {
+    if (process.platform === "win32") {
+      const env = opts.env ?? process.env;
+      windowsInvocation(resolveWindowsCommand(argv[0], opts.cwd ?? process.cwd(), env), argv.slice(1), env);
+    } else if (!await commandExists(argv[0])) return `Command not found: ${argv[0]}`;
+    return undefined;
+  } catch (error) { return String(error); }
 }
 
 /** True if `cmd` is an executable absolute file path or resolvable on PATH. */

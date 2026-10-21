@@ -148,6 +148,23 @@ export async function listIssues(
   return items.filter((o) => !o.pull_request).map(parseRestIssue);
 }
 
+/** Read all issue events: a later handback can be beyond the first page. */
+export async function latestLabelRemoval(number: number, label: string, opts: { cwd?: string } = {}): Promise<string | null> {
+  const events = await paginatedApi<{ event: string; label?: { name: string }; created_at?: string }>(
+    `repos/{owner}/{repo}/issues/${number}/events`, {}, opts);
+  let latest: string | null = null;
+  for (const event of events) {
+    if (event.event !== "unlabeled") continue;
+    if (typeof event.label?.name !== "string") throw new Error("Invalid issue label event");
+    if (event.label.name !== label) continue;
+    if (typeof event.created_at !== "string" || !Number.isFinite(Date.parse(event.created_at))) {
+      throw new Error("Invalid issue label removal time");
+    }
+    if (!latest || Date.parse(event.created_at) > Date.parse(latest)) latest = event.created_at;
+  }
+  return latest;
+}
+
 export async function getIssue(number: number, opts: { cwd?: string } = {}): Promise<Issue> {
   const r = await exec("gh", ["issue", "view", String(number), "--json", ISSUE_FIELDS], {
     cwd: opts.cwd,
@@ -413,13 +430,13 @@ export async function prChecksState(
   number: number,
   opts: { cwd?: string; strict?: boolean } = {},
 ): Promise<ChecksState> {
-  const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,state"], {
+  const r = await exec("gh", ["pr", "checks", String(number), "--json", "bucket,state,name"], {
     cwd: opts.cwd,
   });
   const combined = r.stdout + r.stderr;
   if (/no checks reported/i.test(combined)) return "none";
 
-  let arr: { bucket?: string }[] = [];
+  let arr: { bucket?: string; name?: string }[] = [];
   try {
     arr = JSON.parse(r.stdout);
   } catch {
@@ -430,6 +447,7 @@ export async function prChecksState(
     // gh exits non-zero while checks are failing/pending; treat unparseable as fail.
     if (r.code !== 0) return "fail";
   }
+  arr = arr.filter(c => c.name !== "studio/observe");
   if (!arr.length) return "none";
   const buckets = arr.map((c) => c.bucket);
   if (buckets.some((b) => b === "fail" || b === "cancel")) return "fail";
@@ -562,6 +580,16 @@ export interface IssueComment {
 }
 
 /** Every conversation comment on a PR, oldest first (paginated: a fixed limit would hide later ones). */
+export async function observeStatus(sha: string, opts: { cwd?: string } = {}): Promise<string | null> {
+  const statuses = await paginatedApi<{ context: string; state: string }>(`repos/{owner}/{repo}/commits/${sha}/statuses`, {}, opts);
+  return statuses.find(s => s.context === "studio/observe")?.state ?? null;
+}
+
+export async function setObserveStatus(sha: string, state: "success" | "failure", description: string, opts: { cwd?: string } = {}): Promise<void> {
+  const r = await exec("gh", ["api", `repos/{owner}/{repo}/statuses/${sha}`, "-f", `state=${state}`, "-f", "context=studio/observe", "-f", `description=${description}`], { cwd: opts.cwd });
+  if (r.code !== 0) throw new Error(`could not write observe status: ${r.stderr.trim()}`);
+}
+
 export async function listPrComments(number: number, opts: { cwd?: string } = {}): Promise<IssueComment[]> {
   const raw = await paginatedApi<{ id: number; body?: string | null; created_at?: string }>(
     `repos/{owner}/{repo}/issues/${number}/comments`, {}, opts,

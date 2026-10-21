@@ -9,12 +9,12 @@ import { appendEvent, type OrchEvent } from "./events.js";
 import { observeTasks, type Observation, type TaskObservation } from "./observe.js";
 import { processNext, resolveTaskModel, type RunSummary } from "./runner.js";
 import {
-  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeTriage, type StepResult,
+  executeCascade, executeEscalate, executeFix, executeMerge, executeResolveConflict, executeReview, executeObserve, executeTriage, type StepResult,
 } from "./step-exec.js";
 import { decideStep, type Step } from "./steps.js";
 
 /** Steps the coordinator performs (the rest of `Step` is "do nothing, just report"). */
-export type ActionableStep = Extract<Step, { kind: "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" | "cascade" }>;
+export type ActionableStep = Extract<Step, { kind: "observe" | "review" | "fix" | "resolve-conflict" | "merge" | "triage" | "escalate" | "cascade" }>;
 
 export interface AutopilotOptions {
   /** Agent runs in flight at once. */
@@ -87,7 +87,7 @@ export interface CoordinatorDeps {
 
 /** Finish work before starting new work, and cheap decisive steps before slow agent runs. */
 const PRIORITY: Record<ActionableStep["kind"], number> = {
-  cascade: 0, merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, review: 5,
+  cascade: 0, merge: 0, escalate: 1, triage: 2, fix: 3, "resolve-conflict": 4, observe: 5, review: 6,
 };
 
 /** Consecutive failed attempts at a task's step before a human is called in. */
@@ -122,6 +122,7 @@ export function defaultDeps(cfg: OrchConfig, cwd: string, scope?: ReadonlySet<nu
       try {
         switch (step.kind) {
           case "cascade": return await executeCascade(obs, step.route, cfg, cwd);
+          case "observe": return await executeObserve(obs, cfg, cwd);
           case "review": return await executeReview(obs, cfg, cwd);
           case "fix": return await executeFix(obs, step.reason, cfg, cwd);
           case "resolve-conflict": return await executeResolveConflict(obs, cfg, cwd);
@@ -183,7 +184,7 @@ async function concludeScope(summary: AutopilotSummary, deps: CoordinatorDeps): 
 }
 
 function isActionable(step: Step): step is ActionableStep {
-  return step.kind === "cascade" || step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
+  return step.kind === "cascade" || step.kind === "observe" || step.kind === "review" || step.kind === "fix" || step.kind === "resolve-conflict" ||
     step.kind === "merge" || step.kind === "triage" || step.kind === "escalate";
 }
 
@@ -293,6 +294,10 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
         retryAt.delete(issue);
         break;
       default:
+        // A read-only rerun must retain the author's head-bound dispute until its
+        // verdict is decided. It neither fixes the code nor spends a fix round.
+        if (result.signal === "observe.finished" && failing.get(issue)?.step === "fix (observe)" &&
+            failing.get(issue)?.head === head) break;
         failing.delete(issue);
         retryAt.delete(issue);
     }
@@ -442,7 +447,8 @@ export async function runAutopilot(opts: AutopilotOptions, deps: CoordinatorDeps
       let step = obs.step;
       const previous = failing.get(n);
       const fails = previous?.head === obs.pr.headSha ? previous : undefined;
-      if (fails && (step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade")) {
+      if (fails && ((step.kind === "fix" || step.kind === "resolve-conflict") && (fails.step === describe(step) || fails.step === "cascade") ||
+          fails.step === "fix (observe)" && obs.facts.observe?.state === "not-verified")) {
         step = decideStep({ ...obs.facts, failedFixAttempts: fails.count });
       }
       if (AGENT_STEPS.has(step.kind)) step = applyBudget(step, deps.budgetSpent?.(obs.issue) ?? false);

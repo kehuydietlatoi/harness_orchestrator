@@ -29,6 +29,12 @@ export interface OrchEvent {
   agent?: string;
   detail?: string;
   durationMs?: number;
+  /** Head-bound local scenario evidence. */
+  sha?: string;
+  scenario?: string;
+  ok?: boolean;
+  error?: string;
+  outDir?: string;
 }
 
 export function eventsPath(cwd: string): string {

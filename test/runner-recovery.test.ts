@@ -6,6 +6,8 @@ import { DEFAULT_CONFIG } from "../src/config.js";
 import { loadPack } from "../src/pack/load.js";
 import { renderTicketV2 } from "../src/tasks/ticket-metadata.js";
 import { readEvents } from "../src/tasks/events.js";
+import { spawnLogged } from "../src/util/spawn.js";
+import { assertStopped, cleanupDetached, detachedFixture } from "./helpers/process-containment.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
@@ -114,6 +116,61 @@ describe("processNext recovery", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it.each(["exit", "timeout", "abort"])("processClaimed drains a fake harness's detached server on %s", async mode => {
+    const record = join(cwd, "harness-child.json");
+    mocks.runTask.mockImplementation(async () => {
+      const result = await spawnLogged(process.execPath, [detachedFixture, record, mode === "exit" ? "exit" : "wait"], {
+        cwd: worktree, timeoutMs: mode === "timeout" ? 3000 : 15000,
+        abortOn: mode === "abort" ? line => line === "READY" ? "test abort" : undefined : undefined,
+      });
+      return { ...result, ok: result.code === 0 };
+    });
+    mocks.getIssue.mockResolvedValue({ ...issue, labels: ["status:in-review"] });
+    // Recovery must never see a still-running harness descendant.
+    mocks.removeWorktree.mockImplementation(async () => { await assertStopped(record); return true; });
+    try {
+      const result = await processNext("codex", DEFAULT_CONFIG, cwd);
+      expect(result?.outcome).toBe(mode === "exit" ? "submitted" : "failed");
+      await assertStopped(record);
+    } finally { cleanupDetached(record); }
+  }, 25000);
+
+  it("drains a coordinator verify command before committing or submitting", async () => {
+    const record = join(cwd, "verify-child.json");
+    const { exec: realExec } = await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js");
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (cmd, args, opts) => {
+      if (cmd === process.execPath) return realExec(cmd, args, opts);
+      if (args[0] === "add" || args[0] === "commit") await assertStopped(record);
+      return { code: 0, stderr: "", stdout: args[0] === "symbolic-ref" ? "task/35" : args[0] === "status" ? " M output.ts" : "" };
+    });
+    try {
+      const result = await processNext("codex", { ...DEFAULT_CONFIG, verify: [[process.execPath, detachedFixture, record]] }, cwd);
+      expect(result?.outcome).toBe("submitted");
+      expect(mocks.submit).toHaveBeenCalled();
+      await assertStopped(record);
+    } finally { cleanupDetached(record); }
+  }, 25000);
+
+  it.skipIf(process.platform !== "win32")("runs a cmd shim through coordinator verify with literal argv", async () => {
+    const { exec: realExec } = await vi.importActual<typeof import("../src/util/exec.js")>("../src/util/exec.js");
+    const args = ["space here", "a&b|c<d>e", "%PATH%", "a^b", 'a"b', "!PATH!", "trailing\\"];
+    const record = join(worktree, "argv.json");
+    writeFileSync(join(worktree, "verify.cmd"), `@echo off\r\n"${process.execPath}" "%~dp0args.cjs" %*\r\n`);
+    writeFileSync(join(worktree, "args.cjs"), "require('fs').writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)))");
+    mocks.runTask.mockResolvedValue({ ok: true, code: 0, durationMs: 1 });
+    mocks.getIssue.mockResolvedValue(issue);
+    mocks.exec.mockImplementation(async (cmd, argv, opts) => {
+      if (cmd === "verify") return realExec(cmd, argv, opts);
+      if (argv[0] === "commit") expect(JSON.parse(readFileSync(record, "utf8"))).toEqual(args);
+      return { code: 0, stderr: "", stdout: argv[0] === "symbolic-ref" ? "task/35" : argv[0] === "status" ? " M output.ts" : "" };
+    });
+    const result = await processNext("codex", { ...DEFAULT_CONFIG, verify: [["verify", ...args]] }, cwd);
+    expect(result?.outcome).toBe("submitted");
+    expect(JSON.parse(readFileSync(record, "utf8"))).toEqual(args);
+  });
+
   it("hands an exhausted budget to a human without a harness invocation or run record", async () => {
     const result = await processNext("codex", { ...DEFAULT_CONFIG, budgets: { default: { requests: 0 } } }, cwd);
     expect(result).toMatchObject({ issue: 35, outcome: "needs-attention", reason: "budget spent" });
@@ -122,7 +179,7 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
-  it.each([{ needs: ["vision"] as const }, { sensitivity: "secret" as const }])("refuses dispatch filters before claiming or constructing an adapter: %j", async metadata => {
+  it.each([{ needs: ["web"] as const }, { sensitivity: "secret" as const }])("refuses dispatch filters before claiming or constructing an adapter: %j", async metadata => {
     const agent = "needs" in metadata ? "codex" : "opencode";
     const task = { ...issue, body: renderTicketV2({ ...metadata, needs: "needs" in metadata ? [...metadata.needs] : undefined }), labels: ["agent:" + agent, "status:todo"] };
     mocks.listIssues.mockResolvedValue([task]);
@@ -140,7 +197,7 @@ describe("processNext recovery", () => {
   });
 
   it.each(["nonzero", "rejected"])("preserves a spawn refusal when commenting fails: %s", async failure => {
-    const task = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["agent:codex", "status:todo"] };
+    const task = { ...issue, body: renderTicketV2({ needs: ["web"] }), labels: ["agent:codex", "status:todo"] };
     mocks.listIssues.mockResolvedValue([task]);
     if (failure === "nonzero") mocks.exec.mockResolvedValue({ code: 1, stdout: "", stderr: "GitHub unavailable" });
     else mocks.exec.mockRejectedValue(new Error("GitHub unavailable"));
@@ -149,25 +206,28 @@ describe("processNext recovery", () => {
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
     expect(mocks.makeAdapter).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
-    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs vision/);
+    expect(readEvents(cwd).at(-1)?.detail).toMatch(/needs web/);
   });
 
   it("rechecks filters on an already claimed task without recording a harness run", async () => {
-    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: renderTicketV2({ needs: ["vision"] }) }, worktree: { path: worktree, branch: "task/35" } });
+    mocks.claimNext.mockResolvedValue({ issue: { ...issue, body: renderTicketV2({ needs: ["web"] }) }, worktree: { path: worktree, branch: "task/35" } });
     expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toMatchObject({ outcome: "needs-attention" });
     expect(mocks.makeAdapter).not.toHaveBeenCalled();
     expect(mocks.appendRun).not.toHaveBeenCalled();
     expect(mocks.editIssue).toHaveBeenCalledWith(35, expect.objectContaining({ addLabels: ["needs-attention"] }));
   });
 
-  it("leaves an unpinned vision task ready for Claude after Codex skips it", async () => {
+  it("leaves an unpinned vision task ready for Claude after shell-only Codex skips it", async () => {
+    const config = { ...DEFAULT_CONFIG, adapters: { ...DEFAULT_CONFIG.adapters, codex: {
+      ...DEFAULT_CONFIG.adapters.codex, models: { standard: { capabilities: ["shell"] }, lead: { capabilities: ["shell"] } },
+    } } };
     const candidate = { ...issue, body: renderTicketV2({ needs: ["vision"] }), labels: ["status:todo"] };
     mocks.claimNext.mockImplementation(async (_agent, _cfg, _cwd, opts) => {
       if (!(await opts.canClaim(candidate))) return null;
       return { issue: candidate, worktree: { path: worktree, branch: "task/35" } };
     });
 
-    expect(await processNext("codex", DEFAULT_CONFIG, cwd)).toBeNull();
+    expect(await processNext("codex", config, cwd)).toBeNull();
     expect(candidate.labels).toEqual(["status:todo"]);
     expect(mocks.editIssue).not.toHaveBeenCalled();
     expect(readEvents(cwd)).toEqual([]);
@@ -307,7 +367,7 @@ describe("processNext recovery", () => {
       ["git", ["commit", "-m", "Recover runner failures (#35)", "-m",
         `Worker: ${agent}; model: ${agent === "opencode" ? "default" : agent === "codex" ? "gpt-6.1-sol@medium" : "claude-sonnet-5-5@medium"}`]],
     ]);
-    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object) });
+    expect(mocks.exec).toHaveBeenCalledWith("node", ["--test"], { cwd: worktree, timeoutMs: 300_000, env: expect.any(Object), contain: true });
     expect(mocks.submit).toHaveBeenCalledWith(35, agent, cfg, cwd);
     expect(mocks.removeWorktree).not.toHaveBeenCalled();
   });

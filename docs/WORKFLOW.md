@@ -184,6 +184,27 @@ only its own lock. Conflicting or unobservable worktrees are never deleted as ro
 
 ## Autopilot (the autonomous loop)
 
+Tickets with v2 `observe` scenarios run an **observe** step after the conflict check and before review,
+without waiting for pending CI. Tickets without observe keep the existing sequence. The evidence runner
+uses a detached checkout of the PR head; failed scenarios skip judging. Successful evidence goes to a
+vision-capable standard-tier judge from a different provider family than the author.
+
+The result is a commit status `studio/observe` on that SHA (`success` for `verified`, otherwise `failure`)
+and an `orch-observe:v1` PR conversation comment containing `{pr, sha, overall, lines, concerns, evidenceError?}`.
+The visible comment includes the acceptance/verdict/evidence/note table and local evidence folder paths.
+HTML delimiters in the JSON are escaped. Only the newest matching PR/head record and that head's status
+count; older-head results leave observe missing. Unreadable status or comment lists leave the PR unobserved.
+The executor refuses publication when it detects a moved head and always releases the evidence checkout.
+
+`studio/observe` is excluded from CI checks. Missing observe results schedule observe; verified results
+continue to review; not-verified results send the author the unverified lines and notes through a normal
+fix round (including `maxReviewRounds`, cascade and lead triage rules). Inconclusive or verifier-blocked
+results, evidence errors, and unavailable judges escalate with the diagnosis and set `needs-attention`.
+After fixing the environment, a human can remove `needs-attention` to retry a blocked observe on the
+same SHA. The removal must be strictly newer than the newest blocked record's comment; a fresh blocked
+record after that handback escalates again. Only blocked observe facts read issue events, and an
+unreadable event list leaves the PR unobserved until a later pass.
+
 `orch autopilot` (`src/tasks/coordinator.ts`) only *starts* issues that carry an `agent:` label (`--no-claim`: none), and drives
 every open task PR. `--issues <list>` (what the `orch plan` pipeline starts) narrows both to the listed issues. It derives each open task PR's next step from facts
 (`decideStep`, `src/tasks/steps.ts`) and performs it; it adds no labels of its own beyond the ones below.

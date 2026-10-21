@@ -1,13 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONFIG_FILE, DEFAULT_CONFIG, formatModelSpec, loadConfig, resolveLeadModel, resolveCapabilities, resolveTierModel } from "../src/config.js";
+import { projectStateDir } from "../src/board/telemetry.js";
 
 describe("loadConfig", () => {
   let dir = "";
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (dir) rmSync(dir, { recursive: true, force: true });
   });
 
@@ -16,6 +18,45 @@ describe("loadConfig", () => {
     writeFileSync(join(dir, CONFIG_FILE), JSON.stringify(config), "utf8");
     return dir;
   }
+
+  it("defaults evidence paths and timeout without enabling evidence", () => {
+    const cwd = writeConfig({});
+    const cfg = loadConfig(cwd);
+    expect(cfg.evidence).toBeUndefined();
+    expect(cfg.evidenceSetup).toBeUndefined();
+    expect(cfg.scenariosDir).toBe("qa/scenarios");
+    expect(cfg.evidenceDir).toBe(join(projectStateDir(cwd), "evidence"));
+    expect(cfg.evidenceTimeoutMs).toBe(300000);
+  });
+  it("loads explicit evidence settings", () => {
+    const settings = { evidence: ["node", "runner.mjs"], evidenceSetup: [["npm", "ci"]], scenariosDir: "qa/custom", evidenceDir: join(tmpdir(), "orch-evidence"), evidenceTimeoutMs: 1000 };
+    expect(loadConfig(writeConfig(settings))).toMatchObject(settings);
+  });
+  it.each([null, [], "node runner", [["node"]], [""], [" "], [1], ["node", "a\0b"]])("rejects malformed evidence %j", evidence => {
+    expect(() => loadConfig(writeConfig({ evidence }))).toThrow(/evidence/);
+  });
+  it.each([null, "npm ci", ["npm", "ci"], [[]], [[""]], [[1]], [["a\0b"]]])("rejects malformed evidenceSetup %j", evidenceSetup => {
+    expect(() => loadConfig(writeConfig({ evidenceSetup }))).toThrow(/evidenceSetup/);
+  });
+  it.each(["../qa", "qa/../../outside", "..\\outside", "/qa", "C:\\qa", "qa/\0scenarios", "qa/\x1fscenarios", "qa/scenarios\n", "", 5, null])("rejects escaping or malformed scenariosDir %j", scenariosDir => {
+    expect(() => loadConfig(writeConfig({ scenariosDir }))).toThrow(/scenariosDir/);
+  });
+  it.each([".", "evidence", "qa/../evidence", join(tmpdir(), "evidence\0"), join(tmpdir(), "evidence\x1f"), join(tmpdir(), "evidence\n"), "", 5, null])("rejects internal or malformed evidenceDir %j", evidenceDir => {
+    expect(() => loadConfig(writeConfig({ evidenceDir }))).toThrow(/evidenceDir/);
+  });
+  it("rejects an absolute evidenceDir inside the checkout", () => {
+    const cwd = writeConfig({});
+    writeFileSync(join(cwd, CONFIG_FILE), JSON.stringify({ evidenceDir: join(cwd, "evidence") }));
+    expect(() => loadConfig(cwd)).toThrow(/evidenceDir/);
+  });
+  it("rejects default evidence storage when ORCH_HOME is inside the checkout", () => {
+    const cwd = writeConfig({});
+    vi.stubEnv("ORCH_HOME", join(cwd, ".orch"));
+    expect(() => loadConfig(cwd)).toThrow(/evidenceDir/);
+  });
+  it.each([0, -1, 1.5, "3000", null])("rejects malformed evidenceTimeoutMs %j", evidenceTimeoutMs => {
+    expect(() => loadConfig(writeConfig({ evidenceTimeoutMs }))).toThrow(/evidenceTimeoutMs/);
+  });
 
   it("loads adapter environment names and defaults to no credential exceptions", () => {
     const config = loadConfig(writeConfig({ adapters: { claude: { env: ["ANTHROPIC_API_KEY"] }, codex: { env: [] }, opencode: { cmd: "opencode", env: ["OPENROUTER_API_KEY"] } } }));
@@ -31,9 +72,11 @@ describe("loadConfig", () => {
     const config = loadConfig(writeConfig({ adapters: { codex: { models: { lead: { capabilities: ["vision"] } } } },
       tierMembers: { free: [], cheap: [], standard: [], lead: [{ agent: "claude", capabilities: [] }] } }));
     expect(resolveCapabilities("claude")).toEqual(["shell", "vision"]);
-    expect(resolveCapabilities("codex")).toEqual(["shell"]);
+    expect(resolveCapabilities("codex")).toEqual(["shell", "vision"]);
     expect(resolveCapabilities("opencode")).toEqual(["shell"]);
     expect(resolveCapabilities("codex", config.adapters.codex.models!.lead)).toEqual(["vision"]);
+    expect(resolveCapabilities("codex", { capabilities: ["shell"] })).toEqual(["shell"]);
+    expect(resolveCapabilities("codex", { capabilities: [] })).toEqual([]);
     expect(resolveCapabilities("claude", resolveTierModel("claude", "lead", config))).toEqual([]);
   });
   it.each([null, "vision", [1], [""]])("rejects malformed capabilities %j", capabilities => {

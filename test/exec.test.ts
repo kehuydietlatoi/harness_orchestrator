@@ -4,12 +4,78 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commandExists, exec } from "../src/util/exec.js";
 import { verifyEnvironment } from "../src/tasks/verify.js";
+import { assertStopped, cleanupDetached, detachedFixture } from "./helpers/process-containment.js";
 
 // Real subprocesses (no mocks) via the current Node binary, so these run the
 // same on Linux and Windows.
 const node = process.execPath;
 
 describe("exec", () => {
+  it.skipIf(process.platform !== "win32")("runs a cmd shim with literal arguments", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch shim %PATH% & ! ^ (test)-"));
+    try {
+      await writeFile(join(cwd, "args.cjs"), "console.log(JSON.stringify(process.argv.slice(2)))");
+      await writeFile(join(cwd, "literal.cmd"), `@echo off\r\n"${node}" "%~dp0args.cjs" %*\r\n`);
+      const args = ["", "space here", "a&b|c<d>e", "%PATH%", "a^b", 'a"b', "!PATH!", "trailing\\",
+        'a\\"b', '"&echo INJECTED&"', "%ORCH_CMD_ARG_0%", "x%1%*%0", "a(b)c", "中文"];
+      for (const contain of [false, true]) {
+        const result = await exec("literal", args, { cwd, contain });
+        expect(result.code, result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toEqual(args);
+      }
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+  it.skipIf(process.platform !== "win32").each(["exit", "timeout"])("drains cmd shim descendants on %s", async mode => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch-cmd-contained-"));
+    const record = join(cwd, "child.json");
+    try {
+      await writeFile(join(cwd, "detached.bat"), `@echo off\r\n"${node}" "${detachedFixture}" %*\r\n`);
+      const result = await exec("detached.bat", [record, mode === "exit" ? "exit" : "wait"], {
+        cwd, contain: true, timeoutMs: mode === "timeout" ? 3000 : 15000,
+      });
+      expect(result.code, result.stderr).toBe(mode === "timeout" ? 124 : 0);
+      await assertStopped(record);
+    } finally {
+      cleanupDetached(record);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 25000);
+  it.skipIf(process.platform !== "win32")("refuses unsafe shim argv before executing user code", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch-cmd-unsafe-"));
+    try {
+      await writeFile(join(cwd, "unsafe.cmd"), "@echo SHOULD_NOT_RUN\r\n");
+      const result = await exec("unsafe", ["line\nbreak"], { cwd, contain: true });
+      expect(result.code).toBe(127);
+      expect(result.stderr).toContain("Cannot pass argument literally");
+      expect(result.stdout).toBe("");
+    } finally { await rm(cwd, { recursive: true, force: true }); }
+  });
+  it.skipIf(process.platform === "win32")("preserves POSIX shell characters and newlines as literal argv", async () => {
+    const args = ["a&b|c<d>e", "%PATH%", "$HOME", "$(echo nope)", "`echo nope`", "a^b", 'a"b', "line\nbreak"];
+    const result = await exec(node, ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", "--", ...args]);
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(args);
+  });
+  it("preserves literal argv through the containment launcher", async () => {
+    const args = ["", "space here", "a&b|c^d%PATH%", 'a"b', "trailing\\", "a\\\"b", "中文"];
+    const result = await exec(node, ["-e", "console.log(JSON.stringify(process.argv.slice(1)))", "--", ...args], { contain: true });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(args);
+  });
+  it.each(["exit", "timeout"])("drains contained command descendants on %s", async mode => {
+    const cwd = await mkdtemp(join(tmpdir(), "orch-exec-contained-"));
+    const record = join(cwd, "child.json");
+    try {
+      const result = await exec(node, [detachedFixture, record, mode === "exit" ? "exit" : "wait"], {
+        contain: true, timeoutMs: mode === "timeout" ? 3000 : 15000,
+      });
+      expect(result.code).toBe(mode === "timeout" ? 124 : 0);
+      await assertStopped(record);
+    } finally {
+      cleanupDetached(record);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  }, 25000);
   it("replaces inherited environment for verify subprocesses and uses the supplied worktree cwd", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "orch-verify-env-"));
     try {

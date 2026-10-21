@@ -67,7 +67,8 @@ and PR cascades pass issue metadata into `nextHop` so fallback preserves filters
 
 Model specs and ladder members accept `capabilities`, an explicit replacement
 including an empty array. Proven harness defaults are Claude `shell, vision`,
-Codex `shell`, and OpenCode `shell`. Model names never imply capabilities;
+Codex `shell, vision` (see the probe in [ADR-0012](0012-multi-provider-routing.md)),
+and OpenCode `shell`. Model names never imply capabilities;
 OpenCode vision models must declare vision. Nobody defaults to web. Needs for
 engine, image-gen, and audio-gen are rejected pending tooling in Phases 3-4.
 

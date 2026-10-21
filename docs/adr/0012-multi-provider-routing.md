@@ -33,6 +33,21 @@ specs and both a model and family for resolved ladder members. At invocation,
 `OpencodeAdapter.run` in [src/adapters/opencode.ts](../../src/adapters/opencode.ts)
 requires an explicit provider/model.
 
+## Capability defaults
+
+`resolveCapabilities` in [src/config.ts](../../src/config.ts) defaults Claude and
+Codex to `["shell", "vision"]`, and OpenCode to `["shell"]`. A model spec or
+ladder member's explicit `capabilities` array replaces the default, including
+`[]`. OpenCode vision still requires an explicit declaration; no harness defaults
+to web.
+
+A live probe on 2026-10-20 with `codex-cli 0.160.1` used the command shape
+`codex exec -s read-only <prompt>` from a working directory containing a generated
+`shot.png`. Asked to open the PNG and describe it, Codex correctly reported the
+text "PELICAN 4721" and its dark-green background. This demonstrated PNG reading
+from disk in the read-only sandbox and justified adding vision to Codex's defaults
+(#214).
+
 ## Default model order
 
 The owner decision is deliberate: an explicit `model:<id>` label wins; otherwise

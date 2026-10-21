@@ -5,7 +5,30 @@ vi.mock("../src/util/exec.js", () => ({ exec: (...args: unknown[]) => execMock(.
 
 const { listIssues, listOpenPrs, listPrs, listLabels, getBranchPrs, getIssueReferencedPrs } = await import("../src/github/github.js");
 const { mergePr, recordPrReview, listPrReviews, prChecksState, prDiff, closeIssue } = await import("../src/github/github.js");
-const { prChangedPaths, prMergeability } = await import("../src/github/github.js");
+const { prChangedPaths, prMergeability, latestLabelRemoval } = await import("../src/github/github.js");
+
+describe("issue label handbacks", () => {
+  beforeEach(() => execMock.mockReset());
+  const event = (created_at: string, name = "needs-attention", kind = "unlabeled") => ({ event: kind, label: { name }, created_at });
+  const page = (items: unknown[]) => ({ code: 0, stderr: "", stdout: JSON.stringify(items) });
+  it("paginates issue events and chooses the newest matching removal", async () => {
+    execMock.mockResolvedValueOnce(page(Array.from({ length: 100 }, () => event("2026-10-20T09:00:00Z"))))
+      .mockResolvedValueOnce(page([event("2026-10-20T11:00:00Z"), event("2026-10-20T12:00:00Z", "other"),
+        event("2026-10-20T13:00:00Z", "needs-attention", "labeled"), event("2026-10-20T10:00:00Z")]));
+    expect(await latestLabelRemoval(218, "needs-attention", { cwd: "/repo" })).toBe("2026-10-20T11:00:00Z");
+    expect(execMock.mock.calls[1][1][1]).toBe("repos/{owner}/{repo}/issues/218/events?per_page=100&page=2");
+  });
+  it("returns null when there was no matching removal", async () => {
+    execMock.mockResolvedValueOnce(page([event("2026-10-20T11:00:00Z", "other")]));
+    expect(await latestLabelRemoval(218, "needs-attention")).toBeNull();
+  });
+  it("propagates unreadable events and malformed removal times", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr: "offline" });
+    await expect(latestLabelRemoval(218, "needs-attention")).rejects.toThrow("offline");
+    execMock.mockResolvedValueOnce(page([event("bad date")]));
+    await expect(latestLabelRemoval(218, "needs-attention")).rejects.toThrow("Invalid issue label removal time");
+  });
+});
 
 describe("head-bound mergeability", () => {
   const head = "a".repeat(40);
@@ -143,6 +166,11 @@ describe("prDiff", () => {
 });
 
 describe("prChecksState", () => {
+  it("ignores failed observe statuses when computing CI", async () => {
+    execMock.mockResolvedValueOnce({ code: 1, stdout: JSON.stringify([{ name: "studio/observe", bucket: "fail" }, { name: "test", bucket: "pass" }]), stderr: "" });
+    expect(await prChecksState(1, { strict: true })).toBe("pass");
+    expect(execMock.mock.calls.at(-1)?.[1]).toContain("bucket,state,name");
+  });
   const results = (...buckets: string[]) => JSON.stringify(buckets.map((bucket) => ({ bucket, state: "X" })));
   const gh = (code: number, stdout: string, stderr = "") => ({ code, stdout, stderr });
   beforeEach(() => execMock.mockReset());

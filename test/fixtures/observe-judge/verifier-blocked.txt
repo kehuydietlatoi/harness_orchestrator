@@ -1,0 +1,4 @@
+The evidence runner could not capture the page.
+```json
+{"gate":"observe","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","overall":"verifier-blocked","lines":[],"concerns":["run.json reports ok:false: browser launch failed."]}
+```

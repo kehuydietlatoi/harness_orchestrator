@@ -43,6 +43,8 @@ node dist/cli.js serve --demo   # open http://127.0.0.1:4000
 ## Requirements
 
 - Node.js ≥ 20 and Git with worktree support
+- Run containment needs the Windows .NET Framework C# compiler, or `cc` on POSIX;
+  Linux supports cleanup of detached descendants. See [process containment](docs/process-containment.md).
 - [GitHub CLI](https://cli.github.com/) (`gh`), authenticated
 - `claude` and `codex` on PATH and authenticated for the default two-agent setup
 - A local repository with a GitHub `origin` and an available base branch
@@ -301,8 +303,8 @@ Issues without a role label remain unrestricted. Unknown roles are rejected.
 Tickets can declare `needs: ["shell", "vision", "web"]` and `sensitivity` as
 `public`, `internal`, or `secret`. Planning rejects routes whose selected model
 cannot meet every need; dispatch rechecks the policy before spawning, and cascades
-skip incompatible members. Claude defaults to shell and vision; Codex and
-OpenCode default to shell. No harness defaults to web. A model spec or ladder
+skip incompatible members. Claude and Codex default to shell and vision;
+OpenCode defaults to shell. No harness defaults to web. A model spec or ladder
 member's `capabilities` array replaces these defaults, including `[]`.
 `engine`, `image-gen`, and `audio-gen` needs require tooling from Phases 3-4.
 
@@ -421,6 +423,8 @@ implemented; see [judge evaluation](docs/adr/0005-judge-evaluation.md).
 - [Prompt injection](docs/adr/0007-prompt-injection-threat-model.md) — trusted authorship and agent inputs
 - [Multi-provider routing](docs/adr/0012-multi-provider-routing.md) — tiers, fallback ladders, budgets, and provider boundaries
 - [Domain packs and ticket schema v2](docs/adr/0014-domain-packs-and-ticket-schema-v2.md) — pack roles, validation, briefs, verification, routing filters, and path locks
+
+- [Observe gate](docs/adr/0015-observe-gate.md) — trusted runtime evidence, independent visual judging, and head-bound merge approval
 
 ## Development
 

@@ -18,6 +18,10 @@ export interface PrStepFacts {
 }
 
 export interface StepFacts {
+  observe?: { required: boolean; state: "missing" | "verified" | "not-verified" | "blocked" };
+  observeReason?: string;
+  /** Consecutive newest not-verified records on the current head; supplied only in that state. */
+  observeNotVerifiedCount?: number;
   /** A successful local push has not yet settled in GitHub's observations. */
   pushPending?: boolean;
   /** A complete PR path observation rejected the worker's scope. */
@@ -57,8 +61,9 @@ export type Step =
   | { kind: "none"; reason: string }
   /** Run a read-only review of the current head. */
   | { kind: "review" }
+  | { kind: "observe" }
   /** Resume the author to address review feedback or a red CI. */
-  | { kind: "fix"; reason: "review" | "ci" }
+  | { kind: "fix"; reason: "review" | "ci" | "observe" }
   /** Merge the base branch into the PR branch and resolve conflicts. */
   | { kind: "resolve-conflict" }
   | { kind: "merge" }
@@ -72,7 +77,7 @@ export type Step =
   | { kind: "escalate"; reason: string };
 
 /** Steps that spend an agent run (and count toward the round budget when they change code). */
-export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["cascade", "review", "fix", "resolve-conflict", "triage"]);
+export const AGENT_STEPS: ReadonlySet<Step["kind"]> = new Set(["cascade", "observe", "review", "fix", "resolve-conflict", "triage"]);
 
 /** Budget exhaustion bypasses triage; merge and external waits need no new run. */
 export function applyBudget(step: Step, spent: boolean): Step {
@@ -81,7 +86,7 @@ export function applyBudget(step: Step, spent: boolean): Step {
 
 /**
  * Precedence, highest first:
- *   needs-attention -> no PR -> changes requested -> red CI -> conflict -> review -> settle -> merge.
+ *   needs-attention -> no PR -> changes requested -> red CI -> conflict -> observe -> review -> settle -> merge.
  * Conflicts are resolved *before* review so a head that is about to change is never reviewed,
  * and review happens before waiting on CI so the two overlap. A fix-type step whose round
  * budget (`maxRounds` plus any rounds a triage granted) is spent goes to the lead for triage
@@ -125,6 +130,18 @@ function decidePrStep(f: StepFacts): Step {
   }
   if (pr.mergeable === "conflicting") {
     return exhausted ? spent("the branch still conflicts with the base") : { kind: "resolve-conflict" };
+  }
+  if (f.observe?.required) {
+    if (f.observe.state === "missing") return { kind: "observe" };
+    if (f.observe.state === "not-verified") {
+      if ((f.failedFixAttempts ?? 0) >= 1) {
+        return (f.observeNotVerifiedCount ?? 1) >= 2
+          ? { kind: "escalate", reason: `The author disputes the observe verdict after a fix made no commit; observe was not-verified twice on this head. Verdict notes: "${f.observeReason ?? "No verdict notes supplied"}"` }
+          : { kind: "observe" };
+      }
+      return exhausted ? spent("observe acceptance is still unresolved") : { kind: "fix", reason: "observe" };
+    }
+    if (f.observe.state === "blocked") return { kind: "escalate", reason: f.observeReason || "observe verifier blocked" };
   }
   if (!f.review.approved) return { kind: "review" };
 
